@@ -40,3 +40,6 @@ jobs:
 
       - name: Build (also type-checks)
         run: pnpm -r build
+
+      - name: Test
+        run: pnpm -r test
