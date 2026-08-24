@@ -6,6 +6,7 @@ import {
   activateContract,
   addContractParty,
   createContract,
+  fileDownloadUrl,
   listContracts,
   listGravePlots,
   searchCustomers,
@@ -86,6 +87,13 @@ export default function ContractsPage() {
     } finally {
       setUploading(false);
     }
+  };
+
+  // Controlled download: the API issues a short-lived presigned URL only for a
+  // clean-scanned file the caller may read (permission enforced server-side).
+  const onDownload = async (fileId: string): Promise<void> => {
+    const { url } = await fileDownloadUrl(fileId);
+    window.open(url, '_blank', 'noopener,noreferrer');
   };
 
   const err = mCreate.error ?? mParty.error ?? mVerify.error ?? mActivate.error;
@@ -177,7 +185,21 @@ export default function ContractsPage() {
                   >
                     <td className="p-2 font-mono text-xs">{c.contractNo}</td>
                     <td className="p-2">{c.status}</td>
-                    <td className="p-2">{c.contractFileId !== null ? '✓' : '—'}</td>
+                    <td className="p-2">
+                      {c.contractFileId !== null ? (
+                        <button
+                          className="text-primary underline"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void onDownload(c.contractFileId as string);
+                          }}
+                        >
+                          Tải
+                        </button>
+                      ) : (
+                        '—'
+                      )}
+                    </td>
                     <td className="p-2 space-x-2">
                       {(c.status === 'Uploaded' || c.status === 'PendingVerification') && (
                         <Button variant="outline" size="sm" onClick={() => mVerify.mutate(c.id)}>

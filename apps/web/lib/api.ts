@@ -336,3 +336,44 @@ export const renewSubscription = (id: string): Promise<unknown> =>
   apiFetch(`/api/v1/services/subscriptions/${id}/renew`, { method: 'POST', body: '{}' });
 export const serviceRevenue = (companyId: string): Promise<RevenueReport> =>
   apiFetch(`/api/v1/services/revenue?companyId=${encodeURIComponent(companyId)}`);
+
+// --- Burials (M4) ---
+
+export interface DeceasedPerson {
+  id: string;
+  personId: string;
+  dateOfDeath: string | null;
+  deathCertFileId: string | null;
+}
+export interface BurialRecord {
+  id: string;
+  gravePlotId: string;
+  deceasedPersonId: string;
+  contractId: string | null;
+  burialDate: string | null;
+  legalDocFileId: string | null;
+  notes: string | null;
+  status: string;
+}
+
+export const createDeceased = (input: {
+  personId: string;
+  dateOfDeath?: string;
+  deathCertFileId?: string;
+}): Promise<DeceasedPerson> =>
+  apiFetch('/api/v1/burials/deceased', { method: 'POST', body: JSON.stringify(input) });
+export const createBurial = (input: {
+  gravePlotId: string;
+  deceasedPersonId: string;
+  contractId?: string;
+  burialDate?: string;
+  legalDocFileId?: string;
+  notes?: string;
+}): Promise<BurialRecord> =>
+  apiFetch('/api/v1/burials', { method: 'POST', body: JSON.stringify(input) });
+export const listBurials = (gravePlotId: string): Promise<BurialRecord[]> =>
+  apiFetch(`/api/v1/burials?gravePlotId=${encodeURIComponent(gravePlotId)}`);
+export const verifyBurial = (id: string): Promise<BurialRecord> =>
+  apiFetch(`/api/v1/burials/${id}/verify`, { method: 'POST' });
+export const completeBurial = (id: string): Promise<BurialRecord> =>
+  apiFetch(`/api/v1/burials/${id}/complete`, { method: 'POST' });

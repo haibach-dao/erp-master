@@ -6,6 +6,8 @@ import {
   createServiceCatalog,
   listGravePlots,
   listServiceCatalog,
+  listSubscriptions,
+  renewSubscription,
   searchCustomers,
   serviceRevenue,
   subscribeService,
@@ -58,6 +60,17 @@ export default function ServicesPage() {
       void qc.invalidateQueries({ queryKey: ['catalog', companyId] });
     },
   });
+  const subs = useQuery({
+    queryKey: ['subscriptions', sub.plotId],
+    queryFn: () => listSubscriptions(sub.plotId),
+    enabled: sub.plotId !== '',
+  });
+
+  const refetchSubs = () => {
+    void qc.invalidateQueries({ queryKey: ['subscriptions', sub.plotId] });
+    void qc.invalidateQueries({ queryKey: ['revenue', companyId] });
+  };
+
   const mSub = useMutation({
     mutationFn: () =>
       subscribeService({
@@ -68,12 +81,20 @@ export default function ServicesPage() {
         effectiveFrom: sub.effectiveFrom,
       }),
     onSuccess: () => {
-      setSub({ plotId: '', catalogId: '', customerId: '', effectiveFrom: today() });
-      void qc.invalidateQueries({ queryKey: ['revenue', companyId] });
+      setSub((s) => ({ ...s, catalogId: '', customerId: '', effectiveFrom: today() }));
+      refetchSubs();
     },
   });
+  // Renew extends effectiveTo by the catalog duration and books another full payment (A5).
+  const mRenew = useMutation({
+    mutationFn: (id: string) => renewSubscription(id),
+    onSuccess: refetchSubs,
+  });
 
-  const err = mCat.error ?? mSub.error;
+  const catName = (id: string): string =>
+    catalog.data?.find((c) => c.id === id)?.name ?? id.slice(0, 8);
+
+  const err = mCat.error ?? mSub.error ?? mRenew.error;
 
   return (
     <section className="space-y-4">
@@ -189,6 +210,52 @@ export default function ServicesPage() {
               Đăng ký
             </Button>
           </div>
+
+          {/* Subscriptions of the selected plot + renew */}
+          {sub.plotId !== '' && (
+            <div className="overflow-x-auto rounded-md border border-border">
+              <table className="w-full text-sm">
+                <thead className="bg-muted text-muted-foreground">
+                  <tr>
+                    <th className="p-2 text-left font-medium">Gói</th>
+                    <th className="p-2 text-left font-medium">Giá</th>
+                    <th className="p-2 text-left font-medium">Hiệu lực đến</th>
+                    <th className="p-2 text-left font-medium">Trạng thái</th>
+                    <th className="p-2 text-left font-medium">Thao tác</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {subs.data?.length === 0 && (
+                    <tr>
+                      <td className="p-3 text-muted-foreground" colSpan={5}>
+                        Vị trí này chưa đăng ký dịch vụ nào.
+                      </td>
+                    </tr>
+                  )}
+                  {subs.data?.map((s) => (
+                    <tr key={s.id} className="border-t border-border">
+                      <td className="p-2">{catName(s.serviceCatalogId)}</td>
+                      <td className="p-2">{Number(s.agreedPrice).toLocaleString('vi-VN')}đ</td>
+                      <td className="p-2">{s.effectiveTo?.slice(0, 10) ?? '—'}</td>
+                      <td className="p-2">{s.status}</td>
+                      <td className="p-2">
+                        {s.status === 'Active' && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => mRenew.mutate(s.id)}
+                            disabled={mRenew.isPending}
+                          >
+                            Gia hạn
+                          </Button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
 
           {err !== null && <p className="text-sm text-red-600">{(err as Error).message}</p>}
         </>
