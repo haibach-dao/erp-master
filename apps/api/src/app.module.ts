@@ -5,6 +5,7 @@ import { PrismaModule } from './prisma/prisma.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { OutboxModule } from './modules/outbox/outbox.module';
 import { AuthModule } from './modules/iam/auth.module';
+import { AuthorizationModule } from './modules/authorization/authorization.module';
 import { HealthModule } from './health/health.module';
 
 @Module({
@@ -14,6 +15,7 @@ import { HealthModule } from './health/health.module';
     AuditModule,
     OutboxModule,
     AuthModule,
+    AuthorizationModule,
     HealthModule,
   ],
 })
