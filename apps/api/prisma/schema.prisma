@@ -8,7 +8,7 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
-  schemas  = ["iam", "audit", "common", "authz", "org", "cemetery", "files", "contracts"]
+  schemas  = ["iam", "audit", "common", "authz", "org", "cemetery", "files", "contracts", "services"]
 }
 
 model User {
@@ -465,4 +465,69 @@ model BurialRecord {
   @@index([deceasedPersonId])
   @@map("burial_records")
   @@schema("cemetery")
+}
+
+// M5: grave-care services. A5 = no A/R: each subscription/renewal is paid in full at
+// creation and recorded as a service_transaction (= revenue).
+model ServiceCatalog {
+  id             String   @id
+  companyId      String   @map("company_id")
+  code           String
+  name           String
+  price          Decimal  @db.Decimal(14, 0) // VND
+  durationMonths Int      @map("duration_months")
+  reminderDays   Int[]    @map("reminder_days") // e.g. [90,60,30,7]
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  subscriptions ServiceSubscription[]
+
+  @@unique([companyId, code])
+  @@map("service_catalog")
+  @@schema("services")
+}
+
+model ServiceSubscription {
+  id                     String   @id
+  companyId              String   @map("company_id")
+  gravePlotId            String   @map("grave_plot_id")
+  contractId             String?  @map("contract_id")
+  serviceCatalogId       String   @map("service_catalog_id")
+  customerId             String   @map("customer_id")
+  agreedPrice            Decimal  @map("agreed_price") @db.Decimal(14, 0)
+  effectiveFrom          DateTime @map("effective_from") @db.Date
+  effectiveTo            DateTime @map("effective_to") @db.Date
+  status                 String   @default("Active") // Active | Expired | Renewed | Cancelled
+  previousSubscriptionId String?  @map("previous_subscription_id")
+  createdAt              DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  catalog      ServiceCatalog       @relation(fields: [serviceCatalogId], references: [id])
+  transactions ServiceTransaction[]
+
+  @@index([gravePlotId])
+  @@index([status, effectiveTo])
+  @@map("service_subscriptions")
+  @@schema("services")
+}
+
+// Paid-in-full revenue record (A5). Immutable — corrections are new rows, never edits.
+model ServiceTransaction {
+  id               String   @id
+  subscriptionId   String   @map("subscription_id")
+  companyId        String   @map("company_id")
+  serviceCatalogId String   @map("service_catalog_id")
+  customerId       String   @map("customer_id")
+  amount           Decimal  @db.Decimal(14, 0)
+  paidAt           DateTime @default(now()) @map("paid_at") @db.Timestamptz(6)
+  periodFrom       DateTime @map("period_from") @db.Date
+  periodTo         DateTime @map("period_to") @db.Date
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  subscription ServiceSubscription @relation(fields: [subscriptionId], references: [id])
+
+  @@index([companyId, paidAt])
+  @@index([serviceCatalogId])
+  @@map("service_transactions")
+  @@schema("services")
 }
