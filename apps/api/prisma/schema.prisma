@@ -8,7 +8,7 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
-  schemas  = ["iam", "audit", "common", "authz"]
+  schemas  = ["iam", "audit", "common", "authz", "org", "cemetery"]
 }
 
 model User {
@@ -149,4 +149,107 @@ model ScopePolicy {
 
   @@map("scope_policies")
   @@schema("authz")
+}
+
+// ---- M0: organization (minimal) + cemetery catalog ----
+
+// Minimal company. Full org tree (departments/positions/assignments) is a later task.
+model Company {
+  id        String   @id
+  code      String   @unique
+  name      String
+  status    String   @default("active")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("companies")
+  @@schema("org")
+}
+
+model Cemetery {
+  id        String   @id
+  companyId String   @map("company_id")
+  code      String
+  name      String
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  gravePlots GravePlot[]
+
+  @@unique([companyId, code])
+  @@index([companyId])
+  @@map("cemeteries")
+  @@schema("cemetery")
+}
+
+// G0-A1: capacity defaults by type; a plot may override with audit.
+model GraveType {
+  id              String   @id
+  companyId       String   @map("company_id")
+  code            String
+  name            String
+  defaultCapacity Int      @default(1) @map("default_capacity")
+  referencePrice  Decimal? @map("reference_price") @db.Decimal(14, 0) // VND (integer đồng)
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  gravePlots GravePlot[]
+
+  @@unique([companyId, code])
+  @@map("grave_types")
+  @@schema("cemetery")
+}
+
+model GravePlot {
+  id          String @id
+  companyId   String @map("company_id")
+  cemeteryId  String @map("cemetery_id")
+  graveTypeId String @map("grave_type_id")
+  plotCode    String @map("plot_code")
+
+  // Denormalized location tree (khu / phân khu / lô / dãy).
+  zone    String?
+  subzone String?
+  block   String?
+  row     String?
+
+  capacityOverride Int?     @map("capacity_override") // null => use grave type default (G0-A1)
+  status           String   @default("Available") // Available|Held|Reserved|Allocated|Occupied|Maintenance|Locked
+  version          Int      @default(0) // optimistic lock for hold/allocation later
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  cemetery      Cemetery                 @relation(fields: [cemeteryId], references: [id])
+  graveType     GraveType                @relation(fields: [graveTypeId], references: [id])
+  statusHistory GravePlotStatusHistory[]
+
+  @@unique([companyId, plotCode])
+  @@index([companyId, status])
+  @@index([cemeteryId])
+  @@map("grave_plots")
+  @@schema("cemetery")
+}
+
+model GravePlotStatusHistory {
+  id          String   @id
+  gravePlotId String   @map("grave_plot_id")
+  fromStatus  String?  @map("from_status")
+  toStatus    String   @map("to_status")
+  reason      String?
+  changedBy   String?  @map("changed_by")
+  changedAt   DateTime @default(now()) @map("changed_at") @db.Timestamptz(6)
+
+  gravePlot GravePlot @relation(fields: [gravePlotId], references: [id])
+
+  @@index([gravePlotId, changedAt])
+  @@map("grave_plot_status_history")
+  @@schema("cemetery")
+}
+
+// Family relationship catalog with reciprocal mapping (spouse<->spouse, parent<->child, sibling<->sibling).
+model RelationshipType {
+  code           String  @id // SPOUSE | PARENT | CHILD | SIBLING
+  name           String
+  reciprocalCode String  @map("reciprocal_code")
+  genderSpecific Boolean @default(false) @map("gender_specific")
+
+  @@map("relationship_types")
+  @@schema("cemetery")
 }

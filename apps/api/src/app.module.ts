@@ -6,6 +6,7 @@ import { AuditModule } from './modules/audit/audit.module';
 import { OutboxModule } from './modules/outbox/outbox.module';
 import { AuthModule } from './modules/iam/auth.module';
 import { AuthorizationModule } from './modules/authorization/authorization.module';
+import { CemeteryModule } from './modules/cemetery/cemetery.module';
 import { HealthModule } from './health/health.module';
 
 @Module({
@@ -16,6 +17,7 @@ import { HealthModule } from './health/health.module';
     OutboxModule,
     AuthModule,
     AuthorizationModule,
+    CemeteryModule,
     HealthModule,
   ],
 })
