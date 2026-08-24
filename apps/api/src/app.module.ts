@@ -10,6 +10,7 @@ import { AuthorizationModule } from './modules/authorization/authorization.modul
 import { CemeteryModule } from './modules/cemetery/cemetery.module';
 import { CustomersModule } from './modules/customers/customers.module';
 import { HoldsModule } from './modules/holds/holds.module';
+import { FilesModule } from './modules/files/files.module';
 import { HealthModule } from './health/health.module';
 
 @Module({
@@ -24,6 +25,7 @@ import { HealthModule } from './health/health.module';
     CemeteryModule,
     CustomersModule,
     HoldsModule,
+    FilesModule,
     HealthModule,
   ],
 })
