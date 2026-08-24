@@ -1,0 +1,58 @@
+// T05 — initial schema. Only foundation tables; NO domain tables (blocked by Gate 0).
+// Time model (G1): timestamptz for instants, @db.Date for business calendar dates.
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["multiSchema"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  schemas  = ["iam", "audit"]
+}
+
+model User {
+  id           String   @id
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  status       String   @default("active")
+  mfaEnabled   Boolean  @default(false) @map("mfa_enabled")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("users")
+  @@schema("iam")
+}
+
+// Append-only audit trail (doc 10 §3). UPDATE/DELETE are blocked by a DB trigger
+// added in the migration — enforcement does not rely on the application layer.
+model AuditEvent {
+  id                    String   @id
+  occurredAt            DateTime @default(now()) @map("occurred_at") @db.Timestamptz(6)
+  chainPartitionDateUtc DateTime @map("chain_partition_date_utc") @db.Date
+  companyId             String?  @map("company_id")
+  actorType             String   @map("actor_type")
+  actorId               String?  @map("actor_id")
+  action                String
+  entityType            String   @map("entity_type")
+  entityId              String   @map("entity_id")
+  result                String
+  reason                String?
+  beforeData            Json?    @map("before_data")
+  afterData             Json?    @map("after_data")
+  changedFields         String[] @map("changed_fields")
+  correlationId         String?  @map("correlation_id")
+  ipAddress             String?  @map("ip_address")
+  source                String   @default("API")
+  previousEventHash     String?  @map("previous_event_hash")
+  eventHash             String   @map("event_hash")
+  hashAlgorithmVersion  Int      @default(1) @map("hash_algorithm_version")
+
+  @@index([companyId, occurredAt])
+  @@index([entityType, entityId])
+  @@index([actorId])
+  @@index([action])
+  @@map("audit_events")
+  @@schema("audit")
+}
