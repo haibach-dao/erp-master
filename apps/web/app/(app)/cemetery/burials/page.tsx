@@ -146,13 +146,13 @@ export default function BurialsPage() {
               value={form.notes}
               onChange={(e) => setForm({ ...form, notes: e.target.value })}
             />
-            <input type="file" className="text-sm" onChange={(e) => void onFile(e.target.files?.[0])} />
+            <input
+              type="file"
+              className="text-sm"
+              onChange={(e) => void onFile(e.target.files?.[0])}
+            />
             <span className="text-xs text-muted-foreground">
-              {uploading
-                ? 'Đang tải file…'
-                : form.legalDocFileId !== ''
-                  ? '✓ giấy tờ đã tải'
-                  : ''}
+              {uploading ? 'Đang tải file…' : form.legalDocFileId !== '' ? '✓ giấy tờ đã tải' : ''}
             </span>
             <Button
               variant="outline"
