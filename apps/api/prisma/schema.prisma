@@ -253,3 +253,75 @@ model RelationshipType {
   @@map("relationship_types")
   @@schema("cemetery")
 }
+
+// ---- M1: Person / Customer master + family graph ----
+
+// Shared across companies (G0-E5.1). CCCD: encrypted (viewable w/ permission) + hashed
+// for dedup + masked for display (G0-E5.2, G0-A6). No companyId on Person (shared).
+model Person {
+  id               String    @id
+  fullName         String    @map("full_name")
+  gender           String? // MALE | FEMALE | UNKNOWN
+  dateOfBirth      DateTime? @map("date_of_birth") @db.Date
+  nationalIdHash   String?   @map("national_id_hash") // sha256 for dedup
+  nationalIdMasked String?   @map("national_id_masked") // e.g. 079***123 for display
+  nationalIdCipher String?   @map("national_id_cipher") // iv:tag:ciphertext (AES-256-GCM)
+  status           String    @default("active")
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  customer          Customer?
+  relationshipsFrom FamilyRelationship[] @relation("relSource")
+  relationshipsTo   FamilyRelationship[] @relation("relTarget")
+
+  @@index([nationalIdHash])
+  @@index([fullName])
+  @@map("persons")
+  @@schema("cemetery")
+}
+
+model Customer {
+  id           String   @id
+  personId     String?  @unique @map("person_id") // individuals link to a Person; org customers null
+  customerCode String   @unique @map("customer_code")
+  type         String // INDIVIDUAL | ORGANIZATION | AGENT | PROSPECT
+  orgName      String?  @map("org_name")
+  phone        String?
+  email        String?
+  status       String   @default("active")
+  companyId    String?  @map("company_id") // managing company (scope), nullable
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  person Person? @relation(fields: [personId], references: [id])
+
+  @@index([phone])
+  @@index([email])
+  @@index([companyId])
+  @@map("customers")
+  @@schema("cemetery")
+}
+
+// Direct family relationships only. Creating A->B auto-creates the reciprocal B->A in the
+// same transaction; the two rows link via reciprocalRelationshipId (blueprint doc 04 §2.1).
+model FamilyRelationship {
+  id                       String    @id
+  sourcePersonId           String    @map("source_person_id")
+  targetPersonId           String    @map("target_person_id")
+  relationshipType         String    @map("relationship_type") // relationship_types.code
+  reciprocalRelationshipId String?   @unique @map("reciprocal_relationship_id")
+  status                   String    @default("Confirmed") // Pending | Confirmed | Disputed | Ended
+  effectiveFrom            DateTime? @map("effective_from") @db.Date
+  effectiveTo              DateTime? @map("effective_to") @db.Date
+  verificationSource       String?   @map("verification_source")
+  createdAt                DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  source Person @relation("relSource", fields: [sourcePersonId], references: [id])
+  target Person @relation("relTarget", fields: [targetPersonId], references: [id])
+
+  @@index([sourcePersonId])
+  @@index([targetPersonId])
+  @@map("family_relationships")
+  @@schema("cemetery")
+}
