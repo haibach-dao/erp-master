@@ -9,6 +9,7 @@ import { AuthModule } from './modules/iam/auth.module';
 import { AuthorizationModule } from './modules/authorization/authorization.module';
 import { CemeteryModule } from './modules/cemetery/cemetery.module';
 import { CustomersModule } from './modules/customers/customers.module';
+import { HoldsModule } from './modules/holds/holds.module';
 import { HealthModule } from './health/health.module';
 
 @Module({
@@ -22,6 +23,7 @@ import { HealthModule } from './health/health.module';
     AuthorizationModule,
     CemeteryModule,
     CustomersModule,
+    HoldsModule,
     HealthModule,
   ],
 })
