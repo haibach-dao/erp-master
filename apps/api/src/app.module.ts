@@ -4,6 +4,7 @@ import { validate } from './config/env.validation';
 import { PrismaModule } from './prisma/prisma.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { OutboxModule } from './modules/outbox/outbox.module';
+import { AuthModule } from './modules/iam/auth.module';
 import { HealthModule } from './health/health.module';
 
 @Module({
@@ -12,6 +13,7 @@ import { HealthModule } from './health/health.module';
     PrismaModule,
     AuditModule,
     OutboxModule,
+    AuthModule,
     HealthModule,
   ],
 })
