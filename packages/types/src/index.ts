@@ -1,0 +1,2 @@
+/** Shared type placeholder. */
+export {};
