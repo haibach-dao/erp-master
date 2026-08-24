@@ -8,7 +8,7 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
-  schemas  = ["iam", "audit", "common", "authz", "org", "cemetery"]
+  schemas  = ["iam", "audit", "common", "authz", "org", "cemetery", "files"]
 }
 
 model User {
@@ -348,4 +348,23 @@ model GraveHold {
   @@index([status, expiresAt])
   @@map("grave_holds")
   @@schema("cemetery")
+}
+
+// M3a: file metadata. Bytes live in MinIO (object storage); DB stores metadata only.
+// Sensitivity + scan status gate download; signed URLs are short-lived (doc 06).
+model FileObject {
+  id           String   @id
+  storageKey   String   @unique @map("storage_key")
+  originalName String   @map("original_name")
+  mimeType     String   @map("mime_type")
+  sizeBytes    Int?     @map("size_bytes")
+  sensitivity  String   @default("normal") // normal | confidential | restricted
+  scanStatus   String   @default("pending") @map("scan_status") // pending | clean | infected
+  status       String   @default("pending_upload") // pending_upload | uploaded
+  uploadedBy   String?  @map("uploaded_by")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("file_objects")
+  @@schema("files")
 }
