@@ -219,6 +219,7 @@ model GravePlot {
   cemetery      Cemetery                 @relation(fields: [cemeteryId], references: [id])
   graveType     GraveType                @relation(fields: [graveTypeId], references: [id])
   statusHistory GravePlotStatusHistory[]
+  holds         GraveHold[]
 
   @@unique([companyId, plotCode])
   @@index([companyId, status])
@@ -293,7 +294,8 @@ model Customer {
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  person Person? @relation(fields: [personId], references: [id])
+  person Person?     @relation(fields: [personId], references: [id])
+  holds  GraveHold[]
 
   @@index([phone])
   @@index([email])
@@ -323,5 +325,27 @@ model FamilyRelationship {
   @@index([sourcePersonId])
   @@index([targetPersonId])
   @@map("family_relationships")
+  @@schema("cemetery")
+}
+
+// M2: grave hold (giữ chỗ). Only one Active hold per plot — enforced by a partial unique
+// index added in the migration. Expiry is swept by the worker (T09).
+model GraveHold {
+  id          String    @id
+  gravePlotId String    @map("grave_plot_id")
+  customerId  String    @map("customer_id")
+  createdBy   String?   @map("created_by")
+  status      String    @default("Active") // Active | Expired | Converted | Cancelled
+  reason      String?
+  expiresAt   DateTime  @map("expires_at") @db.Timestamptz(6)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  releasedAt  DateTime? @map("released_at") @db.Timestamptz(6)
+
+  gravePlot GravePlot @relation(fields: [gravePlotId], references: [id])
+  customer  Customer  @relation(fields: [customerId], references: [id])
+
+  @@index([gravePlotId])
+  @@index([status, expiresAt])
+  @@map("grave_holds")
   @@schema("cemetery")
 }

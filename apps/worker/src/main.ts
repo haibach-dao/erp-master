@@ -2,11 +2,14 @@ import { PrismaClient } from '@prisma/client';
 import { Queue, Worker } from 'bullmq';
 import IORedis from 'ioredis';
 import { pollAndDispatch } from './dispatcher';
+import { expireHolds } from './hold-expiry';
 import { createMailer } from './mailer';
 
 const QUEUE = 'maintenance';
 const OUTBOX_JOB = 'outbox-dispatch';
+const HOLD_EXPIRY_JOB = 'hold-expiry';
 const POLL_EVERY_MS = 5000;
+const HOLD_EXPIRY_EVERY_MS = 60000;
 
 async function main(): Promise<void> {
   const prisma = new PrismaClient();
@@ -23,12 +26,21 @@ async function main(): Promise<void> {
     {},
     { repeat: { every: POLL_EVERY_MS }, jobId: OUTBOX_JOB, removeOnComplete: true },
   );
+  // Repeatable sweep of expired grave holds.
+  await queue.add(
+    HOLD_EXPIRY_JOB,
+    {},
+    { repeat: { every: HOLD_EXPIRY_EVERY_MS }, jobId: HOLD_EXPIRY_JOB, removeOnComplete: true },
+  );
 
   const worker = new Worker(
     QUEUE,
     async (job) => {
       if (job.name === OUTBOX_JOB) {
         return pollAndDispatch({ prisma, mailer });
+      }
+      if (job.name === HOLD_EXPIRY_JOB) {
+        return expireHolds(prisma);
       }
       return undefined;
     },
