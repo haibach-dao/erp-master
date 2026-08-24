@@ -272,6 +272,7 @@ model Person {
   updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   customer          Customer?
+  deceased          DeceasedPerson?
   relationshipsFrom FamilyRelationship[] @relation("relSource")
   relationshipsTo   FamilyRelationship[] @relation("relTarget")
 
@@ -427,5 +428,41 @@ model GraveUsageRight {
   @@index([gravePlotId])
   @@index([holderCustomerId])
   @@map("grave_usage_rights")
+  @@schema("cemetery")
+}
+
+// M4: deceased person (identifies a Person) + burial records.
+model DeceasedPerson {
+  id               String    @id
+  personId         String    @unique @map("person_id")
+  dateOfDeath      DateTime? @map("date_of_death") @db.Date
+  deathCertFileId  String?   @map("death_cert_file_id") // files.file_objects.id (restricted)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  person        Person         @relation(fields: [personId], references: [id])
+  burialRecords BurialRecord[]
+
+  @@map("deceased_persons")
+  @@schema("cemetery")
+}
+
+model BurialRecord {
+  id               String    @id
+  gravePlotId      String    @map("grave_plot_id")
+  deceasedPersonId String    @map("deceased_person_id")
+  contractId       String?   @map("contract_id")
+  status           String    @default("Draft") // Draft | Verified | Scheduled | Completed | Cancelled
+  burialDate       DateTime? @map("burial_date") @db.Date
+  legalDocFileId   String?   @map("legal_doc_file_id")
+  notes            String?
+  version          Int       @default(0)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  deceased DeceasedPerson @relation(fields: [deceasedPersonId], references: [id])
+
+  @@index([gravePlotId, status])
+  @@index([deceasedPersonId])
+  @@map("burial_records")
   @@schema("cemetery")
 }
