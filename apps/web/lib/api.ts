@@ -205,3 +205,134 @@ export const listHolds = (gravePlotId: string, status: string): Promise<GraveHol
   );
 export const releaseHold = (id: string): Promise<unknown> =>
   apiFetch(`/api/v1/cemetery/grave-holds/${id}/release`, { method: 'POST' });
+
+// --- Files (MinIO presigned upload) ---
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+
+// Presign, PUT the file to MinIO, confirm. Returns the fileId to link (e.g. to a contract).
+export async function uploadFile(file: File): Promise<string> {
+  const presign = await apiFetch<{ fileId: string; uploadUrl: string }>(
+    '/api/v1/files/presign-upload',
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        fileName: file.name,
+        mimeType: file.type || 'application/octet-stream',
+      }),
+    },
+  );
+  const put = await fetch(presign.uploadUrl, {
+    method: 'PUT',
+    headers: { 'content-type': file.type || 'application/octet-stream' },
+    body: file,
+  });
+  if (!put.ok) {
+    throw new ApiError(put.status, 'Upload lên storage thất bại');
+  }
+  await apiFetch(`/api/v1/files/${presign.fileId}/confirm`, {
+    method: 'POST',
+    body: JSON.stringify({ sizeBytes: file.size }),
+  });
+  return presign.fileId;
+}
+
+export function fileDownloadUrl(fileId: string): Promise<{ url: string }> {
+  return apiFetch(`/api/v1/files/${fileId}/download-url`);
+}
+
+export { API_BASE };
+
+// --- Contracts ---
+
+export interface ContractParty {
+  id: string;
+  customerId: string;
+  role: string;
+}
+export interface ExternalContract {
+  id: string;
+  contractNo: string;
+  gravePlotId: string;
+  contractFileId: string | null;
+  status: string;
+  validTo: string | null;
+  totalAmount: string | null;
+  parties?: ContractParty[];
+}
+
+export const listContracts = (companyId: string): Promise<ExternalContract[]> =>
+  apiFetch(`/api/v1/contracts?companyId=${encodeURIComponent(companyId)}`);
+export const getContract = (id: string): Promise<ExternalContract> =>
+  apiFetch(`/api/v1/contracts/${id}`);
+export const createContract = (input: {
+  companyId: string;
+  contractNo: string;
+  gravePlotId: string;
+  contractFileId?: string;
+  validTo?: string;
+  totalAmount?: number;
+}): Promise<ExternalContract> =>
+  apiFetch('/api/v1/contracts', { method: 'POST', body: JSON.stringify(input) });
+export const addContractParty = (
+  id: string,
+  customerId: string,
+  role: string,
+): Promise<ContractParty> =>
+  apiFetch(`/api/v1/contracts/${id}/parties`, {
+    method: 'POST',
+    body: JSON.stringify({ customerId, role }),
+  });
+export const verifyContract = (id: string): Promise<ExternalContract> =>
+  apiFetch(`/api/v1/contracts/${id}/verify`, { method: 'POST' });
+export const activateContract = (id: string): Promise<unknown> =>
+  apiFetch(`/api/v1/contracts/${id}/activate`, { method: 'POST' });
+
+// --- Services ---
+
+export interface ServiceCatalog {
+  id: string;
+  code: string;
+  name: string;
+  price: string;
+  durationMonths: number;
+}
+export interface ServiceSubscription {
+  id: string;
+  gravePlotId: string;
+  serviceCatalogId: string;
+  agreedPrice: string;
+  effectiveFrom: string;
+  effectiveTo: string;
+  status: string;
+}
+export interface RevenueReport {
+  totalCollected: string;
+  transactions: number;
+  byService: { serviceCatalogId: string; collected: string; count: number }[];
+}
+
+export const listServiceCatalog = (companyId: string): Promise<ServiceCatalog[]> =>
+  apiFetch(`/api/v1/services/catalog?companyId=${encodeURIComponent(companyId)}`);
+export const createServiceCatalog = (input: {
+  companyId: string;
+  code: string;
+  name: string;
+  price: number;
+  durationMonths: number;
+}): Promise<ServiceCatalog> =>
+  apiFetch('/api/v1/services/catalog', { method: 'POST', body: JSON.stringify(input) });
+export const listSubscriptions = (gravePlotId: string): Promise<ServiceSubscription[]> =>
+  apiFetch(`/api/v1/services/subscriptions?gravePlotId=${encodeURIComponent(gravePlotId)}`);
+export const subscribeService = (input: {
+  companyId: string;
+  gravePlotId: string;
+  serviceCatalogId: string;
+  customerId: string;
+  effectiveFrom: string;
+}): Promise<unknown> =>
+  apiFetch('/api/v1/services/subscriptions', { method: 'POST', body: JSON.stringify(input) });
+export const renewSubscription = (id: string): Promise<unknown> =>
+  apiFetch(`/api/v1/services/subscriptions/${id}/renew`, { method: 'POST', body: '{}' });
+export const serviceRevenue = (companyId: string): Promise<RevenueReport> =>
+  apiFetch(`/api/v1/services/revenue?companyId=${encodeURIComponent(companyId)}`);
