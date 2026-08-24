@@ -2,9 +2,22 @@
   "name": "@erp/worker",
   "version": "0.0.0",
   "private": true,
-  "type": "module",
   "scripts": {
+    "dev": "tsx watch src/main.ts",
     "build": "tsc -p tsconfig.json",
+    "start": "node dist/main.js",
     "lint": "eslint src"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.1.0",
+    "bullmq": "^5.34.0",
+    "ioredis": "^5.4.1",
+    "nodemailer": "^6.9.16",
+    "ulid": "^2.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/nodemailer": "^6.4.17",
+    "tsx": "^4.19.2"
   }
 }
