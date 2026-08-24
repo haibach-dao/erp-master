@@ -3,13 +3,16 @@ import { Queue, Worker } from 'bullmq';
 import IORedis from 'ioredis';
 import { pollAndDispatch } from './dispatcher';
 import { expireHolds } from './hold-expiry';
+import { sweepServices } from './service-sweep';
 import { createMailer } from './mailer';
 
 const QUEUE = 'maintenance';
 const OUTBOX_JOB = 'outbox-dispatch';
 const HOLD_EXPIRY_JOB = 'hold-expiry';
+const SERVICE_SWEEP_JOB = 'service-sweep';
 const POLL_EVERY_MS = 5000;
 const HOLD_EXPIRY_EVERY_MS = 60000;
+const SERVICE_SWEEP_EVERY_MS = 3600000;
 
 async function main(): Promise<void> {
   const prisma = new PrismaClient();
@@ -32,6 +35,12 @@ async function main(): Promise<void> {
     {},
     { repeat: { every: HOLD_EXPIRY_EVERY_MS }, jobId: HOLD_EXPIRY_JOB, removeOnComplete: true },
   );
+  // Repeatable sweep of service subscriptions (expiry + reminders).
+  await queue.add(
+    SERVICE_SWEEP_JOB,
+    {},
+    { repeat: { every: SERVICE_SWEEP_EVERY_MS }, jobId: SERVICE_SWEEP_JOB, removeOnComplete: true },
+  );
 
   const worker = new Worker(
     QUEUE,
@@ -41,6 +50,9 @@ async function main(): Promise<void> {
       }
       if (job.name === HOLD_EXPIRY_JOB) {
         return expireHolds(prisma);
+      }
+      if (job.name === SERVICE_SWEEP_JOB) {
+        return sweepServices(prisma);
       }
       return undefined;
     },
