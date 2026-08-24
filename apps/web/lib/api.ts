@@ -124,3 +124,84 @@ export function createCustomer(
 ): Promise<{ customer: Customer360; warnings: DedupWarning[] }> {
   return apiFetch('/api/v1/crm/customers', { method: 'POST', body: JSON.stringify(input) });
 }
+
+// --- Cemetery catalog + holds ---
+
+export interface Company {
+  id: string;
+  code: string;
+  name: string;
+}
+export interface Cemetery {
+  id: string;
+  code: string;
+  name: string;
+}
+export interface GraveType {
+  id: string;
+  code: string;
+  name: string;
+  defaultCapacity: number;
+}
+export interface GravePlot {
+  id: string;
+  plotCode: string;
+  status: string;
+  effectiveCapacity: number;
+  cemeteryId: string;
+  graveTypeId: string;
+}
+
+export const listCompanies = (): Promise<Company[]> => apiFetch('/api/v1/cemetery/companies');
+export const createCompany = (code: string, name: string): Promise<Company> =>
+  apiFetch('/api/v1/cemetery/companies', { method: 'POST', body: JSON.stringify({ code, name }) });
+
+export const listCemeteries = (companyId: string): Promise<Cemetery[]> =>
+  apiFetch(`/api/v1/cemetery/cemeteries?companyId=${encodeURIComponent(companyId)}`);
+export const createCemetery = (companyId: string, code: string, name: string): Promise<Cemetery> =>
+  apiFetch('/api/v1/cemetery/cemeteries', {
+    method: 'POST',
+    body: JSON.stringify({ companyId, code, name }),
+  });
+
+export const listGraveTypes = (companyId: string): Promise<GraveType[]> =>
+  apiFetch(`/api/v1/cemetery/grave-types?companyId=${encodeURIComponent(companyId)}`);
+export const createGraveType = (
+  companyId: string,
+  code: string,
+  name: string,
+  defaultCapacity: number,
+): Promise<GraveType> =>
+  apiFetch('/api/v1/cemetery/grave-types', {
+    method: 'POST',
+    body: JSON.stringify({ companyId, code, name, defaultCapacity }),
+  });
+
+export const listGravePlots = (companyId: string): Promise<GravePlot[]> =>
+  apiFetch(`/api/v1/cemetery/grave-plots?companyId=${encodeURIComponent(companyId)}`);
+export const createGravePlot = (input: {
+  companyId: string;
+  cemeteryId: string;
+  graveTypeId: string;
+  plotCode: string;
+}): Promise<GravePlot> =>
+  apiFetch('/api/v1/cemetery/grave-plots', { method: 'POST', body: JSON.stringify(input) });
+
+export interface GraveHold {
+  id: string;
+  gravePlotId: string;
+  customerId: string;
+  status: string;
+  expiresAt: string;
+}
+export const createHold = (gravePlotId: string, customerId: string): Promise<GraveHold> =>
+  apiFetch('/api/v1/cemetery/grave-holds', {
+    method: 'POST',
+    body: JSON.stringify({ gravePlotId, customerId }),
+  });
+export const listHolds = (gravePlotId: string, status: string): Promise<GraveHold[]> =>
+  apiFetch(
+    `/api/v1/cemetery/grave-holds?gravePlotId=${encodeURIComponent(gravePlotId)}&status=${status}`,
+  );
+export const releaseHold = (id: string): Promise<unknown> =>
+  apiFetch(`/api/v1/cemetery/grave-holds/${id}/release`, { method: 'POST' });
