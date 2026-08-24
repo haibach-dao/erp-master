@@ -8,7 +8,7 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
-  schemas  = ["iam", "audit", "common"]
+  schemas  = ["iam", "audit", "common", "authz"]
 }
 
 model User {
@@ -98,4 +98,55 @@ model OutboxEvent {
   @@index([status, createdAt])
   @@map("outbox_events")
   @@schema("common")
+}
+
+// RBAC structure (T08). Permissions are `module.resource.action`. Scope on each grant
+// bounds the data a role may act on. NO concrete permission seed yet (Gate 0 / A6).
+model Role {
+  id          String   @id
+  code        String   @unique
+  name        String
+  description String?
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  rolePermissions RolePermission[]
+
+  @@map("roles")
+  @@schema("authz")
+}
+
+model Permission {
+  id          String  @id
+  code        String  @unique // module.resource.action
+  description String?
+
+  rolePermissions RolePermission[]
+
+  @@map("permissions")
+  @@schema("authz")
+}
+
+model RolePermission {
+  id           String @id
+  roleId       String @map("role_id")
+  permissionId String @map("permission_id")
+  scope        String @default("DEPARTMENT") // SELF|ASSIGNED|DEPARTMENT|COMPANY|GROUP|CUSTOM
+
+  role       Role       @relation(fields: [roleId], references: [id])
+  permission Permission @relation(fields: [permissionId], references: [id])
+
+  @@unique([roleId, permissionId])
+  @@map("role_permissions")
+  @@schema("authz")
+}
+
+// Named CUSTOM scope definitions referenced by grants with scope = CUSTOM.
+model ScopePolicy {
+  id          String  @id
+  code        String  @unique
+  description String?
+  rule        Json
+
+  @@map("scope_policies")
+  @@schema("authz")
 }
