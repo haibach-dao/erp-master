@@ -1,11 +1,12 @@
 import { Global, Module } from '@nestjs/common';
 import { PolicyEvaluator } from './policy-evaluator';
+import { PermissionsService } from './permissions.service';
+import { PermissionGuard } from './permission.guard';
 
-// Provides the pure policy evaluator. Concrete permission/role seeding and DB-backed
-// grant loading come later (needs org module + Gate 0 decisions on the permission set).
+// Provides the pure policy evaluator + DB-backed permission loading and the route guard.
 @Global()
 @Module({
-  providers: [PolicyEvaluator],
-  exports: [PolicyEvaluator],
+  providers: [PolicyEvaluator, PermissionsService, PermissionGuard],
+  exports: [PolicyEvaluator, PermissionsService, PermissionGuard],
 })
 export class AuthorizationModule {}

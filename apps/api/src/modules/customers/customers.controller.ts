@@ -2,12 +2,14 @@ import { Body, Controller, Get, Param, Post, Query, Req, UseGuards } from '@nest
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { JwtAuthGuard } from '../iam/guards/jwt-auth.guard';
+import { PermissionGuard } from '../authorization/permission.guard';
+import { RequirePermission } from '../authorization/require-permission.decorator';
 import { CustomersService } from './customers.service';
 import { CreateCustomerDto, CreatePersonDto, CreateRelationshipDto } from './customers.dto';
 
 @ApiTags('customers')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, PermissionGuard)
 @Controller('crm')
 export class CustomersController {
   constructor(private readonly svc: CustomersService) {}
@@ -47,6 +49,7 @@ export class CustomersController {
   }
 
   @Get('persons/:id/national-id')
+  @RequirePermission('cemetery.document.view_sensitive')
   revealNationalId(@Param('id') id: string, @Req() req: Request) {
     return this.svc.revealNationalId(id, this.actor(req));
   }

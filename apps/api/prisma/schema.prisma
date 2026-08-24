@@ -110,8 +110,27 @@ model Role {
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
   rolePermissions RolePermission[]
+  assignments     RoleAssignment[]
 
   @@map("roles")
+  @@schema("authz")
+}
+
+// Assigns a role to a user (optionally scoped to a company). No FK to iam.users to keep
+// it simple; userId is the iam.users id.
+model RoleAssignment {
+  id        String   @id
+  userId    String   @map("user_id")
+  roleId    String   @map("role_id")
+  companyId String?  @map("company_id")
+  scope     String? // optional scope override for this assignment
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  role Role @relation(fields: [roleId], references: [id])
+
+  @@unique([userId, roleId, companyId])
+  @@index([userId])
+  @@map("role_assignments")
   @@schema("authz")
 }
 

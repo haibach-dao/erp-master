@@ -2,12 +2,14 @@ import { Body, Controller, Get, Param, Post, Query, Req, UseGuards } from '@nest
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { JwtAuthGuard } from '../iam/guards/jwt-auth.guard';
+import { PermissionGuard } from '../authorization/permission.guard';
+import { RequirePermission } from '../authorization/require-permission.decorator';
 import { ContractsService } from './contracts.service';
 import { AddPartyDto, CreateContractDto } from './contracts.dto';
 
 @ApiTags('contracts')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, PermissionGuard)
 @Controller('contracts')
 export class ContractsController {
   constructor(private readonly svc: ContractsService) {}
@@ -32,6 +34,7 @@ export class ContractsController {
   }
 
   @Post(':id/activate')
+  @RequirePermission('cemetery.contract.activate')
   activate(@Param('id') id: string, @Req() req: Request) {
     return this.svc.activate(id, this.actor(req));
   }
