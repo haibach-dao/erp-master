@@ -9,6 +9,12 @@ import { correlationId } from './common/middleware/correlation-id.middleware';
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule);
 
+  app.enableCors({
+    origin: (process.env.CORS_ORIGINS ?? process.env.APP_URL ?? 'http://localhost:3000')
+      .split(',')
+      .map((o) => o.trim()),
+    credentials: true,
+  });
   app.use(correlationId);
   app.setGlobalPrefix('api/v1', { exclude: ['health'] });
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
