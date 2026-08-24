@@ -82,3 +82,45 @@ export async function authLogout(): Promise<void> {
   }
   clearTokens();
 }
+
+// --- CRM (customers) ---
+
+export interface CustomerPerson {
+  id: string;
+  fullName: string;
+  gender: string | null;
+  nationalIdMasked: string | null;
+}
+
+export interface Customer360 {
+  id: string;
+  customerCode: string;
+  type: string;
+  orgName: string | null;
+  phone: string | null;
+  email: string | null;
+  person: CustomerPerson | null;
+}
+
+export interface DedupWarning {
+  reason: string;
+  matches: unknown[];
+}
+
+export interface CreateCustomerInput {
+  type: string;
+  person?: { fullName: string; gender?: string; nationalId?: string };
+  orgName?: string;
+  phone?: string;
+  email?: string;
+}
+
+export function searchCustomers(q: string): Promise<Customer360[]> {
+  return apiFetch<Customer360[]>(`/api/v1/crm/customers/search?q=${encodeURIComponent(q)}`);
+}
+
+export function createCustomer(
+  input: CreateCustomerInput,
+): Promise<{ customer: Customer360; warnings: DedupWarning[] }> {
+  return apiFetch('/api/v1/crm/customers', { method: 'POST', body: JSON.stringify(input) });
+}
