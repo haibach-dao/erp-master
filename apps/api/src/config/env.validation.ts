@@ -15,6 +15,14 @@ class EnvVars {
   @IsOptional()
   @IsString()
   REDIS_URL?: string;
+
+  @IsOptional()
+  @IsString()
+  JWT_ACCESS_SECRET?: string;
+
+  @IsOptional()
+  @IsString()
+  JWT_REFRESH_SECRET?: string;
 }
 
 export function validate(config: Record<string, unknown>): EnvVars {
