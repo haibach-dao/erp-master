@@ -11,6 +11,7 @@ import { CemeteryModule } from './modules/cemetery/cemetery.module';
 import { CustomersModule } from './modules/customers/customers.module';
 import { HoldsModule } from './modules/holds/holds.module';
 import { FilesModule } from './modules/files/files.module';
+import { ContractsModule } from './modules/contracts/contracts.module';
 import { HealthModule } from './health/health.module';
 
 @Module({
@@ -26,6 +27,7 @@ import { HealthModule } from './health/health.module';
     CustomersModule,
     HoldsModule,
     FilesModule,
+    ContractsModule,
     HealthModule,
   ],
 })

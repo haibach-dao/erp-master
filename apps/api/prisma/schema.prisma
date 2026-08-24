@@ -8,7 +8,7 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
-  schemas  = ["iam", "audit", "common", "authz", "org", "cemetery", "files"]
+  schemas  = ["iam", "audit", "common", "authz", "org", "cemetery", "files", "contracts"]
 }
 
 model User {
@@ -367,4 +367,65 @@ model FileObject {
 
   @@map("file_objects")
   @@schema("files")
+}
+
+// M3b: external (signed-offline) contract. Allocation happens at Active (G0-G3.1).
+// One Active contract per plot — partial unique index in the migration.
+model ExternalContract {
+  id             String    @id
+  companyId      String    @map("company_id")
+  contractNo     String    @map("contract_no")
+  gravePlotId    String    @map("grave_plot_id")
+  contractFileId String?   @map("contract_file_id") // files.file_objects.id
+  status         String    @default("Uploaded") // Uploaded|PendingVerification|Verified|Active|Expired|Replaced|Cancelled
+  sourceType     String?   @map("source_type")
+  signedAt       DateTime? @map("signed_at") @db.Date
+  validTo        DateTime? @map("valid_to") @db.Date
+  totalAmount    Decimal?  @map("total_amount") @db.Decimal(14, 0) // VND
+  verifiedBy     String?   @map("verified_by")
+  verifiedAt     DateTime? @map("verified_at") @db.Timestamptz(6)
+  activatedBy    String?   @map("activated_by")
+  activatedAt    DateTime? @map("activated_at") @db.Timestamptz(6)
+  version        Int       @default(0)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  parties ContractParty[]
+
+  @@unique([companyId, contractNo])
+  @@index([gravePlotId])
+  @@index([companyId, status])
+  @@map("external_contracts")
+  @@schema("contracts")
+}
+
+model ContractParty {
+  id         String   @id
+  contractId String   @map("contract_id")
+  customerId String   @map("customer_id")
+  role       String // OWNER | SIGNER | CONTACT
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  contract ExternalContract @relation(fields: [contractId], references: [id])
+
+  @@index([contractId])
+  @@map("contract_parties")
+  @@schema("contracts")
+}
+
+// G0-A2 minimal: usage right separate from contract; no transfer workflow yet.
+model GraveUsageRight {
+  id               String    @id
+  gravePlotId      String    @map("grave_plot_id")
+  holderCustomerId String    @map("holder_customer_id")
+  sourceContractId String    @map("source_contract_id")
+  status           String    @default("Active") // Active | Ended | Transferred
+  effectiveFrom    DateTime? @map("effective_from") @db.Date
+  effectiveTo      DateTime? @map("effective_to") @db.Date
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([gravePlotId])
+  @@index([holderCustomerId])
+  @@map("grave_usage_rights")
+  @@schema("cemetery")
 }
