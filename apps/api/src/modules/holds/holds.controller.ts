@@ -2,17 +2,20 @@ import { Body, Controller, Get, Param, Post, Query, Req, UseGuards } from '@nest
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { JwtAuthGuard } from '../iam/guards/jwt-auth.guard';
+import { PermissionGuard } from '../authorization/permission.guard';
+import { RequirePermission } from '../authorization/require-permission.decorator';
 import { HoldsService } from './holds.service';
 import { CreateHoldDto } from './holds.dto';
 
 @ApiTags('cemetery')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, PermissionGuard)
 @Controller('cemetery/grave-holds')
 export class HoldsController {
   constructor(private readonly svc: HoldsService) {}
 
   @Post()
+  @RequirePermission('cemetery.grave.hold')
   create(@Body() dto: CreateHoldDto, @Req() req: Request) {
     return this.svc.createHold(dto, req.user?.userId ?? null);
   }

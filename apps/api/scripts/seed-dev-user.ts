@@ -15,12 +15,28 @@ async function main(): Promise<void> {
   }
   const prisma = new PrismaClient();
   const passwordHash = await hash(password);
-  await prisma.user.upsert({
+  const user = await prisma.user.upsert({
     where: { email },
     update: { passwordHash, status: 'active' },
     create: { id: ulid(), email, passwordHash, status: 'active' },
   });
-  console.log(`dev user ready: ${email}`);
+
+  // Assign a role (default ADMIN) so RBAC-gated endpoints work. Requires `pnpm db:seed` first.
+  const roleCode = process.env.DEV_USER_ROLE ?? 'ADMIN';
+  const role = await prisma.role.findUnique({ where: { code: roleCode } });
+  if (role !== null) {
+    const existing = await prisma.roleAssignment.findFirst({
+      where: { userId: user.id, roleId: role.id, companyId: null },
+    });
+    if (existing === null) {
+      await prisma.roleAssignment.create({
+        data: { id: ulid(), userId: user.id, roleId: role.id },
+      });
+    }
+    console.log(`dev user ready: ${email} (role ${roleCode})`);
+  } else {
+    console.log(`dev user ready: ${email} (role ${roleCode} not found — run pnpm db:seed)`);
+  }
   await prisma.$disconnect();
 }
 
