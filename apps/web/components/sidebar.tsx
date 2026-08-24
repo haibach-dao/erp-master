@@ -7,6 +7,8 @@ const ITEMS: { href: string; label: string }[] = [
   { href: '/dashboard', label: 'Dashboard' },
   { href: '/cemetery/customers', label: 'Khách hàng' },
   { href: '/cemetery/graves', label: 'Mộ' },
+  { href: '/cemetery/contracts', label: 'Hợp đồng' },
+  { href: '/cemetery/services', label: 'Dịch vụ' },
   { href: '/approvals/inbox', label: 'Phê duyệt' },
   { href: '/audit', label: 'Audit' },
   { href: '/organization', label: 'Tổ chức' },
