@@ -175,9 +175,20 @@ describe('MaskingInterceptor — sổ trường nhạy cảm toàn hệ', () => 
     const out = await run({
       body: { phone: '0901234567' },
       userId: 'u1',
-      grants: [{ permission: 'crm.person.view_sensitive', scope: 'GROUP' }],
+      grants: [{ permission: 'crm.person.view_contact', scope: 'GROUP' }],
     });
     expect(out).toEqual({ phone: '0901234567' });
+  });
+
+  /* Tách mã là để chuyện này KHÔNG xảy ra: cho xem số điện thoại mà lỡ cho xem cả CCCD.
+   * `view_sensitive` không mở được trường liên lạc, và ngược lại. */
+  it('mã xem CCCD KHÔNG mở khoá trường liên lạc — hai rủi ro, hai mã', async () => {
+    const out = await run({
+      body: { phone: '0901234567' },
+      userId: 'u1',
+      grants: [{ permission: 'crm.person.view_sensitive', scope: 'GROUP' }],
+    });
+    expect(out).toEqual({ phone: '***' });
   });
 
   it('che cả trong bản ghi lồng nhau — chỗ dễ lọt nhất', async () => {
