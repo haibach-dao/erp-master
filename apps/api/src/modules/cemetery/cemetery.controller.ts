@@ -24,6 +24,10 @@ import {
 export class CemeteryController {
   constructor(private readonly svc: CemeteryService) {}
 
+  private actor(req: Request): string | null {
+    return req.user?.userId ?? null;
+  }
+
   @Get('relationship-types')
   @RequirePermission('cemetery.reference.view')
   relationshipTypes() {
@@ -38,55 +42,56 @@ export class CemeteryController {
 
   @Get('companies')
   @RequirePermission('org.company.view')
-  listCompanies() {
-    return this.svc.listCompanies();
+  listCompanies(@Req() req: Request) {
+    return this.svc.listCompanies(this.actor(req));
   }
 
   @Post('cemeteries')
   @RequirePermission('cemetery.site.create')
-  createCemetery(@Body() dto: CreateCemeteryDto) {
-    return this.svc.createCemetery(dto);
+  createCemetery(@Body() dto: CreateCemeteryDto, @Req() req: Request) {
+    return this.svc.createCemetery(dto, this.actor(req));
   }
 
   @Get('cemeteries')
   @RequirePermission('cemetery.site.view')
-  listCemeteries(@Query('companyId') companyId: string) {
-    return this.svc.listCemeteries(companyId);
+  listCemeteries(@Query('companyId') companyId: string, @Req() req: Request) {
+    return this.svc.listCemeteries(companyId, this.actor(req));
   }
 
   @Post('grave-types')
   @RequirePermission('cemetery.grave_type.create')
-  createGraveType(@Body() dto: CreateGraveTypeDto) {
-    return this.svc.createGraveType(dto);
+  createGraveType(@Body() dto: CreateGraveTypeDto, @Req() req: Request) {
+    return this.svc.createGraveType(dto, this.actor(req));
   }
 
   @Get('grave-types')
   @RequirePermission('cemetery.grave_type.view')
   @MaskUnless({ field: 'referencePrice', permission: 'cemetery.price.view' })
-  listGraveTypes(@Query('companyId') companyId: string) {
-    return this.svc.listGraveTypes(companyId);
+  listGraveTypes(@Query('companyId') companyId: string, @Req() req: Request) {
+    return this.svc.listGraveTypes(companyId, this.actor(req));
   }
 
   @Post('grave-plots')
   @RequirePermission('cemetery.plot.create')
-  createGravePlot(@Body() dto: CreateGravePlotDto) {
-    return this.svc.createGravePlot(dto);
+  createGravePlot(@Body() dto: CreateGravePlotDto, @Req() req: Request) {
+    return this.svc.createGravePlot(dto, this.actor(req));
   }
 
   @Get('grave-plots')
   @RequirePermission('cemetery.plot.view')
   listGravePlots(
+    @Req() req: Request,
     @Query('companyId') companyId: string,
     @Query('status') status?: string,
     @Query('cemeteryId') cemeteryId?: string,
   ) {
-    return this.svc.listGravePlots(companyId, status, cemeteryId);
+    return this.svc.listGravePlots(companyId, this.actor(req), status, cemeteryId);
   }
 
   @Post('grave-plots/:id/status')
   @RequirePermission('cemetery.plot.set_status')
   changeStatus(@Param('id') id: string, @Body() dto: ChangeStatusDto, @Req() req: Request) {
-    return this.svc.changeGravePlotStatus(id, dto, req.user?.userId ?? null);
+    return this.svc.changeGravePlotStatus(id, dto, this.actor(req));
   }
 
   @Get('grave-plots/:id/status-history')

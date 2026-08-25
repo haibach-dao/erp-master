@@ -2,6 +2,7 @@ import { ConflictException, Injectable, NotFoundException } from '@nestjs/common
 import { Prisma } from '@prisma/client';
 import { ulid } from 'ulid';
 import { PrismaService } from '../../prisma/prisma.service';
+import { ScopeService } from '../authorization/scope.service';
 import { AuditService } from '../audit/audit.service';
 import type { AddPartyDto, CreateContractDto } from './contracts.dto';
 
@@ -10,6 +11,7 @@ export class ContractsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly scope: ScopeService,
   ) {}
 
   async create(dto: CreateContractDto, actor: string | null) {
@@ -187,7 +189,8 @@ export class ContractsService {
     return this.prisma.externalContract.findUnique({ where: { id }, include: { parties: true } });
   }
 
-  list(companyId: string, status?: string, gravePlotId?: string) {
+  async list(companyId: string, actor: string | null, status?: string, gravePlotId?: string) {
+    await this.scope.assertCompany(actor, companyId);
     const where: Prisma.ExternalContractWhereInput = { companyId };
     if (status !== undefined) where.status = status;
     if (gravePlotId !== undefined) where.gravePlotId = gravePlotId;

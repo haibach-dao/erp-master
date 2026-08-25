@@ -54,10 +54,11 @@ export class ContractsController {
   @RequirePermission('contract.record.view')
   @MaskUnless({ field: 'totalAmount', permission: 'contract.amount.view_sensitive' })
   list(
+    @Req() req: Request,
     @Query('companyId') companyId: string,
     @Query('status') status?: string,
     @Query('gravePlotId') gravePlotId?: string,
   ) {
-    return this.svc.list(companyId, status, gravePlotId);
+    return this.svc.list(companyId, this.actor(req), status, gravePlotId);
   }
 }
