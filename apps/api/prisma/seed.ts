@@ -1,5 +1,6 @@
 import { PrismaClient } from '@prisma/client';
 import { ulid } from 'ulid';
+import { PERMISSION_CATALOG, ROLE_CATALOG } from '../src/modules/authorization/permission-catalog';
 
 const prisma = new PrismaClient();
 
@@ -11,25 +12,8 @@ const RELATIONSHIP_TYPES = [
   { code: 'SIBLING', name: 'Anh/Chị/Em', reciprocalCode: 'SIBLING', genderSpecific: false },
 ];
 
-// RBAC catalog (A6): permissions + roles. ADMIN gets a wildcard; STAFF a limited set.
-const PERMISSIONS = [
-  '*.*.*',
-  'cemetery.customer.view',
-  'cemetery.grave.hold',
-  'cemetery.contract.activate',
-  'cemetery.document.view_sensitive',
-  'audit.event.view',
-];
-const ROLE_GRANTS: Record<string, { name: string; grants: { code: string; scope: string }[] }> = {
-  ADMIN: { name: 'Quản trị', grants: [{ code: '*.*.*', scope: 'GROUP' }] },
-  STAFF: {
-    name: 'Nhân viên',
-    grants: [
-      { code: 'cemetery.customer.view', scope: 'COMPANY' },
-      { code: 'cemetery.grave.hold', scope: 'COMPANY' },
-    ],
-  },
-};
+// RBAC catalog (A6): the codes and role grants live in src/modules/authorization/
+// permission-catalog.ts so the API, the seed and the CI invariants all read one list.
 
 async function main(): Promise<void> {
   for (const rt of RELATIONSHIP_TYPES) {
@@ -37,16 +21,16 @@ async function main(): Promise<void> {
   }
 
   const permByCode = new Map<string, string>();
-  for (const code of PERMISSIONS) {
+  for (const def of PERMISSION_CATALOG) {
     const p = await prisma.permission.upsert({
-      where: { code },
-      update: {},
-      create: { id: ulid(), code },
+      where: { code: def.code },
+      update: { description: def.description },
+      create: { id: ulid(), code: def.code, description: def.description },
     });
-    permByCode.set(code, p.id);
+    permByCode.set(def.code, p.id);
   }
 
-  for (const [code, def] of Object.entries(ROLE_GRANTS)) {
+  for (const [code, def] of Object.entries(ROLE_CATALOG)) {
     const role = await prisma.role.upsert({
       where: { code },
       update: { name: def.name },
@@ -64,7 +48,7 @@ async function main(): Promise<void> {
   }
 
   console.log(
-    `[seed] relationship types: ${RELATIONSHIP_TYPES.length}, permissions: ${PERMISSIONS.length}, roles: ${Object.keys(ROLE_GRANTS).length}`,
+    `[seed] relationship types: ${RELATIONSHIP_TYPES.length}, permissions: ${PERMISSION_CATALOG.length}, roles: ${Object.keys(ROLE_CATALOG).length}`,
   );
 }
 
