@@ -15,6 +15,9 @@ import { permissionMatches } from './policy-evaluator';
  *     as "unknown code", not silently match nothing and look like a rights problem.
  *  3. A wildcard grant cannot reach a leaf marked `wildcard_exempt` (every S3 leaf).
  *     Naming the leaf is the only way in.
+ *  4. An explicit deny beats every grant. Roles combine by UNION here — holding two roles
+ *     adds their rights and nothing narrows — so a deny row is the only mechanism left
+ *     that can take a granted right away. It is checked before the grants are read.
  *
  * Still NOT enforced here: which records the caller may touch. This guard answers "may
  * you do this at all", never "may you do this to THAT row" — the scope layer is separate
@@ -46,6 +49,9 @@ export class PermissionGuard implements CanActivate {
     const meta = await this.permissions.getPermissionMeta(required);
     if (meta === null) {
       throw new ForbiddenException(`Mã quyền không có trong danh mục: ${required}`);
+    }
+    if (await this.permissions.isDenied(userId, required)) {
+      throw new ForbiddenException(`Bị cấm tường minh: ${required}`);
     }
     const grants = await this.permissions.getGrants(userId);
     const ok = grants.some((g) =>

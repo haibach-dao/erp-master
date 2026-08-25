@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import type { PermissionGrant } from './policy.types';
+import { permissionMatches } from './policy-evaluator';
 import { isScope, type Scope } from './scope.enum';
 
 export interface PermissionMeta {
@@ -9,10 +10,6 @@ export interface PermissionMeta {
   sensitivity: string;
 }
 
-/* What a caller may do, and where. Two axes kept apart on purpose: holding a permission
- * says nothing about which records it reaches, and the effective right is the
- * INTERSECTION of the two (blueprint doc 16 §D.2).
- */
 /* The broadest scope level a caller holds. NONE means they hold no usable scope at all
  * and therefore reach no records — which is what someone with no assignment gets.
  *
@@ -26,7 +23,10 @@ export type ScopeLevel = 'GROUP' | 'COMPANY' | 'SITE' | 'NONE';
 export interface EffectiveAccess {
   roles: string[];
   permissions: string[];
+  /** Codes explicitly denied for this caller. Deny beats allow, always. */
+  denied: string[];
   scope: {
+    /** Highest level held on ANY code. For display; per-code decisions use scopeLevelFor. */
     level: ScopeLevel;
     /** A GROUP-scoped grant means "no record restriction" — every company, every site. */
     unrestricted: boolean;
@@ -41,17 +41,19 @@ export interface EffectiveAccess {
 export class PermissionsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  // Effective grants for a user = every role_permission of every role assigned to them.
-  //
-  // Known gap, deliberately left for the scope work: this is a UNION, so somebody holding
-  // two roles ends up with the WIDEST scope rather than the narrowest, there is no
-  // validity window, and there is no explicit deny. Nothing may lean on the `scope` field
-  // for a security decision until that is fixed (doc 16 §D.10).
+  /* Effective grants for a user: every role_permission of every role assigned to them,
+   * limited to the assignments that are in force right now.
+   *
+   * Combination rule is UNION — decided by the business owner. Holding two roles adds
+   * their rights together; nothing narrows. Note what that does and does not mean: the
+   * constitution's "smallest intersection" is about the axes of ONE TRANSACTION (person ∩
+   * agent ∩ device ∩ data layer ∩ action ∩ destination), not about how one person's
+   * several roles combine. Union across roles is ordinary RBAC.
+   *
+   * Because nothing narrows, the explicit deny table is the only remaining brake.
+   */
   async getGrants(userId: string): Promise<PermissionGrant[]> {
-    const assignments = await this.prisma.roleAssignment.findMany({
-      where: { userId },
-      include: { role: { include: { rolePermissions: { include: { permission: true } } } } },
-    });
+    const assignments = await this.activeAssignments(userId);
     const grants: PermissionGrant[] = [];
     for (const a of assignments) {
       for (const rp of a.role.rolePermissions) {
@@ -61,6 +63,58 @@ export class PermissionsService {
       }
     }
     return grants;
+  }
+
+  /* Scope level for ONE code — union across the grants that actually cover that code.
+   *
+   * Union has to be computed per code, never once for the whole caller. A single global
+   * "widest level" leaks: someone holding a group-wide read-only audit role alongside a
+   * company-level operational role would get group reach on the OPERATIONAL codes too,
+   * which the audit role never granted them. Union means "add up what each role gives",
+   * not "take the widest thing you hold anywhere and apply it everywhere".
+   */
+  async scopeLevelFor(userId: string, code: string): Promise<ScopeLevel> {
+    if (await this.isDenied(userId, code)) {
+      return 'NONE';
+    }
+    const meta = await this.getPermissionMeta(code);
+    const grants = await this.getGrants(userId);
+    let level: ScopeLevel = 'NONE';
+    for (const g of grants) {
+      const covers = permissionMatches(g.permission, code, {
+        ...(meta === null ? {} : { wildcardExempt: meta.wildcardExempt }),
+      });
+      if (covers) {
+        level = broader(level, g.scope);
+      }
+    }
+    return level;
+  }
+
+  /* Codes explicitly denied for this caller, right now.
+   *
+   * Deny wins over any grant. `subject_user_id = null` denies for everybody — the shape
+   * used for a leaf nobody may hold. This exists for the constitution's forbidden lane:
+   * with a union rule, and an administrator who may widen their own role, an explicit
+   * deny is the last thing standing between a role and data it must never read.
+   */
+  async deniedCodes(userId: string): Promise<string[]> {
+    const now = new Date();
+    const rows = await this.prisma.permissionDeny.findMany({
+      where: {
+        OR: [{ subjectUserId: userId }, { subjectUserId: null }],
+        validFrom: { lte: now },
+        AND: [{ OR: [{ validTo: null }, { validTo: { gt: now } }] }],
+      },
+      select: { permissionCode: true },
+    });
+    return [...new Set(rows.map((r) => r.permissionCode))].sort();
+  }
+
+  /** True when an explicit deny covers this code. Checked before any grant is consulted. */
+  async isDenied(userId: string, code: string): Promise<boolean> {
+    const denied = await this.deniedCodes(userId);
+    return denied.some((pattern) => permissionMatches(pattern, code));
   }
 
   /* Catalog metadata for one code, or null when the code is not in the catalog at all.
@@ -85,15 +139,18 @@ export class PermissionsService {
    * their own scope. The lists below are what the server is willing to accept from them.
    */
   async getEffectiveAccess(userId: string): Promise<EffectiveAccess> {
-    const [assignments, sites] = await Promise.all([
-      this.prisma.roleAssignment.findMany({
-        where: { userId },
-        include: { role: { include: { rolePermissions: { include: { permission: true } } } } },
-      }),
+    const now = new Date();
+    const [assignments, sites, denied] = await Promise.all([
+      this.activeAssignments(userId),
       this.prisma.scopeAssignment.findMany({
-        where: { userId },
+        where: {
+          userId,
+          validFrom: { lte: now },
+          OR: [{ validTo: null }, { validTo: { gt: now } }],
+        },
         select: { cemeteryId: true },
       }),
+      this.deniedCodes(userId),
     ]);
 
     const roles = new Set<string>();
@@ -112,9 +169,13 @@ export class PermissionsService {
       }
     }
 
+    // A denied code must not be advertised to the UI as something the caller holds.
+    const isDenied = (code: string): boolean => denied.some((d) => permissionMatches(d, code));
+
     return {
       roles: [...roles].sort(),
-      permissions: [...permissions].sort(),
+      permissions: [...permissions].filter((c) => !isDenied(c)).sort(),
+      denied,
       scope: {
         level,
         unrestricted: level === 'GROUP',
@@ -123,14 +184,24 @@ export class PermissionsService {
       },
     };
   }
+
+  /* Assignments in force right now. An expired grant simply stops existing — nobody has
+   * to remember to go and revoke it, which is the entire point of having a `valid_to`.
+   */
+  private activeAssignments(userId: string) {
+    const now = new Date();
+    return this.prisma.roleAssignment.findMany({
+      where: {
+        userId,
+        validFrom: { lte: now },
+        OR: [{ validTo: null }, { validTo: { gt: now } }],
+      },
+      include: { role: { include: { rolePermissions: { include: { permission: true } } } } },
+    });
+  }
 }
 
-/* Widest wins, matching the union rule in getGrants above. That is the CURRENT rule and
- * it is the wrong way round — the constitution asks for the narrowest intersection, so a
- * person holding two roles should be bounded by the tighter one. Changing it is a
- * separate step with its own blast radius; until then this function is honest about what
- * the system actually does rather than about what it should do.
- */
+// Union rule: the widest scope among the grants that cover the code in question.
 const RANK: Record<string, number> = { NONE: 0, SITE: 1, COMPANY: 2, GROUP: 3 };
 
 function broader(current: ScopeLevel, candidate: string): ScopeLevel {

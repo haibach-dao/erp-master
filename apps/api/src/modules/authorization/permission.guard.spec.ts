@@ -22,6 +22,7 @@ function build(opts: {
   isPublic?: boolean;
   meta?: PermissionMeta | null;
   grants?: PermissionGrant[];
+  denied?: boolean;
 }) {
   const reflector = {
     getAllAndOverride: (key: string) => {
@@ -38,6 +39,7 @@ function build(opts: {
   const permissions = {
     getPermissionMeta: vi.fn().mockResolvedValue(opts.meta ?? null),
     getGrants: vi.fn().mockResolvedValue(opts.grants ?? []),
+    isDenied: vi.fn().mockResolvedValue(opts.denied ?? false),
   } as unknown as PermissionsService;
 
   return new PermissionGuard(reflector, permissions);
@@ -124,5 +126,29 @@ describe('PermissionGuard — wildcard reach', () => {
       grants: [{ permission: 'service.catalog.view', scope: 'COMPANY' }],
     });
     await expect(guard.canActivate(context('u1'))).rejects.toThrow(/Thiếu quyền/);
+  });
+});
+
+/* Roles combine by UNION — holding two roles adds their rights and nothing narrows. That
+ * makes an explicit deny the only mechanism left that can take a granted right away, so
+ * it has to win against every grant, including a grant naming the leaf exactly.
+ */
+describe('PermissionGuard — explicit deny beats every grant', () => {
+  it('refuses a denied code even when the caller was granted it by name', async () => {
+    const guard = build({
+      required: 'crm.person.view_sensitive',
+      meta: S3,
+      grants: [{ permission: 'crm.person.view_sensitive', scope: 'GROUP' }],
+      denied: true,
+    });
+    await expect(guard.canActivate(context('u1'))).rejects.toThrow(/Bị cấm tường minh/);
+  });
+
+  it('says WHY it refused — a deny and a missing grant are different problems', async () => {
+    const denied = build({ required: 'crm.person.view_sensitive', meta: S3, denied: true });
+    await expect(denied.canActivate(context('u1'))).rejects.toThrow(/Bị cấm tường minh/);
+
+    const missing = build({ required: 'crm.person.view_sensitive', meta: S3, denied: false });
+    await expect(missing.canActivate(context('u1'))).rejects.toThrow(/Thiếu quyền/);
   });
 });

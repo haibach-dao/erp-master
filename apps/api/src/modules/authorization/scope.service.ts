@@ -97,6 +97,19 @@ export class ScopeService {
     };
   }
 
+  /* Scope level for one permission code, unioned across the grants that cover it.
+   *
+   * Prefer this over the caller-wide `level` whenever the code is known: the caller-wide
+   * value is the widest thing they hold ANYWHERE, which is broader than what any single
+   * code was granted at.
+   */
+  async levelFor(userId: string | null, code: string): Promise<ScopeLevel> {
+    if (userId === null) {
+      throw new ForbiddenException('Chưa xác thực');
+    }
+    return this.permissions.scopeLevelFor(userId, code);
+  }
+
   // One synthetic grant, so the decision runs through the same evaluator the rest of the
   // system uses rather than through a second, quietly divergent copy of the rules.
   private allows(subject: Subject, target: ResourceTarget, scope: PermissionGrant['scope']) {

@@ -16,6 +16,12 @@ export function can(user: AuthUser | null, code: string): boolean {
   if (user === null) {
     return false;
   }
+  // Deny first, and unconditionally. Roles combine by union on the server, so a deny is
+  // the only thing that can take a granted right away — reading it in the other order
+  // would show a link the server is certain to refuse.
+  if (user.denied.some((pattern) => matches(pattern, code))) {
+    return false;
+  }
   return user.permissions.some((granted) => matches(granted, code));
 }
 

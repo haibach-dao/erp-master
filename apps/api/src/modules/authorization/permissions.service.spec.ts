@@ -13,12 +13,18 @@ function assignment(roleCode: string, codes: string[], scope: string, companyId:
   };
 }
 
-function build(assignments: unknown[], sites: { cemeteryId: string }[] = []) {
+function build(
+  assignments: unknown[],
+  sites: { cemeteryId: string }[] = [],
+  denies: { permissionCode: string }[] = [],
+  meta: { code: string; wildcardExempt: boolean; sensitivity: string } | null = null,
+) {
   const findMany = vi.fn().mockResolvedValue(assignments);
   const svc = new PermissionsService({
     roleAssignment: { findMany },
     scopeAssignment: { findMany: vi.fn().mockResolvedValue(sites) },
-    permission: { findUnique: vi.fn() },
+    permissionDeny: { findMany: vi.fn().mockResolvedValue(denies) },
+    permission: { findUnique: vi.fn().mockResolvedValue(meta) },
   } as unknown as PrismaService);
   return { svc, findMany };
 }
@@ -64,6 +70,7 @@ describe('getEffectiveAccess — what the caller may do, and where', () => {
     expect(access).toEqual({
       roles: [],
       permissions: [],
+      denied: [],
       scope: { level: 'NONE', unrestricted: false, companyIds: [], siteIds: [] },
     });
   });
@@ -106,5 +113,74 @@ describe('scope level — the difference between "no limit" and "no cemeteries y
     ]);
     const access = await svc.getEffectiveAccess('u1');
     expect(access.scope.level).toBe('COMPANY');
+  });
+});
+
+/* Union means "add up what each role gives", NOT "take the widest thing you hold
+ * anywhere and apply it everywhere". Computed globally it leaks: the group-wide audit
+ * role below never grants set_status, so it must not widen it.
+ */
+describe('scopeLevelFor — union computed PER CODE', () => {
+  const twoRoles = [
+    assignment('KTNB_KIEM_TOAN', ['audit.event.view'], 'GROUP', null),
+    assignment('THU_NGAN', ['cemetery.plot.set_status'], 'COMPANY', 'co-1'),
+  ];
+
+  it('gives GROUP on the code the group-wide role actually grants', async () => {
+    const { svc } = build(twoRoles);
+    await expect(svc.scopeLevelFor('u1', 'audit.event.view')).resolves.toBe('GROUP');
+  });
+
+  it('gives only COMPANY on a code the group-wide role never granted', async () => {
+    const { svc } = build(twoRoles);
+    await expect(svc.scopeLevelFor('u1', 'cemetery.plot.set_status')).resolves.toBe('COMPANY');
+  });
+
+  it('gives NONE for a code nobody granted', async () => {
+    const { svc } = build(twoRoles);
+    await expect(svc.scopeLevelFor('u1', 'service.revenue.view')).resolves.toBe('NONE');
+  });
+});
+
+describe('deny — the only brake left once roles combine by union', () => {
+  it('a denied code is not advertised as held', async () => {
+    const { svc } = build(
+      [assignment('DPO_DLCN', ['crm.person.view_sensitive'], 'GROUP', null)],
+      [],
+      [{ permissionCode: 'crm.person.view_sensitive' }],
+    );
+    const access = await svc.getEffectiveAccess('u1');
+    expect(access.permissions).not.toContain('crm.person.view_sensitive');
+    expect(access.denied).toEqual(['crm.person.view_sensitive']);
+  });
+
+  it('isDenied beats an exact grant', async () => {
+    const { svc } = build([], [], [{ permissionCode: 'crm.person.view_protected' }]);
+    await expect(svc.isDenied('u1', 'crm.person.view_protected')).resolves.toBe(true);
+  });
+
+  it('a deny may be written as a pattern covering a whole resource', async () => {
+    const { svc } = build([], [], [{ permissionCode: 'crm.person.*' }]);
+    await expect(svc.isDenied('u1', 'crm.person.view_sensitive')).resolves.toBe(true);
+    await expect(svc.isDenied('u1', 'crm.customer.view')).resolves.toBe(false);
+  });
+
+  it('a denied code has no scope either — it does not fall back to a narrower reach', async () => {
+    const { svc } = build(
+      [assignment('DPO_DLCN', ['crm.person.view_sensitive'], 'GROUP', null)],
+      [],
+      [{ permissionCode: 'crm.person.view_sensitive' }],
+    );
+    await expect(svc.scopeLevelFor('u1', 'crm.person.view_sensitive')).resolves.toBe('NONE');
+  });
+});
+
+describe('validity window — an expired grant stops existing on its own', () => {
+  it('only asks the database for assignments that are in force', async () => {
+    const { svc, findMany } = build([]);
+    await svc.getGrants('u1');
+    const where = findMany.mock.calls[0]?.[0]?.where as Record<string, unknown>;
+    expect(where.validFrom).toBeDefined();
+    expect(where.OR).toEqual([{ validTo: null }, { validTo: { gt: expect.any(Date) } }]);
   });
 });

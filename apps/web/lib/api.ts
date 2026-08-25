@@ -19,6 +19,8 @@ export interface AuthUser {
   email: string;
   roles: string[];
   permissions: string[];
+  /** Codes explicitly denied. Deny beats every grant — never render past this. */
+  denied: string[];
   scope: {
     /** Broadest scope level held. SITE with an empty `siteIds` reaches nothing. */
     level: 'GROUP' | 'COMPANY' | 'SITE' | 'NONE';
