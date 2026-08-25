@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import { KeyRound, Lock } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   grantPermission,
@@ -11,7 +12,25 @@ import {
 } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { can } from '@/lib/permissions';
+import { sensitivityOf } from '@/lib/status';
+import { PageHeader } from '@/components/ui/page-header';
+import { Alert } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { EmptyState } from '@/components/ui/empty-state';
+import { Field } from '@/components/ui/label';
+import { Select } from '@/components/ui/select';
+import { TableSkeleton } from '@/components/ui/skeleton';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableMessage,
+  TableRow,
+} from '@/components/ui/table';
 
 const SCOPES = ['GROUP', 'COMPANY', 'SITE', 'SELF'];
 
@@ -62,11 +81,15 @@ export default function RoleMatrixPage() {
 
   if (!canView) {
     return (
-      <section className="space-y-2">
-        <h1 className="text-xl font-semibold">Ma trận vai × quyền</h1>
-        <p className="text-sm text-muted-foreground">
-          Bạn không có quyền <code>authz.role.view</code>.
-        </p>
+      <section className="space-y-6">
+        <PageHeader title="Ma trận vai × quyền" />
+        <Card>
+          <EmptyState
+            icon={Lock}
+            title="Bạn không có quyền xem trang này"
+            description="Cần mã quyền authz.role.view. Liên hệ quản trị nếu công việc của bạn cần tới nó."
+          />
+        </Card>
       </section>
     );
   }
@@ -74,112 +97,144 @@ export default function RoleMatrixPage() {
   const err = mGrant.error ?? mRevoke.error ?? roles.error;
 
   return (
-    <section className="space-y-4">
-      <div>
-        <h1 className="text-xl font-semibold">Ma trận vai × quyền</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Sửa ở đây có hiệu lực ngay và được ghi vào nhật ký kiểm toán kèm giá trị trước/sau.
-        </p>
-      </div>
+    <section className="space-y-6">
+      <PageHeader
+        title="Ma trận vai × quyền"
+        description="Sửa ở đây có hiệu lực ngay và được ghi vào nhật ký kiểm toán kèm giá trị trước/sau."
+      />
 
-      {err !== null && err !== undefined && (
-        <p className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm">
+      {err !== null && err !== undefined ? (
+        <Alert variant="destructive" title="Thao tác không thành công">
           {(err as Error).message}
-        </p>
-      )}
+        </Alert>
+      ) : null}
 
-      <label className="text-sm">
-        Vai{' '}
-        <select
-          className="rounded-md border border-border bg-background px-3 py-2 text-sm"
-          value={selected}
-          onChange={(e) => setSelected(e.target.value)}
-        >
-          <option value="">— chọn vai —</option>
-          {roles.data?.map((r) => (
-            <option key={r.code} value={r.code}>
-              {r.code} · {r.name} ({r.grants.length} mã)
-            </option>
-          ))}
-        </select>
-      </label>
-
-      {role !== undefined && (
-        <>
-          {role.description !== null && (
-            <p className="text-sm text-muted-foreground">{role.description}</p>
-          )}
-
-          {canGrant && (
-            <div className="flex flex-wrap items-end gap-2 rounded-md border border-border p-3">
-              <label className="text-sm">
-                Thêm mã quyền{' '}
-                <select
-                  className="rounded-md border border-border bg-background px-3 py-2 text-sm"
-                  value={newCode}
-                  onChange={(e) => setNewCode(e.target.value)}
-                >
-                  <option value="">— chọn mã —</option>
-                  {available.map((p) => (
-                    <option key={p.code} value={p.code}>
-                      [{p.sensitivity}] {p.code}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="text-sm">
-                Phạm vi{' '}
-                <select
-                  className="rounded-md border border-border bg-background px-3 py-2 text-sm"
-                  value={newScope}
-                  onChange={(e) => setNewScope(e.target.value)}
-                >
-                  {SCOPES.map((s) => (
-                    <option key={s} value={s}>
-                      {s}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <Button onClick={() => mGrant.mutate()} disabled={newCode === '' || mGrant.isPending}>
-                Cấp
-              </Button>
-            </div>
-          )}
-
-          <table className="w-full text-left text-sm">
-            <thead className="text-muted-foreground">
-              <tr>
-                <th className="p-2">Mức</th>
-                <th className="p-2">Mã quyền</th>
-                <th className="p-2">Phạm vi</th>
-                <th className="p-2" />
-              </tr>
-            </thead>
-            <tbody>
-              {role.grants.map((g) => (
-                <tr key={g.code} className="border-t border-border">
-                  {/* S3 = dữ liệu cá nhân, hành vi bất khả hồi, bỏ mặt nạ. Hiện mức ra để
-                      người rà thấy ngay mình đang cấp thứ gì. */}
-                  <td className="p-2 font-mono text-xs">{g.sensitivity}</td>
-                  <td className="p-2 font-mono text-xs">{g.code}</td>
-                  <td className="p-2">{g.scope}</td>
-                  <td className="p-2">
-                    {canRevoke && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => mRevoke.mutate(g.code)}
-                        disabled={mRevoke.isPending}
-                      >
-                        Thu
-                      </Button>
-                    )}
-                  </td>
-                </tr>
+      <Card>
+        <CardContent className="px-5 py-4">
+          <Field label="Vai" htmlFor="role" className="w-96">
+            <Select id="role" value={selected} onChange={(e) => setSelected(e.target.value)}>
+              <option value="">— chọn vai —</option>
+              {roles.data?.map((r) => (
+                <option key={r.code} value={r.code}>
+                  {r.code} · {r.name} ({r.grants.length} mã)
+                </option>
               ))}
-            </tbody>
-          </table>
+            </Select>
+          </Field>
+          {role?.description != null ? (
+            <p className="mt-3 text-sm text-muted-foreground">{role.description}</p>
+          ) : null}
+        </CardContent>
+      </Card>
+
+      {role === undefined ? (
+        <Card>
+          <EmptyState
+            icon={KeyRound}
+            title="Chưa chọn vai"
+            description="Chọn một vai ở trên để xem và sửa danh sách mã quyền của nó."
+          />
+        </Card>
+      ) : (
+        <>
+          {canGrant ? (
+            <Card>
+              <CardHeader>
+                <CardTitle>Cấp thêm mã quyền</CardTitle>
+              </CardHeader>
+              <CardContent className="flex flex-wrap items-end gap-3">
+                <Field
+                  label="Mã quyền"
+                  htmlFor="newCode"
+                  className="w-96"
+                  hint="Danh mục đóng — chỉ chọn được mã đã có, máy chủ từ chối mã lạ."
+                >
+                  <Select id="newCode" value={newCode} onChange={(e) => setNewCode(e.target.value)}>
+                    <option value="">— chọn mã —</option>
+                    {available.map((p) => (
+                      <option key={p.code} value={p.code}>
+                        [{p.sensitivity}] {p.code}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+                <Field label="Phạm vi" htmlFor="newScope" className="w-40">
+                  <Select
+                    id="newScope"
+                    value={newScope}
+                    onChange={(e) => setNewScope(e.target.value)}
+                  >
+                    {SCOPES.map((s) => (
+                      <option key={s} value={s}>
+                        {s}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+                <Button
+                  onClick={() => mGrant.mutate()}
+                  disabled={newCode === ''}
+                  loading={mGrant.isPending}
+                >
+                  Cấp
+                </Button>
+              </CardContent>
+            </Card>
+          ) : null}
+
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Mức</TableHead>
+                <TableHead>Mã quyền</TableHead>
+                <TableHead>Phạm vi</TableHead>
+                <TableHead align="right">Thao tác</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {roles.isPending ? <TableSkeleton rows={6} cols={4} /> : null}
+
+              {role.grants.length === 0 ? (
+                <TableMessage colSpan={4}>
+                  <EmptyState
+                    icon={KeyRound}
+                    title="Vai này chưa có mã quyền nào"
+                    description="Một vai không mã quyền thì không mở được gì — cấp mã ở trên."
+                  />
+                </TableMessage>
+              ) : null}
+
+              {role.grants.map((g) => {
+                const s = sensitivityOf(g.sensitivity);
+                return (
+                  <TableRow key={g.code}>
+                    {/* S3 = dữ liệu cá nhân, hành vi bất khả hồi, bỏ mặt nạ. Hiện mức ra để
+                        người rà thấy ngay mình đang cấp thứ gì. */}
+                    <TableCell>
+                      <Badge variant={s.variant}>{s.label}</Badge>
+                    </TableCell>
+                    <TableCell className="font-mono text-xs">{g.code}</TableCell>
+                    <TableCell>
+                      <Badge variant="outline">{g.scope}</Badge>
+                    </TableCell>
+                    <TableCell align="right">
+                      {canRevoke ? (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={mRevoke.isPending}
+                          loading={mRevoke.isPending && mRevoke.variables === g.code}
+                          onClick={() => mRevoke.mutate(g.code)}
+                        >
+                          Thu
+                        </Button>
+                      ) : null}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
         </>
       )}
     </section>

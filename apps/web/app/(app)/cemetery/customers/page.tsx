@@ -1,25 +1,44 @@
 'use client';
 
 import { useState } from 'react';
+import { Plus, Search, Users, X } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { createCustomer, searchCustomers, type DedupWarning } from '@/lib/api';
+import { customerType } from '@/lib/status';
+import { PageHeader } from '@/components/ui/page-header';
+import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { EmptyState } from '@/components/ui/empty-state';
+import { Field } from '@/components/ui/label';
+import { Input } from '@/components/ui/input';
+import { Select } from '@/components/ui/select';
+import { TableSkeleton } from '@/components/ui/skeleton';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableMessage,
+  TableRow,
+} from '@/components/ui/table';
 
-const inputClass = 'w-full rounded-md border border-border bg-background px-3 py-2 text-sm';
+const EMPTY_FORM = {
+  type: 'INDIVIDUAL',
+  fullName: '',
+  nationalId: '',
+  orgName: '',
+  phone: '',
+  email: '',
+};
 
 export default function CustomersPage() {
   const qc = useQueryClient();
   const [q, setQ] = useState('');
   const [open, setOpen] = useState(false);
   const [warnings, setWarnings] = useState<DedupWarning[]>([]);
-  const [form, setForm] = useState({
-    type: 'INDIVIDUAL',
-    fullName: '',
-    nationalId: '',
-    orgName: '',
-    phone: '',
-    email: '',
-  });
+  const [form, setForm] = useState(EMPTY_FORM);
 
   const list = useQuery({
     queryKey: ['customers', q],
@@ -43,166 +62,185 @@ export default function CustomersPage() {
       }),
     onSuccess: (res) => {
       setWarnings(res.warnings);
-      setForm({
-        type: 'INDIVIDUAL',
-        fullName: '',
-        nationalId: '',
-        orgName: '',
-        phone: '',
-        email: '',
-      });
+      setForm(EMPTY_FORM);
       void qc.invalidateQueries({ queryKey: ['customers'] });
     },
   });
 
   return (
-    <section className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">Khách hàng</h1>
-        <Button variant="outline" size="sm" onClick={() => setOpen((v) => !v)}>
-          {open ? 'Đóng' : 'Thêm khách hàng'}
-        </Button>
-      </div>
+    <section className="space-y-6">
+      <PageHeader
+        title="Khách hàng"
+        description="Hồ sơ khách cá nhân và tổ chức."
+        actions={
+          <Button variant={open ? 'ghost' : 'default'} onClick={() => setOpen((v) => !v)}>
+            {open ? <X aria-hidden /> : <Plus aria-hidden />}
+            {open ? 'Đóng' : 'Thêm khách hàng'}
+          </Button>
+        }
+      />
 
-      {open && (
-        <form
-          className="grid max-w-2xl grid-cols-2 gap-3 rounded-md border border-border p-4"
-          onSubmit={(e) => {
-            e.preventDefault();
-            create.mutate();
-          }}
-        >
-          <label className="text-sm">
-            Loại
-            <select
-              className={inputClass}
-              value={form.type}
-              onChange={(e) => setForm({ ...form, type: e.target.value })}
+      {open ? (
+        <Card className="max-w-3xl">
+          <CardHeader>
+            <CardTitle>Khách hàng mới</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <form
+              className="grid gap-4 sm:grid-cols-2"
+              onSubmit={(e) => {
+                e.preventDefault();
+                create.mutate();
+              }}
             >
-              <option value="INDIVIDUAL">Cá nhân</option>
-              <option value="ORGANIZATION">Tổ chức</option>
-              <option value="AGENT">Đại lý</option>
-              <option value="PROSPECT">Tiềm năng</option>
-            </select>
-          </label>
-          {form.type === 'INDIVIDUAL' ? (
-            <>
-              <label className="text-sm">
-                Họ tên
-                <input
-                  className={inputClass}
-                  value={form.fullName}
-                  onChange={(e) => setForm({ ...form, fullName: e.target.value })}
-                  required
-                />
-              </label>
-              <label className="text-sm">
-                CCCD (tùy chọn)
-                <input
-                  className={inputClass}
-                  value={form.nationalId}
-                  onChange={(e) => setForm({ ...form, nationalId: e.target.value })}
-                />
-              </label>
-            </>
-          ) : (
-            <label className="text-sm">
-              Tên tổ chức
-              <input
-                className={inputClass}
-                value={form.orgName}
-                onChange={(e) => setForm({ ...form, orgName: e.target.value })}
-                required
-              />
-            </label>
-          )}
-          <label className="text-sm">
-            Điện thoại
-            <input
-              className={inputClass}
-              value={form.phone}
-              onChange={(e) => setForm({ ...form, phone: e.target.value })}
-            />
-          </label>
-          <label className="text-sm">
-            Email
-            <input
-              className={inputClass}
-              value={form.email}
-              onChange={(e) => setForm({ ...form, email: e.target.value })}
-            />
-          </label>
-          <div className="col-span-2 flex items-center gap-3">
-            <Button type="submit" disabled={create.isPending}>
-              {create.isPending ? 'Đang lưu…' : 'Lưu'}
-            </Button>
-            {create.error !== null && (
-              <span className="text-sm text-red-600">{(create.error as Error).message}</span>
-            )}
-          </div>
-        </form>
-      )}
+              <Field label="Loại" htmlFor="type">
+                <Select
+                  id="type"
+                  value={form.type}
+                  onChange={(e) => setForm({ ...form, type: e.target.value })}
+                >
+                  <option value="INDIVIDUAL">Cá nhân</option>
+                  <option value="ORGANIZATION">Tổ chức</option>
+                  <option value="AGENT">Đại lý</option>
+                  <option value="PROSPECT">Tiềm năng</option>
+                </Select>
+              </Field>
 
-      {warnings.length > 0 && (
-        <div className="max-w-2xl rounded-md border border-amber-500/50 bg-amber-500/10 p-3 text-sm">
-          <p className="font-medium">Cảnh báo trùng (không tự gộp):</p>
-          <ul className="list-disc pl-5">
+              {form.type === 'INDIVIDUAL' ? (
+                <>
+                  <Field label="Họ tên" htmlFor="fullName" required>
+                    <Input
+                      id="fullName"
+                      value={form.fullName}
+                      onChange={(e) => setForm({ ...form, fullName: e.target.value })}
+                      required
+                    />
+                  </Field>
+                  <Field
+                    label="CCCD"
+                    htmlFor="nationalId"
+                    hint="Tùy chọn. Hiện ra bảng ở dạng che bớt."
+                  >
+                    <Input
+                      id="nationalId"
+                      value={form.nationalId}
+                      onChange={(e) => setForm({ ...form, nationalId: e.target.value })}
+                    />
+                  </Field>
+                </>
+              ) : (
+                <Field label="Tên tổ chức" htmlFor="orgName" required>
+                  <Input
+                    id="orgName"
+                    value={form.orgName}
+                    onChange={(e) => setForm({ ...form, orgName: e.target.value })}
+                    required
+                  />
+                </Field>
+              )}
+
+              <Field label="Điện thoại" htmlFor="phone">
+                <Input
+                  id="phone"
+                  value={form.phone}
+                  onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                />
+              </Field>
+
+              <Field label="Email" htmlFor="email">
+                <Input
+                  id="email"
+                  type="email"
+                  value={form.email}
+                  onChange={(e) => setForm({ ...form, email: e.target.value })}
+                />
+              </Field>
+
+              <div className="sm:col-span-2">
+                {create.error !== null ? (
+                  <Alert variant="destructive" title="Không lưu được" className="mb-3">
+                    {(create.error as Error).message}
+                  </Alert>
+                ) : null}
+                <Button type="submit" loading={create.isPending}>
+                  {create.isPending ? 'Đang lưu…' : 'Lưu khách hàng'}
+                </Button>
+              </div>
+            </form>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {warnings.length > 0 ? (
+        <Alert
+          variant="warning"
+          title="Cảnh báo trùng — hệ thống KHÔNG tự gộp"
+          className="max-w-3xl"
+        >
+          <ul className="list-disc space-y-0.5 pl-5">
             {warnings.map((w) => (
               <li key={w.reason}>
                 {w.reason} — {w.matches.length} bản ghi giống
               </li>
             ))}
           </ul>
-        </div>
-      )}
+        </Alert>
+      ) : null}
 
-      <input
-        className={`${inputClass} max-w-md`}
-        placeholder="Tìm theo tên, mã KH, điện thoại, email…"
-        value={q}
-        onChange={(e) => setQ(e.target.value)}
-      />
-
-      <div className="overflow-x-auto rounded-md border border-border">
-        <table className="w-full text-sm">
-          <thead className="bg-muted text-muted-foreground">
-            <tr>
-              <th className="p-2 text-left font-medium">Mã KH</th>
-              <th className="p-2 text-left font-medium">Loại</th>
-              <th className="p-2 text-left font-medium">Tên</th>
-              <th className="p-2 text-left font-medium">CCCD</th>
-              <th className="p-2 text-left font-medium">Điện thoại</th>
-              <th className="p-2 text-left font-medium">Email</th>
-            </tr>
-          </thead>
-          <tbody>
-            {list.isLoading && (
-              <tr>
-                <td className="p-3 text-muted-foreground" colSpan={6}>
-                  Đang tải…
-                </td>
-              </tr>
-            )}
-            {list.data?.length === 0 && (
-              <tr>
-                <td className="p-3 text-muted-foreground" colSpan={6}>
-                  Không có khách hàng.
-                </td>
-              </tr>
-            )}
-            {list.data?.map((c) => (
-              <tr key={c.id} className="border-t border-border">
-                <td className="p-2 font-mono text-xs">{c.customerCode}</td>
-                <td className="p-2">{c.type}</td>
-                <td className="p-2">{c.person?.fullName ?? c.orgName ?? '—'}</td>
-                <td className="p-2">{c.person?.nationalIdMasked ?? '—'}</td>
-                <td className="p-2">{c.phone ?? '—'}</td>
-                <td className="p-2">{c.email ?? '—'}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div className="relative max-w-md">
+        <Search
+          className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+          aria-hidden
+        />
+        <Input
+          className="pl-9"
+          placeholder="Tìm theo tên, mã KH, điện thoại, email…"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          aria-label="Tìm khách hàng"
+        />
       </div>
+
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Mã KH</TableHead>
+            <TableHead>Loại</TableHead>
+            <TableHead>Tên</TableHead>
+            <TableHead>CCCD</TableHead>
+            <TableHead>Điện thoại</TableHead>
+            <TableHead>Email</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {list.isPending ? <TableSkeleton rows={6} cols={6} /> : null}
+
+          {list.data?.length === 0 ? (
+            <TableMessage colSpan={6}>
+              <EmptyState
+                icon={Users}
+                title={q === '' ? 'Chưa có khách hàng nào' : `Không tìm thấy khách khớp “${q}”`}
+                description={q === '' ? 'Bấm "Thêm khách hàng" để tạo hồ sơ đầu tiên.' : undefined}
+              />
+            </TableMessage>
+          ) : null}
+
+          {list.data?.map((c) => (
+            <TableRow key={c.id}>
+              <TableCell className="font-mono text-xs">{c.customerCode}</TableCell>
+              <TableCell className="whitespace-nowrap">{customerType(c.type)}</TableCell>
+              <TableCell className="font-medium">
+                {c.person?.fullName ?? c.orgName ?? '—'}
+              </TableCell>
+              <TableCell className="font-mono text-xs">
+                {c.person?.nationalIdMasked ?? '—'}
+              </TableCell>
+              <TableCell>{c.phone ?? '—'}</TableCell>
+              <TableCell>{c.email ?? '—'}</TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
     </section>
   );
 }
