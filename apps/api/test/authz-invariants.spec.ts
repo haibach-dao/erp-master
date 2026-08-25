@@ -220,6 +220,20 @@ describe('tách nhiệm vụ ở mức vai (doc 16 §E.3)', () => {
     expect(Object.keys(ROLE_CATALOG)).not.toContain('BREAK_GLASS');
   });
 
+  /* Ngoại lệ CÓ CHỦ Ý, không phải sơ suất: ghế cho hiệu lực cũng soạn được hợp đồng, nên
+   * giám đốc tự soạn tự cho hiệu lực được (G0-Q10). Chuỗi soạn -> THẨM ĐỊNH thì vẫn phải
+   * hai người — bất biến đó kiểm ở tầng service theo BẢN GHI, không kiểm được ở đây. */
+  it('chỉ GD_CONG_TY được cầm cả create lẫn activate hợp đồng', () => {
+    expect(rolesHoldingBoth('contract.record.create', 'contract.record.activate')).toEqual([
+      'GD_CONG_TY',
+    ]);
+  });
+
+  it('vai THẨM ĐỊNH tuyệt đối không được soạn hợp đồng', () => {
+    expect(codesOf('QL_NGHIA_TRANG')).toContain('contract.record.verify');
+    expect(codesOf('QL_NGHIA_TRANG')).not.toContain('contract.record.create');
+  });
+
   it('ghế máy giữ đúng hai mã', () => {
     expect(codesOf('SYSTEM_WORKER').sort()).toEqual([
       'cemetery.plot.set_status',

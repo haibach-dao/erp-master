@@ -1,9 +1,19 @@
 import type { PrismaClient } from '@prisma/client';
 import { ulid } from 'ulid';
+import type { AgentIdentity } from './agent-identity';
 
-// Expire Active holds past their expiresAt and return the plot to Available (with history).
-// Each hold is handled in its own transaction; re-checks status to stay idempotent.
-export async function expireHolds(prisma: PrismaClient): Promise<{ expired: number }> {
+/* Expire Active holds past their expiresAt and return the plot to Available (with history).
+ * Each hold is handled in its own transaction; re-checks status to stay idempotent.
+ *
+ * `agent` is required, not optional. Releasing a grave plot writes a status-history row,
+ * and that row used to say `changedBy: null` — nobody could answer "who released this
+ * plot". The seat is passed in rather than looked up here so the process fails at
+ * startup, once, instead of silently falling back to anonymous on every sweep.
+ */
+export async function expireHolds(
+  prisma: PrismaClient,
+  agent: AgentIdentity,
+): Promise<{ expired: number }> {
   const now = new Date();
   const due = await prisma.graveHold.findMany({
     where: { status: 'Active', expiresAt: { lt: now } },
@@ -34,7 +44,7 @@ export async function expireHolds(prisma: PrismaClient): Promise<{ expired: numb
             fromStatus: 'Held',
             toStatus: 'Available',
             reason: 'hold expired',
-            changedBy: null,
+            changedBy: agent.userId,
           },
         });
       }
