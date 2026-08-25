@@ -96,11 +96,11 @@ function p(
 }
 
 export const PERMISSION_CATALOG: readonly PermissionDef[] = [
-  // --- Toàn quyền tạm thời. Doc 16 Q13 đề xuất BỎ HẲN; giữ tới khi 14 vai có quyền
-  //     tường minh, nếu không seed lại sẽ khoá sạch ADMIN đang chạy (doc 16 §G.2).
-  p('*.*.*', 'S3', 'Toàn quyền (tạm thời — sẽ thay bằng quyền tường minh)', {
-    wildcardExempt: false,
-  }),
+  /* KHÔNG có `*.*.*` trong danh mục. Bỏ hẳn theo G0-Q13, và bỏ khỏi DANH MỤC chứ không
+   * chỉ bỏ khỏi vai: mã còn trong danh mục là mã còn cấp lại được từ màn hình quản trị,
+   * và một lần cấp lại là xoá sạch ý nghĩa của việc bỏ nó. Guard từ chối mã không có
+   * trong danh mục, nên nó cũng không còn là một yêu cầu hợp lệ.
+   */
 
   // --- org ---
   p('org.company.view', 'S1', 'Xem công ty'),
@@ -317,36 +317,26 @@ const CEMETERY_READ_ALL = [
   'cemetery.plot.view_history',
 ];
 
-/* Leaves a wildcard can no longer reach. ADMIN is given them by name so that turning on
- * the exemption changes the MECHANISM without changing who can do what today: `*.*.*`
- * still covers everything else, and every wildcard-exempt leaf is now spelled out.
+/* Mọi mã trong danh mục, trừ chính `*.*.*`.
  *
- * This is what makes the superuser visible. `scripts/authz-report.ts` prints ADMIN's S3
- * leaves as an explicit list, which is the input to deciding whether the role should
- * exist at all (doc 16 Q13). A wildcard hides that question; a list asks it.
- */
-const WILDCARD_EXEMPT_CODES = PERMISSION_CATALOG.filter((d) => d.wildcardExempt).map((d) => d.code);
-
-/* Quản trị chính hệ phân quyền — `authz.role.*`, `role_permission.grant/revoke`,
- * `role_assignment.assign/revoke`, `scope.assign` — đều là leaf S3, nên ADMIN đã cầm
- * sẵn qua danh sách trên. Không liệt kê lại ở đây: cấp trùng một mã hai lần chỉ tạo ra
- * hai dòng grant nói cùng một điều, và bản chiếu quyền đọc thành nhiễu.
+ * ADMIN được cấp TƯỜNG MINH toàn bộ danh mục thay vì mang một wildcard. Kết quả hôm nay
+ * y hệt — nhưng cơ chế thì khác hẳn, và khác đúng ở chỗ quan trọng: mã MỚI thêm vào danh
+ * mục sau này KHÔNG tự chảy vào ADMIN nữa. Với wildcard, mọi leaf của mọi module tương
+ * lai tự động thuộc ADMIN mà không ai quyết định điều đó lần nào.
  *
- * Chủ doanh nghiệp chốt: ADMIN gán vai và phạm vi cho người khác, sửa được nội dung
- * vai, và UỶ QUYỀN được — ai được cấp những mã này thì cũng làm được. Leo thang là hệ
- * quả đã biết và đã được chấp nhận, đổi lấy tính linh hoạt vận hành; bù lại MỌI thao
- * tác ghi lên `authz` đều phát audit event.
+ * Đây chính là nhãn "New" của OPERA: mã mới xuất hiện thì phải có người rà và cấp, chứ
+ * không được tự được cấp. Bản chiếu `scripts/authz-report.ts` vì thế đọc được thành một
+ * danh sách hữu hạn, thay vì một dòng `*.*.*` che hết mọi câu hỏi.
  */
+const ALL_CODES = PERMISSION_CATALOG.filter((d) => d.code !== '*.*.*').map((d) => d.code);
 
 export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
   // --- Vai cũ. Giữ nguyên tới khi wildcard bị siết, nếu không là khoá cửa cả hệ.
   ADMIN: {
     name: 'Quản trị',
-    description: 'Vai cũ mang `*.*.*` + mọi leaf S3 tường minh. Doc 16 Q13 đề xuất BỎ HẲN.',
-    grants: [
-      { code: '*.*.*', scope: 'GROUP' },
-      ...WILDCARD_EXEMPT_CODES.map((code) => ({ code, scope: 'GROUP' })),
-    ],
+    description:
+      'Toàn bộ danh mục, cấp TƯỜNG MINH. Không còn wildcard: mã mới không tự chảy vào đây (G0-Q13).',
+    grants: ALL_CODES.map((code) => ({ code, scope: 'GROUP' })),
   },
   STAFF: {
     name: 'Nhân viên (vai cũ)',
