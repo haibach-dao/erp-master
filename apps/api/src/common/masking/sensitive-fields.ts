@@ -18,12 +18,17 @@ import type { MaskRule } from './mask.decorator';
  */
 export const SENSITIVE_FIELDS: readonly MaskRule[] = [
   // NĐ13 rộng hơn G0-A6: A6 là mức tối thiểu, không phải giới hạn.
-  { field: 'phone', permission: 'crm.person.view_sensitive' },
-  { field: 'email', permission: 'crm.person.view_sensitive' },
+  /* Mở bằng `view_contact` (S2), KHÔNG phải `view_sensitive` (S3).
+   *
+   * Hai mã tách nhau vì hai rủi ro khác nhau: người bán cần gọi được cho khách hàng, còn
+   * CCCD thì họ không cần. Gộp lại thì "cho xem số điện thoại" đồng nghĩa "cho xem CCCD
+   * đầy đủ" — leo thang do thiết kế mã, không do ai quyết định. */
+  { field: 'phone', permission: 'crm.person.view_contact' },
+  { field: 'email', permission: 'crm.person.view_contact' },
   // Ngày sinh/ngày mất che thành NĂM: đủ để đối chiếu hồ sơ, không đủ để định danh.
-  { field: 'dateOfBirth', permission: 'crm.person.view_sensitive', strategy: 'year' },
-  { field: 'dateOfDeath', permission: 'crm.person.view_sensitive', strategy: 'year' },
-  { field: 'address', permission: 'crm.person.view_sensitive' },
+  { field: 'dateOfBirth', permission: 'crm.person.view_contact', strategy: 'year' },
+  { field: 'dateOfDeath', permission: 'crm.person.view_contact', strategy: 'year' },
+  { field: 'address', permission: 'crm.person.view_contact' },
   /* Địa chỉ IP là dữ liệu cá nhân theo NĐ13, và audit event nào cũng có một cái. Mở khoá
    * bằng cùng mã mở khoá ảnh chụp before/after — người đọc được nội dung thay đổi thì cũng
    * là người cần biết nó đến từ đâu; người chỉ xem nhật ký ở mức thường thì không cần
