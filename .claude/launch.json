@@ -1,0 +1,24 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "api",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "--watch-path=./src",
+        "--watch-preserve-output",
+        "-r",
+        "@swc-node/register",
+        "src/main.ts"
+      ],
+      "port": 4000,
+      "cwd": "apps/api"
+    },
+    {
+      "name": "web",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@erp/web", "dev"],
+      "port": 3000
+    }
+  ]
+}
