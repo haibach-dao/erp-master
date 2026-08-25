@@ -1,17 +1,37 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { ulid } from 'ulid';
 import { PrismaService } from '../../prisma/prisma.service';
+import { PermissionsService } from '../authorization/permissions.service';
+import { permissionMatches } from '../authorization/policy-evaluator';
 import { AuditService } from '../audit/audit.service';
 import type { ConfirmUploadDto, PresignUploadDto } from './files.dto';
 
 const UPLOAD_URL_TTL = 300;
 const DOWNLOAD_URL_TTL = 120;
 
+/* Reading a `confidential`/`restricted` file is a separate decision from being logged in.
+ * This is a FIELD/BEHAVIOUR gate, checked here rather than on the route: a route carries
+ * exactly one @RequirePermission code, and that slot belongs to "may call this endpoint".
+ *
+ * The code below is the one actually seeded today. Blueprint doc 16 §D.7 splits it into
+ * `crm.person.view_sensitive` (read on screen) and `file.object.download_sensitive` (carry
+ * the file out); that rename lands with the catalog in PR-3/PR-5, not here.
+ */
+const SENSITIVE_FILE_PERMISSION = 'cemetery.document.view_sensitive';
+const PUBLIC_SENSITIVITY = 'normal';
+
 @Injectable()
 export class FilesService {
+  private readonly logger = new Logger(FilesService.name);
   private readonly s3: S3Client;
   private readonly bucket: string;
 
@@ -19,6 +39,7 @@ export class FilesService {
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
     private readonly audit: AuditService,
+    private readonly permissions: PermissionsService,
   ) {
     this.bucket = this.config.get<string>('S3_BUCKET') ?? 'erp-files';
     this.s3 = new S3Client({
@@ -41,7 +62,7 @@ export class FilesService {
         storageKey,
         originalName: dto.fileName,
         mimeType: dto.mimeType,
-        sensitivity: dto.sensitivity ?? 'normal',
+        sensitivity: dto.sensitivity ?? PUBLIC_SENSITIVITY,
         uploadedBy,
       },
     });
@@ -53,28 +74,29 @@ export class FilesService {
     return { fileId: id, storageKey, uploadUrl, expiresIn: UPLOAD_URL_TTL };
   }
 
-  async confirmUpload(id: string, dto: ConfirmUploadDto) {
+  // Only the uploader may close their own upload. Without this, knowing any fileId is
+  // enough to flip another user's record to `uploaded` and release it for download.
+  async confirmUpload(id: string, dto: ConfirmUploadDto, actor: string | null) {
     const file = await this.prisma.fileObject.findUnique({ where: { id } });
     if (file === null) {
       throw new NotFoundException('Không tìm thấy file');
     }
-    // Virus scan is out of scope in dev (VIRUS_SCAN_ENABLED=false) → mark clean.
-    const scanEnabled = this.config.get<string>('VIRUS_SCAN_ENABLED') === 'true';
+    if (actor === null || file.uploadedBy !== actor) {
+      await this.denied(actor, 'FILE.CONFIRM_DENIED', id, 'Không phải người tải lên');
+      throw new ForbiddenException('Chỉ người tải lên mới xác nhận được file này');
+    }
     return this.prisma.fileObject.update({
       where: { id },
       data: {
         status: 'uploaded',
-        scanStatus: scanEnabled ? 'pending' : 'clean',
+        scanStatus: this.scanStatusAfterUpload(id),
         sizeBytes: dto.sizeBytes ?? null,
       },
     });
   }
 
   async getDownloadUrl(id: string, actor: string | null) {
-    const file = await this.prisma.fileObject.findUnique({ where: { id } });
-    if (file === null) {
-      throw new NotFoundException('Không tìm thấy file');
-    }
+    const file = await this.requireReadable(id, actor, 'FILE.DOWNLOAD_DENIED');
     if (file.scanStatus !== 'clean') {
       throw new ConflictException(`File chưa sẵn sàng tải (scan=${file.scanStatus})`);
     }
@@ -90,15 +112,70 @@ export class FilesService {
       entityType: 'file',
       entityId: id,
       result: 'SUCCESS',
+      reason: `sensitivity=${file.sensitivity}`,
     });
     return { url, expiresIn: DOWNLOAD_URL_TTL };
   }
 
-  async getMeta(id: string) {
+  // Metadata carries `storageKey` and `sensitivity`, so it is gated exactly like the
+  // download. Returning it freely would leak the object key of every restricted file.
+  async getMeta(id: string, actor: string | null) {
+    return this.requireReadable(id, actor, 'FILE.META_DENIED');
+  }
+
+  private async requireReadable(id: string, actor: string | null, deniedAction: string) {
     const file = await this.prisma.fileObject.findUnique({ where: { id } });
     if (file === null) {
       throw new NotFoundException('Không tìm thấy file');
     }
-    return file;
+    if (file.sensitivity === PUBLIC_SENSITIVITY) {
+      return file;
+    }
+    if (actor !== null && (await this.holds(actor, SENSITIVE_FILE_PERMISSION))) {
+      return file;
+    }
+    await this.denied(actor, deniedAction, id, `sensitivity=${file.sensitivity}`);
+    throw new ForbiddenException(`Thiếu quyền: ${SENSITIVE_FILE_PERMISSION}`);
+  }
+
+  private async holds(userId: string, permission: string): Promise<boolean> {
+    const grants = await this.permissions.getGrants(userId);
+    return grants.some((g) => permissionMatches(g.permission, permission));
+  }
+
+  /* A file nobody scanned must not become downloadable just because scanning happens to
+   * be switched off. The bypass is a DEV convenience and is refused outside development:
+   * in any other APP_ENV the file stays `pending` until a real scanner clears it.
+   * (Blueprint doc 16 §D.11: an env flag must not be the thing that decides security.)
+   */
+  private scanStatusAfterUpload(fileId: string): string {
+    if (this.config.get<string>('VIRUS_SCAN_ENABLED') === 'true') {
+      return 'pending';
+    }
+    const appEnv = this.config.get<string>('APP_ENV') ?? 'development';
+    if (appEnv !== 'development' && appEnv !== 'test') {
+      return 'pending';
+    }
+    this.logger.warn(
+      `[dev] VIRUS_SCAN_ENABLED=false: file ${fileId} được đánh dấu clean mà KHÔNG quét virus`,
+    );
+    return 'clean';
+  }
+
+  private async denied(
+    actor: string | null,
+    action: string,
+    fileId: string,
+    reason: string,
+  ): Promise<void> {
+    await this.audit.record({
+      actorType: 'USER',
+      actorId: actor,
+      action,
+      entityType: 'file',
+      entityId: fileId,
+      result: 'DENIED',
+      reason,
+    });
   }
 }

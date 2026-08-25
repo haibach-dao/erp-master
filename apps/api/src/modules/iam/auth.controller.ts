@@ -8,6 +8,7 @@ import {
   UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
+import { ThrottlerGuard } from '@nestjs/throttler';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { AuthService } from './auth.service';
@@ -15,7 +16,11 @@ import { LoginDto } from './dto/login.dto';
 import { RefreshDto } from './dto/refresh.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 
+// Credential endpoints are rate limited per IP ('auth' throttler, app.module.ts):
+// without it, /auth/login is an unmetered password oracle. logout/me are cheap and
+// already require a valid token, but share the controller-level guard.
 @ApiTags('auth')
+@UseGuards(ThrottlerGuard)
 @Controller('auth')
 export class AuthController {
   constructor(private readonly auth: AuthService) {}

@@ -12,23 +12,27 @@ import { ConfirmUploadDto, PresignUploadDto } from './files.dto';
 export class FilesController {
   constructor(private readonly svc: FilesService) {}
 
+  private actor(req: Request): string | null {
+    return req.user?.userId ?? null;
+  }
+
   @Post('presign-upload')
   presign(@Body() dto: PresignUploadDto, @Req() req: Request) {
-    return this.svc.presignUpload(dto, req.user?.userId ?? null);
+    return this.svc.presignUpload(dto, this.actor(req));
   }
 
   @Post(':id/confirm')
-  confirm(@Param('id') id: string, @Body() dto: ConfirmUploadDto) {
-    return this.svc.confirmUpload(id, dto);
+  confirm(@Param('id') id: string, @Body() dto: ConfirmUploadDto, @Req() req: Request) {
+    return this.svc.confirmUpload(id, dto, this.actor(req));
   }
 
   @Get(':id/download-url')
   downloadUrl(@Param('id') id: string, @Req() req: Request) {
-    return this.svc.getDownloadUrl(id, req.user?.userId ?? null);
+    return this.svc.getDownloadUrl(id, this.actor(req));
   }
 
   @Get(':id')
-  meta(@Param('id') id: string) {
-    return this.svc.getMeta(id);
+  meta(@Param('id') id: string, @Req() req: Request) {
+    return this.svc.getMeta(id, this.actor(req));
   }
 }
