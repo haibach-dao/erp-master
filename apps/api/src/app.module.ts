@@ -9,6 +9,7 @@ import { AuditModule } from './modules/audit/audit.module';
 import { OutboxModule } from './modules/outbox/outbox.module';
 import { AuthModule } from './modules/iam/auth.module';
 import { AuthorizationModule } from './modules/authorization/authorization.module';
+import { AuthzAdminModule } from './modules/authorization/authz-admin.module';
 import { CemeteryModule } from './modules/cemetery/cemetery.module';
 import { CustomersModule } from './modules/customers/customers.module';
 import { HoldsModule } from './modules/holds/holds.module';
@@ -40,6 +41,7 @@ const AUTH_RATE_LIMIT = {
     OutboxModule,
     AuthModule,
     AuthorizationModule,
+    AuthzAdminModule,
     CemeteryModule,
     CustomersModule,
     HoldsModule,

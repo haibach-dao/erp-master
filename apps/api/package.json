@@ -6,7 +6,7 @@
     "seed": "tsx prisma/seed.ts"
   },
   "scripts": {
-    "dev": "tsx watch src/main.ts",
+    "dev": "node --watch-path=./src --watch-preserve-output -r @swc-node/register src/main.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/main.js",
     "lint": "eslint src",
@@ -37,6 +37,8 @@
     "ulid": "^2.3.0"
   },
   "devDependencies": {
+    "@swc-node/register": "^1.12.1",
+    "@swc/core": "^1.16.1",
     "@types/express": "^5.0.0",
     "@types/node": "^22.10.0",
     "prisma": "^6.1.0",
