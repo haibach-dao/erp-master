@@ -4,14 +4,49 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { listGravePlots, serviceRevenue } from '@/lib/api';
 import { CompanyPicker } from '@/components/company-picker';
+import { statusOf } from '@/lib/status';
+import { PageHeader } from '@/components/ui/page-header';
+import { Badge } from '@/components/ui/badge';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { EmptyState } from '@/components/ui/empty-state';
+import { Skeleton, TableSkeleton } from '@/components/ui/skeleton';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableMessage,
+  TableRow,
+} from '@/components/ui/table';
 
-function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
+/* Ô số liệu. Con số là thứ người ta nhìn trước, nên nó đứng riêng một dòng và
+ * dùng tabular-nums để các ô cạnh nhau không so le. */
+function Stat({
+  label,
+  value,
+  hint,
+  loading = false,
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+  loading?: boolean;
+}) {
   return (
-    <div className="rounded-md border border-border p-4">
-      <div className="text-xs text-muted-foreground">{label}</div>
-      <div className="text-2xl font-semibold">{value}</div>
-      {hint !== undefined && <div className="text-xs text-muted-foreground">{hint}</div>}
-    </div>
+    <Card>
+      <CardContent className="space-y-1 px-5 py-4">
+        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
+        {loading ? (
+          <Skeleton className="h-8 w-20" />
+        ) : (
+          <p className="text-2xl font-semibold tabular-nums tracking-tight">{value}</p>
+        )}
+        {hint !== undefined && !loading ? (
+          <p className="text-xs text-muted-foreground">{hint}</p>
+        ) : null}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -34,46 +69,79 @@ export default function DashboardPage() {
     return acc;
   }, {});
 
+  const total = plots.data?.length ?? 0;
+  const loading = plots.isPending || revenue.isPending;
+
   return (
-    <section className="space-y-4">
-      <h1 className="text-xl font-semibold">Dashboard</h1>
+    <section className="space-y-6">
+      <PageHeader title="Dashboard" description="Số liệu theo công ty đang chọn." />
+
       <CompanyPicker value={companyId} onChange={setCompanyId} />
 
       {companyId === '' ? (
-        <p className="text-sm text-muted-foreground">Chọn công ty để xem số liệu.</p>
+        <Card>
+          <EmptyState
+            title="Chưa chọn công ty"
+            description="Chọn một công ty ở trên để xem số vị trí mộ và doanh thu."
+          />
+        </Card>
       ) : (
         <>
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-            <Stat label="Tổng vị trí mộ" value={String(plots.data?.length ?? 0)} />
-            <Stat label="Còn trống" value={String(byStatus.Available ?? 0)} />
-            <Stat label="Đã phân bổ" value={String(byStatus.Allocated ?? 0)} />
-            <Stat label="Đã an táng" value={String(byStatus.Occupied ?? 0)} />
-            <Stat label="Đang giữ chỗ" value={String(byStatus.Held ?? 0)} />
+          <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
+            <Stat label="Tổng vị trí mộ" value={String(total)} loading={loading} />
+            <Stat label="Còn trống" value={String(byStatus.Available ?? 0)} loading={loading} />
+            <Stat label="Đã phân bổ" value={String(byStatus.Allocated ?? 0)} loading={loading} />
+            <Stat label="Đã an táng" value={String(byStatus.Occupied ?? 0)} loading={loading} />
+            <Stat label="Đang giữ chỗ" value={String(byStatus.Held ?? 0)} loading={loading} />
             <Stat
               label="Doanh thu đã thu"
               value={`${Number(revenue.data?.totalCollected ?? 0).toLocaleString('vi-VN')} đ`}
               hint={`${revenue.data?.transactions ?? 0} giao dịch`}
+              loading={loading}
             />
           </div>
 
-          <div className="overflow-x-auto rounded-md border border-border">
-            <table className="w-full text-sm">
-              <thead className="bg-muted text-muted-foreground">
-                <tr>
-                  <th className="p-2 text-left font-medium">Trạng thái mộ</th>
-                  <th className="p-2 text-left font-medium">Số lượng</th>
-                </tr>
-              </thead>
-              <tbody>
-                {Object.entries(byStatus).map(([status, count]) => (
-                  <tr key={status} className="border-t border-border">
-                    <td className="p-2">{status}</td>
-                    <td className="p-2">{count}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <Card>
+            <CardHeader>
+              <CardTitle>Mộ theo trạng thái</CardTitle>
+            </CardHeader>
+            <CardContent className="px-0 pb-0">
+              <Table containerClassName="rounded-none border-0 shadow-none">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Trạng thái</TableHead>
+                    <TableHead align="right">Số lượng</TableHead>
+                    <TableHead align="right">Tỷ trọng</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {plots.isPending ? <TableSkeleton rows={3} cols={3} /> : null}
+                  {!plots.isPending && Object.keys(byStatus).length === 0 ? (
+                    <TableMessage colSpan={3}>
+                      <EmptyState
+                        title="Công ty này chưa có vị trí mộ nào"
+                        description="Thêm ở trang Mộ."
+                      />
+                    </TableMessage>
+                  ) : null}
+                  {Object.entries(byStatus).map(([status, count]) => {
+                    const s = statusOf(status);
+                    return (
+                      <TableRow key={status}>
+                        <TableCell>
+                          <Badge variant={s.variant}>{s.label}</Badge>
+                        </TableCell>
+                        <TableCell align="right">{count}</TableCell>
+                        <TableCell align="right">
+                          {total === 0 ? '—' : `${Math.round((count / total) * 100)}%`}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
         </>
       )}
     </section>

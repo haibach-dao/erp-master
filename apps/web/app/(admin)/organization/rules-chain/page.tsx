@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { ArrowDown, ArrowUp, Lock, ShieldCheck } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   createAccessRule,
@@ -14,7 +15,25 @@ import {
 } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { can } from '@/lib/permissions';
+import { PageHeader } from '@/components/ui/page-header';
+import { Alert } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { EmptyState } from '@/components/ui/empty-state';
+import { Field } from '@/components/ui/label';
+import { Input } from '@/components/ui/input';
+import { Select } from '@/components/ui/select';
+import { TableSkeleton } from '@/components/ui/skeleton';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableMessage,
+  TableRow,
+} from '@/components/ui/table';
 
 /* Chuỗi luật truy cập — mô hình tường lửa.
  *
@@ -87,11 +106,15 @@ export default function RulesChainPage() {
 
   if (!canView) {
     return (
-      <section className="space-y-2">
-        <h1 className="text-xl font-semibold">Chuỗi luật truy cập</h1>
-        <p className="text-sm text-muted-foreground">
-          Bạn không có quyền <code>authz.rule.view</code>.
-        </p>
+      <section className="space-y-6">
+        <PageHeader title="Chuỗi luật truy cập" />
+        <Card>
+          <EmptyState
+            icon={Lock}
+            title="Bạn không có quyền xem trang này"
+            description="Cần mã quyền authz.rule.view. Liên hệ quản trị nếu công việc của bạn cần tới nó."
+          />
+        </Card>
       </section>
     );
   }
@@ -101,135 +124,147 @@ export default function RulesChainPage() {
   const err = mCreate.error ?? mMove.error ?? mRevoke.error ?? rules.error;
 
   return (
-    <section className="space-y-4">
-      <div>
-        <h1 className="text-xl font-semibold">Chuỗi luật truy cập</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Duyệt từ trên xuống. <strong>Luật khớp đầu tiên quyết định và dừng.</strong> Không luật
-          nào khớp thì ma trận vai quyết; ma trận không cấp gì thì từ chối.
-        </p>
-      </div>
+    <section className="space-y-6">
+      <PageHeader
+        title="Chuỗi luật truy cập"
+        description="Duyệt từ trên xuống. Luật khớp đầu tiên quyết định và dừng. Không luật nào khớp thì ma trận vai quyết; ma trận không cấp gì thì từ chối."
+      />
 
-      {err !== null && err !== undefined && (
-        <p className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm">
+      {err !== null && err !== undefined ? (
+        <Alert variant="destructive" title="Thao tác không thành công">
           {(err as Error).message}
-        </p>
-      )}
+        </Alert>
+      ) : null}
 
       {/* Cảnh báo này không phải trang trí: một luật ALLOW cấp được thứ không vai nào cấp. */}
-      <p className="rounded-md border border-border bg-muted/50 p-3 text-sm">
-        Luật <strong>ALLOW</strong> nằm <strong>trên</strong> ma trận vai — nó cấp được thứ không
-        vai nào cấp, kể cả dữ liệu nhạy cảm mà quyền wildcard không với tới. Mọi thay đổi ở đây đều
-        vào nhật ký kiểm toán.
-      </p>
+      <Alert variant="warning" title="Luật ALLOW nằm TRÊN ma trận vai">
+        Nó cấp được thứ không vai nào cấp, kể cả dữ liệu nhạy cảm mà quyền wildcard không với tới.
+        Mọi thay đổi ở đây đều vào nhật ký kiểm toán.
+      </Alert>
 
-      <div>
-        <h2 className="text-sm font-medium">Đang hiệu lực ({active.length})</h2>
-        {active.length === 0 ? (
-          <p className="mt-1 text-sm text-muted-foreground">
-            Chưa có luật nào. Mọi quyết định do ma trận vai đưa ra.
-          </p>
-        ) : (
-          <table className="mt-2 w-full text-left text-sm">
-            <thead className="text-muted-foreground">
-              <tr>
-                <th className="p-2">#</th>
-                <th className="p-2">Hiệu lực</th>
-                <th className="p-2">Áp cho</th>
-                <th className="p-2">Mã quyền</th>
-                <th className="p-2">Lý do</th>
-                <th className="p-2">Thứ tự</th>
-              </tr>
-            </thead>
-            <tbody>
-              {active.map((r, i) => (
-                <tr key={r.id} className="border-t border-border">
-                  <td className="p-2 text-muted-foreground">{i + 1}</td>
-                  <td className="p-2">
-                    <span
-                      className={
-                        r.effect === 'DENY' ? 'font-medium text-destructive' : 'font-medium'
-                      }
-                    >
-                      {r.effect}
-                    </span>
-                  </td>
-                  <td className="p-2">
-                    {r.subjectUserId ?? (r.roleCode !== null ? `vai:${r.roleCode}` : 'MỌI NGƯỜI')}
-                  </td>
-                  <td className="p-2 font-mono text-xs">{r.permissionCode}</td>
-                  <td className="p-2 text-muted-foreground">{r.reason}</td>
-                  <td className="p-2">
-                    {canEdit && (
-                      <span className="flex gap-1">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          disabled={i === 0 || mMove.isPending}
-                          onClick={() => mMove.mutate({ id: r.id, dir: 'up' })}
-                        >
-                          ↑
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          disabled={i === active.length - 1 || mMove.isPending}
-                          onClick={() => mMove.mutate({ id: r.id, dir: 'down' })}
-                        >
-                          ↓
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          disabled={mRevoke.isPending}
-                          onClick={() => mRevoke.mutate(r)}
-                        >
-                          Thu hồi
-                        </Button>
-                      </span>
-                    )}
-                  </td>
-                </tr>
-              ))}
-              {/* Dòng này KHÔNG nằm trong bảng — nó là hành vi mặc-định-từ-chối của guard.
-                  Hiện nó ra vì một chuỗi luật đọc mà không thấy điểm kết là chuỗi dễ hiểu sai. */}
-              <tr className="border-t border-border bg-muted/30 text-muted-foreground">
-                <td className="p-2">—</td>
-                <td className="p-2 font-medium">DENY</td>
-                <td className="p-2">MỌI NGƯỜI</td>
-                <td className="p-2 font-mono text-xs">* (ngầm)</td>
-                <td className="p-2" colSpan={2}>
+      <div className="space-y-3">
+        <h2 className="text-sm font-semibold">Đang hiệu lực ({active.length})</h2>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-10">#</TableHead>
+              <TableHead>Hiệu lực</TableHead>
+              <TableHead>Áp cho</TableHead>
+              <TableHead>Mã quyền</TableHead>
+              <TableHead>Lý do</TableHead>
+              <TableHead align="right">Thứ tự</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rules.isPending ? <TableSkeleton rows={3} cols={6} /> : null}
+
+            {!rules.isPending && active.length === 0 ? (
+              <TableMessage colSpan={6}>
+                <EmptyState
+                  icon={ShieldCheck}
+                  title="Chưa có luật nào"
+                  description="Mọi quyết định hiện do ma trận vai đưa ra."
+                />
+              </TableMessage>
+            ) : null}
+
+            {active.map((r, i) => (
+              <TableRow key={r.id}>
+                <TableCell className="text-muted-foreground tabular-nums">{i + 1}</TableCell>
+                <TableCell>
+                  <Badge variant={r.effect === 'DENY' ? 'destructive' : 'success'}>
+                    {r.effect}
+                  </Badge>
+                </TableCell>
+                <TableCell>
+                  {r.subjectUserId !== null ? (
+                    <span className="font-mono text-xs">{r.subjectUserId}</span>
+                  ) : r.roleCode !== null ? (
+                    <Badge variant="outline">vai: {r.roleCode}</Badge>
+                  ) : (
+                    <Badge variant="warning">MỌI NGƯỜI</Badge>
+                  )}
+                </TableCell>
+                <TableCell className="font-mono text-xs">{r.permissionCode}</TableCell>
+                <TableCell className="text-muted-foreground">{r.reason}</TableCell>
+                <TableCell align="right">
+                  {canEdit ? (
+                    <div className="flex justify-end gap-1">
+                      <Button
+                        variant="outline"
+                        size="icon-sm"
+                        aria-label="Đẩy luật lên trên"
+                        disabled={i === 0 || mMove.isPending}
+                        onClick={() => mMove.mutate({ id: r.id, dir: 'up' })}
+                      >
+                        <ArrowUp aria-hidden />
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="icon-sm"
+                        aria-label="Đẩy luật xuống dưới"
+                        disabled={i === active.length - 1 || mMove.isPending}
+                        onClick={() => mMove.mutate({ id: r.id, dir: 'down' })}
+                      >
+                        <ArrowDown aria-hidden />
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={mRevoke.isPending}
+                        loading={mRevoke.isPending && mRevoke.variables?.id === r.id}
+                        onClick={() => mRevoke.mutate(r)}
+                      >
+                        Thu hồi
+                      </Button>
+                    </div>
+                  ) : null}
+                </TableCell>
+              </TableRow>
+            ))}
+
+            {/* Dòng này KHÔNG nằm trong bảng — nó là hành vi mặc-định-từ-chối của guard.
+                Hiện nó ra vì một chuỗi luật đọc mà không thấy điểm kết là chuỗi dễ hiểu sai. */}
+            {active.length > 0 ? (
+              <TableRow className="bg-muted/40 text-muted-foreground even:bg-muted/40 hover:bg-muted/40">
+                <TableCell>—</TableCell>
+                <TableCell>
+                  <Badge variant="neutral">DENY</Badge>
+                </TableCell>
+                <TableCell>MỌI NGƯỜI</TableCell>
+                <TableCell className="font-mono text-xs">* (ngầm)</TableCell>
+                <TableCell colSpan={2}>
                   Không luật nào khớp → ma trận vai quyết → không cấp thì từ chối
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        )}
+                </TableCell>
+              </TableRow>
+            ) : null}
+          </TableBody>
+        </Table>
       </div>
 
-      {canEdit && (
-        <div className="space-y-2 rounded-md border border-border p-3">
-          <p className="text-sm font-medium">Thêm luật (vào cuối chuỗi)</p>
-          <p className="text-xs text-muted-foreground">
-            Luật mới vào <strong>cuối</strong>: chèn lên đầu sẽ lặng lẽ vượt qua mọi luật đang có.
-            Muốn nó lên trên thì đẩy lên bằng nút ↑.
-          </p>
-          <div className="flex flex-wrap items-end gap-2">
-            <label className="text-sm">
-              Hiệu lực{' '}
-              <select
-                className="rounded-md border border-border bg-background px-3 py-2 text-sm"
+      {canEdit ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Thêm luật (vào cuối chuỗi)</CardTitle>
+            <p className="text-sm text-muted-foreground">
+              Luật mới vào <strong>cuối</strong>: chèn lên đầu sẽ lặng lẽ vượt qua mọi luật đang có.
+              Muốn nó lên trên thì đẩy lên bằng nút ↑.
+            </p>
+          </CardHeader>
+          <CardContent className="flex flex-wrap items-end gap-3">
+            <Field label="Hiệu lực" htmlFor="effect" className="w-32">
+              <Select
+                id="effect"
                 value={effect}
                 onChange={(e) => setEffect(e.target.value as 'ALLOW' | 'DENY')}
               >
                 <option value="DENY">DENY</option>
                 <option value="ALLOW">ALLOW</option>
-              </select>
-            </label>
-            <label className="text-sm">
-              Mã quyền{' '}
-              <select
-                className="rounded-md border border-border bg-background px-3 py-2 text-sm"
+              </Select>
+            </Field>
+            <Field label="Mã quyền" htmlFor="permissionCode" required className="w-80">
+              <Select
+                id="permissionCode"
                 value={permissionCode}
                 onChange={(e) => setPermissionCode(e.target.value)}
               >
@@ -239,116 +274,135 @@ export default function RulesChainPage() {
                     [{p.sensitivity}] {p.code}
                   </option>
                 ))}
-              </select>
-            </label>
-            <label className="text-sm">
-              Vai (tuỳ chọn){' '}
-              <select
-                className="rounded-md border border-border bg-background px-3 py-2 text-sm"
-                value={roleCode}
-                onChange={(e) => setRoleCode(e.target.value)}
-              >
+              </Select>
+            </Field>
+            <Field label="Vai" htmlFor="ruleRole" className="w-44" hint="Bỏ trống = mọi vai.">
+              <Select id="ruleRole" value={roleCode} onChange={(e) => setRoleCode(e.target.value)}>
                 <option value="">mọi vai</option>
                 {roles.data?.map((r) => (
                   <option key={r.code} value={r.code}>
                     {r.code}
                   </option>
                 ))}
-              </select>
-            </label>
-            <label className="text-sm">
-              Người dùng (tuỳ chọn){' '}
-              <input
-                className="rounded-md border border-border bg-background px-3 py-2 text-sm"
+              </Select>
+            </Field>
+            <Field
+              label="Người dùng"
+              htmlFor="subjectUserId"
+              className="w-56"
+              hint="Bỏ trống = mọi người."
+            >
+              <Input
+                id="subjectUserId"
+                className="font-mono text-xs"
                 value={subjectUserId}
                 onChange={(e) => setSubjectUserId(e.target.value)}
-                placeholder="id, bỏ trống = mọi người"
+                placeholder="id người dùng"
               />
-            </label>
-            <label className="text-sm">
-              Lý do{' '}
-              <input
-                className="rounded-md border border-border bg-background px-3 py-2 text-sm"
+            </Field>
+            <Field label="Lý do" htmlFor="ruleReason" required className="min-w-56 flex-1">
+              <Input
+                id="ruleReason"
                 value={reason}
                 onChange={(e) => setReason(e.target.value)}
-                placeholder="bắt buộc"
+                placeholder="Vì sao có luật này?"
               />
-            </label>
+            </Field>
             <Button
               onClick={() => mCreate.mutate()}
-              disabled={permissionCode === '' || reason.trim() === '' || mCreate.isPending}
+              disabled={permissionCode === '' || reason.trim() === ''}
+              loading={mCreate.isPending}
             >
               Thêm
             </Button>
-          </div>
-        </div>
-      )}
+          </CardContent>
+        </Card>
+      ) : null}
 
       {/* Một chuỗi luật có thứ tự mà không thử được là một chuỗi không ai dám sửa. */}
-      <div className="space-y-2 rounded-md border border-border p-3">
-        <p className="text-sm font-medium">Thử chuỗi luật</p>
-        <div className="flex flex-wrap items-end gap-2">
-          <label className="text-sm">
-            Người dùng (id){' '}
-            <input
-              className="rounded-md border border-border bg-background px-3 py-2 text-sm"
-              value={testUserId}
-              onChange={(e) => setTestUserId(e.target.value)}
-            />
-          </label>
-          <label className="text-sm">
-            Mã quyền{' '}
-            <select
-              className="rounded-md border border-border bg-background px-3 py-2 text-sm"
-              value={testCode}
-              onChange={(e) => setTestCode(e.target.value)}
+      <Card>
+        <CardHeader>
+          <CardTitle>Thử chuỗi luật</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex flex-wrap items-end gap-3">
+            <Field label="Người dùng (id)" htmlFor="testUserId" className="w-72">
+              <Input
+                id="testUserId"
+                className="font-mono text-xs"
+                value={testUserId}
+                onChange={(e) => setTestUserId(e.target.value)}
+              />
+            </Field>
+            <Field label="Mã quyền" htmlFor="testCode" className="w-80">
+              <Select id="testCode" value={testCode} onChange={(e) => setTestCode(e.target.value)}>
+                <option value="">— chọn mã —</option>
+                {catalog.data?.map((p) => (
+                  <option key={p.code} value={p.code}>
+                    {p.code}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Button
+              variant="outline"
+              onClick={() => mExplain.mutate()}
+              disabled={testUserId === '' || testCode === ''}
+              loading={mExplain.isPending}
             >
-              <option value="">— chọn mã —</option>
-              {catalog.data?.map((p) => (
-                <option key={p.code} value={p.code}>
-                  {p.code}
-                </option>
-              ))}
-            </select>
-          </label>
-          <Button
-            variant="outline"
-            onClick={() => mExplain.mutate()}
-            disabled={testUserId === '' || testCode === '' || mExplain.isPending}
-          >
-            Thử
-          </Button>
-        </div>
-        {mExplain.data !== undefined && (
-          <div className="text-sm">
-            <p>
-              Kết quả: <strong>{mExplain.data.ruling}</strong>
-              {mExplain.data.fallsBackToRoleMatrix
-                ? ' — không luật nào khớp, ma trận vai quyết'
-                : ` — do luật #${mExplain.data.matchedRule?.priority ?? '?'} (${mExplain.data.matchedRule?.reason ?? ''})`}
-            </p>
-            <p className="text-muted-foreground">
-              Phạm vi bản ghi cho mã này: {mExplain.data.scopeLevel}
-            </p>
+              Thử
+            </Button>
           </div>
-        )}
-        {mExplain.error !== null && (
-          <p className="text-sm text-destructive">{(mExplain.error as Error).message}</p>
-        )}
-      </div>
 
-      {ended.length > 0 && (
-        <div>
-          <h2 className="text-sm font-medium text-muted-foreground">Đã thu hồi ({ended.length})</h2>
-          <ul className="mt-1 space-y-1 text-sm text-muted-foreground">
-            {ended.map((r) => (
-              <li key={r.id}>
-                {r.effect} {r.permissionCode} — hết hiệu lực {r.validTo?.slice(0, 10)} · {r.reason}
-              </li>
-            ))}
-          </ul>
+          {mExplain.data !== undefined ? (
+            <Alert variant={mExplain.data.ruling === 'DENY' ? 'destructive' : 'success'}>
+              <p className="font-medium text-foreground">
+                Kết quả: {mExplain.data.ruling}
+                {mExplain.data.fallsBackToRoleMatrix
+                  ? ' — không luật nào khớp, ma trận vai quyết'
+                  : ` — do luật #${mExplain.data.matchedRule?.priority ?? '?'} (${
+                      mExplain.data.matchedRule?.reason ?? ''
+                    })`}
+              </p>
+              <p>Phạm vi bản ghi cho mã này: {mExplain.data.scopeLevel}</p>
+            </Alert>
+          ) : null}
+
+          {mExplain.error !== null ? (
+            <Alert variant="destructive" title="Không thử được">
+              {(mExplain.error as Error).message}
+            </Alert>
+          ) : null}
+        </CardContent>
+      </Card>
+
+      {ended.length > 0 ? (
+        <div className="space-y-3">
+          <h2 className="text-sm font-semibold text-muted-foreground">
+            Đã thu hồi ({ended.length})
+          </h2>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Hiệu lực</TableHead>
+                <TableHead>Mã quyền</TableHead>
+                <TableHead>Hết hiệu lực</TableHead>
+                <TableHead>Lý do</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {ended.map((r) => (
+                <TableRow key={r.id} className="text-muted-foreground">
+                  <TableCell>{r.effect}</TableCell>
+                  <TableCell className="font-mono text-xs">{r.permissionCode}</TableCell>
+                  <TableCell className="tabular-nums">{r.validTo?.slice(0, 10)}</TableCell>
+                  <TableCell>{r.reason}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
         </div>
-      )}
+      ) : null}
     </section>
   );
 }

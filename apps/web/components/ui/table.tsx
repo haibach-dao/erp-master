@@ -81,3 +81,21 @@ export function TableCell({
     />
   );
 }
+
+/* Một dòng chiếm hết chiều ngang bảng: dùng cho rỗng / lỗi / đang tải, thay vì
+ * mỗi trang tự đếm `colSpan` rồi tự đặt padding. */
+export function TableMessage({
+  colSpan,
+  children,
+}: {
+  colSpan: number;
+  children: React.ReactNode;
+}) {
+  return (
+    <tr>
+      <td colSpan={colSpan} className="p-0">
+        {children}
+      </td>
+    </tr>
+  );
+}

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { Lock, Waypoints } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   assignScope,
@@ -11,8 +12,25 @@ import {
 } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { can } from '@/lib/permissions';
-import { Button } from '@/components/ui/button';
 import { CompanyPicker } from '@/components/company-picker';
+import { PageHeader } from '@/components/ui/page-header';
+import { Alert } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { EmptyState } from '@/components/ui/empty-state';
+import { Field } from '@/components/ui/label';
+import { Input } from '@/components/ui/input';
+import { Select } from '@/components/ui/select';
+import { TableSkeleton } from '@/components/ui/skeleton';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableMessage,
+  TableRow,
+} from '@/components/ui/table';
 
 /* Gán phạm vi: ai phụ trách nghĩa trang nào.
  *
@@ -63,11 +81,15 @@ export default function ScopeAssignmentPage() {
 
   if (!allowed) {
     return (
-      <section className="space-y-2">
-        <h1 className="text-xl font-semibold">Gán phạm vi</h1>
-        <p className="text-sm text-muted-foreground">
-          Bạn không có quyền <code>authz.scope.assign</code>.
-        </p>
+      <section className="space-y-6">
+        <PageHeader title="Gán phạm vi" />
+        <Card>
+          <EmptyState
+            icon={Lock}
+            title="Bạn không có quyền xem trang này"
+            description="Cần mã quyền authz.scope.assign. Liên hệ quản trị nếu công việc của bạn cần tới nó."
+          />
+        </Card>
       </section>
     );
   }
@@ -77,118 +99,146 @@ export default function ScopeAssignmentPage() {
   const err = mAssign.error ?? mRevoke.error ?? assignments.error;
 
   return (
-    <section className="space-y-4">
-      <div>
-        <h1 className="text-xl font-semibold">Gán phạm vi — ai phụ trách nghĩa trang nào</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Trục &ldquo;ở đâu&rdquo;, tách rời khỏi vai. Người phụ trách nhiều nghĩa trang là bình
-          thường; một nghĩa trang cũng có nhiều người.
-        </p>
-      </div>
+    <section className="space-y-6">
+      <PageHeader
+        title="Gán phạm vi — ai phụ trách nghĩa trang nào"
+        description="Trục “ở đâu”, tách rời khỏi vai. Người phụ trách nhiều nghĩa trang là bình thường; một nghĩa trang cũng có nhiều người."
+      />
 
-      {err !== null && err !== undefined && (
-        <p className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm">
+      {err !== null && err !== undefined ? (
+        <Alert variant="destructive" title="Thao tác không thành công">
           {(err as Error).message}
-        </p>
-      )}
+        </Alert>
+      ) : null}
 
-      <div className="flex flex-wrap items-end gap-3 rounded-md border border-border p-3">
-        <label className="text-sm">
-          Người dùng (id){' '}
-          <input
-            className="rounded-md border border-border bg-background px-3 py-2 text-sm"
-            value={targetUserId}
-            onChange={(e) => setTargetUserId(e.target.value)}
-            placeholder="ULID của người dùng"
-          />
-        </label>
-        <CompanyPicker value={companyId} onChange={setCompanyId} />
-        <label className="text-sm">
-          Nghĩa trang{' '}
-          <select
-            className="rounded-md border border-border bg-background px-3 py-2 text-sm"
-            value={cemeteryId}
-            onChange={(e) => setCemeteryId(e.target.value)}
-            disabled={companyId === ''}
+      <Card>
+        <CardHeader>
+          <CardTitle>Gán nghĩa trang cho người dùng</CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-wrap items-end gap-3">
+          <Field label="Người dùng (id)" htmlFor="targetUserId" className="w-72">
+            <Input
+              id="targetUserId"
+              className="font-mono text-xs"
+              value={targetUserId}
+              onChange={(e) => setTargetUserId(e.target.value)}
+              placeholder="ULID của người dùng"
+            />
+          </Field>
+
+          <CompanyPicker value={companyId} onChange={setCompanyId} />
+
+          <Field label="Nghĩa trang" htmlFor="cemeteryId" className="w-64">
+            <Select
+              id="cemeteryId"
+              value={cemeteryId}
+              onChange={(e) => setCemeteryId(e.target.value)}
+              disabled={companyId === ''}
+            >
+              <option value="">— chọn nghĩa trang —</option>
+              {cemeteries.data?.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.code} · {c.name}
+                </option>
+              ))}
+            </Select>
+          </Field>
+
+          <Button
+            onClick={() => mAssign.mutate()}
+            disabled={targetUserId === '' || cemeteryId === ''}
+            loading={mAssign.isPending}
           >
-            <option value="">— chọn nghĩa trang —</option>
-            {cemeteries.data?.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.code} · {c.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <Button
-          onClick={() => mAssign.mutate()}
-          disabled={targetUserId === '' || cemeteryId === '' || mAssign.isPending}
-        >
-          Gán
-        </Button>
-      </div>
+            Gán
+          </Button>
+        </CardContent>
+      </Card>
 
       {targetUserId === '' ? (
-        <p className="text-sm text-muted-foreground">Nhập id người dùng để xem phạm vi hiện tại.</p>
+        <Card>
+          <EmptyState
+            icon={Waypoints}
+            title="Chưa nhập người dùng"
+            description="Nhập id người dùng ở trên để xem phạm vi họ đang được gán."
+          />
+        </Card>
       ) : (
         <>
-          <div>
-            <h2 className="text-sm font-medium">Đang phụ trách ({active.length})</h2>
-            {active.length === 0 ? (
-              <p className="mt-1 text-sm text-muted-foreground">
-                Chưa phụ trách nghĩa trang nào. Vai có phạm vi theo nghĩa trang sẽ không thấy bản
-                ghi nào.
-              </p>
-            ) : (
-              <table className="mt-2 w-full text-left text-sm">
-                <thead className="text-muted-foreground">
-                  <tr>
-                    <th className="p-2">Nghĩa trang</th>
-                    <th className="p-2">Gán bởi</th>
-                    <th className="p-2" />
-                  </tr>
-                </thead>
-                <tbody>
-                  {active.map((a) => (
-                    <tr key={a.id} className="border-t border-border">
-                      <td className="p-2">
-                        {a.cemetery === null
-                          ? a.cemeteryId
-                          : `${a.cemetery.code} · ${a.cemetery.name}`}
-                      </td>
-                      <td className="p-2 text-muted-foreground">{a.grantedBy ?? '—'}</td>
-                      <td className="p-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => mRevoke.mutate(a)}
-                          disabled={mRevoke.isPending}
-                        >
-                          Thu hồi
-                        </Button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
+          <div className="space-y-3">
+            <h2 className="text-sm font-semibold">Đang phụ trách ({active.length})</h2>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Nghĩa trang</TableHead>
+                  <TableHead>Gán bởi</TableHead>
+                  <TableHead align="right">Thao tác</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {assignments.isPending ? <TableSkeleton rows={3} cols={3} /> : null}
+
+                {!assignments.isPending && active.length === 0 ? (
+                  <TableMessage colSpan={3}>
+                    <EmptyState
+                      icon={Waypoints}
+                      title="Chưa phụ trách nghĩa trang nào"
+                      description="Vai có phạm vi theo nghĩa trang sẽ không thấy bản ghi nào cho tới khi được gán."
+                    />
+                  </TableMessage>
+                ) : null}
+
+                {active.map((a) => (
+                  <TableRow key={a.id}>
+                    <TableCell className="font-medium">
+                      {a.cemetery === null
+                        ? a.cemeteryId
+                        : `${a.cemetery.code} · ${a.cemetery.name}`}
+                    </TableCell>
+                    <TableCell className="font-mono text-xs text-muted-foreground">
+                      {a.grantedBy ?? '—'}
+                    </TableCell>
+                    <TableCell align="right">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={mRevoke.isPending}
+                        loading={mRevoke.isPending && mRevoke.variables?.id === a.id}
+                        onClick={() => mRevoke.mutate(a)}
+                      >
+                        Thu hồi
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
           </div>
 
-          {ended.length > 0 && (
-            <div>
+          {ended.length > 0 ? (
+            <div className="space-y-3">
               {/* Thu hồi = đóng hiệu lực, không xoá dòng. "Tháng trước ai xem được cái này"
                   là đúng câu mà kiểm toán sẽ hỏi. */}
-              <h2 className="text-sm font-medium text-muted-foreground">
+              <h2 className="text-sm font-semibold text-muted-foreground">
                 Đã thu hồi ({ended.length})
               </h2>
-              <ul className="mt-1 space-y-1 text-sm text-muted-foreground">
-                {ended.map((a) => (
-                  <li key={a.id}>
-                    {a.cemetery?.code ?? a.cemeteryId} — hết hiệu lực {a.validTo?.slice(0, 10)}
-                  </li>
-                ))}
-              </ul>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Nghĩa trang</TableHead>
+                    <TableHead>Hết hiệu lực</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {ended.map((a) => (
+                    <TableRow key={a.id} className="text-muted-foreground">
+                      <TableCell>{a.cemetery?.code ?? a.cemeteryId}</TableCell>
+                      <TableCell className="tabular-nums">{a.validTo?.slice(0, 10)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
             </div>
-          )}
+          ) : null}
         </>
       )}
     </section>

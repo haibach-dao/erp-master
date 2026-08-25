@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { Landmark } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   createCemetery,
@@ -16,9 +17,26 @@ import {
   releaseHold,
   searchCustomers,
 } from '@/lib/api';
+import { statusOf } from '@/lib/status';
+import { PageHeader } from '@/components/ui/page-header';
+import { Alert } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-
-const inputClass = 'rounded-md border border-border bg-background px-3 py-2 text-sm';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { EmptyState } from '@/components/ui/empty-state';
+import { Field } from '@/components/ui/label';
+import { Input } from '@/components/ui/input';
+import { Select } from '@/components/ui/select';
+import { TableSkeleton } from '@/components/ui/skeleton';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableMessage,
+  TableRow,
+} from '@/components/ui/table';
 
 export default function GravesPage() {
   const qc = useQueryClient();
@@ -94,222 +112,275 @@ export default function GravesPage() {
   });
 
   return (
-    <section className="space-y-4">
-      <h1 className="text-xl font-semibold">Sơ đồ / Danh sách mộ</h1>
+    <section className="space-y-6">
+      <PageHeader title="Sơ đồ / Danh sách mộ" description="Danh mục nghĩa trang và vị trí mộ." />
 
-      {/* Company picker + create */}
-      <div className="flex flex-wrap items-end gap-3 rounded-md border border-border p-3">
-        <label className="text-sm">
-          Công ty
-          <select
-            className={`${inputClass} block`}
-            value={companyId}
-            onChange={(e) => setCompanyId(e.target.value)}
-          >
-            <option value="">— chọn —</option>
-            {companies.data?.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.code} · {c.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <span className="text-xs text-muted-foreground">hoặc tạo mới:</span>
-        <input
-          className={inputClass}
-          placeholder="Mã CT"
-          value={company.code}
-          onChange={(e) => setCompany({ ...company, code: e.target.value })}
-        />
-        <input
-          className={inputClass}
-          placeholder="Tên CT"
-          value={company.name}
-          onChange={(e) => setCompany({ ...company, name: e.target.value })}
-        />
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => mCompany.mutate()}
-          disabled={mCompany.isPending}
-        >
-          Tạo công ty
-        </Button>
-      </div>
-
-      {companyId !== '' && (
-        <>
-          {/* Catalog setup */}
-          <div className="grid gap-3 rounded-md border border-border p-3 md:grid-cols-2">
-            <div className="flex flex-wrap items-end gap-2">
-              <span className="text-sm font-medium">Nghĩa trang</span>
-              <input
-                className={inputClass}
-                placeholder="Mã"
-                value={cem.code}
-                onChange={(e) => setCem({ ...cem, code: e.target.value })}
-              />
-              <input
-                className={inputClass}
-                placeholder="Tên"
-                value={cem.name}
-                onChange={(e) => setCem({ ...cem, name: e.target.value })}
-              />
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => mCem.mutate()}
-                disabled={mCem.isPending}
-              >
-                Thêm
-              </Button>
-              <span className="text-xs text-muted-foreground">
-                ({cemeteries.data?.length ?? 0})
-              </span>
-            </div>
-            <div className="flex flex-wrap items-end gap-2">
-              <span className="text-sm font-medium">Loại mộ</span>
-              <input
-                className={inputClass}
-                placeholder="Mã"
-                value={gt.code}
-                onChange={(e) => setGt({ ...gt, code: e.target.value })}
-              />
-              <input
-                className={inputClass}
-                placeholder="Tên"
-                value={gt.name}
-                onChange={(e) => setGt({ ...gt, name: e.target.value })}
-              />
-              <input
-                className={`${inputClass} w-20`}
-                placeholder="Sức chứa"
-                value={gt.cap}
-                onChange={(e) => setGt({ ...gt, cap: e.target.value })}
-              />
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => mGt.mutate()}
-                disabled={mGt.isPending}
-              >
-                Thêm
-              </Button>
-              <span className="text-xs text-muted-foreground">
-                ({graveTypes.data?.length ?? 0})
-              </span>
-            </div>
-          </div>
-
-          {/* Create plot */}
-          <div className="flex flex-wrap items-end gap-2 rounded-md border border-border p-3">
-            <span className="text-sm font-medium">Thêm vị trí mộ</span>
-            <select
-              className={inputClass}
-              value={plot.cemeteryId}
-              onChange={(e) => setPlot({ ...plot, cemeteryId: e.target.value })}
-            >
-              <option value="">Nghĩa trang</option>
-              {cemeteries.data?.map((c) => (
+      <Card>
+        <CardHeader>
+          <CardTitle>Công ty</CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-wrap items-end gap-3">
+          <Field label="Đang làm việc với" htmlFor="companyId" className="w-64">
+            <Select id="companyId" value={companyId} onChange={(e) => setCompanyId(e.target.value)}>
+              <option value="">— chọn công ty —</option>
+              {companies.data?.map((c) => (
                 <option key={c.id} value={c.id}>
-                  {c.code}
+                  {c.code} · {c.name}
                 </option>
               ))}
-            </select>
-            <select
-              className={inputClass}
-              value={plot.graveTypeId}
-              onChange={(e) => setPlot({ ...plot, graveTypeId: e.target.value })}
-            >
-              <option value="">Loại mộ</option>
-              {graveTypes.data?.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.code}
-                </option>
-              ))}
-            </select>
-            <input
-              className={inputClass}
-              placeholder="Mã mộ"
-              value={plot.plotCode}
-              onChange={(e) => setPlot({ ...plot, plotCode: e.target.value })}
-            />
+            </Select>
+          </Field>
+
+          <div className="flex flex-wrap items-end gap-2 border-l border-border pl-3">
+            <Field label="Mã CT" htmlFor="newCompanyCode" className="w-28">
+              <Input
+                id="newCompanyCode"
+                value={company.code}
+                onChange={(e) => setCompany({ ...company, code: e.target.value })}
+              />
+            </Field>
+            <Field label="Tên công ty mới" htmlFor="newCompanyName" className="w-56">
+              <Input
+                id="newCompanyName"
+                value={company.name}
+                onChange={(e) => setCompany({ ...company, name: e.target.value })}
+              />
+            </Field>
             <Button
               variant="outline"
-              size="sm"
-              onClick={() => mPlot.mutate()}
-              disabled={mPlot.isPending}
+              onClick={() => mCompany.mutate()}
+              loading={mCompany.isPending}
             >
-              Thêm mộ
+              Tạo công ty
             </Button>
-            {mPlot.error !== null && (
-              <span className="text-sm text-red-600">{(mPlot.error as Error).message}</span>
-            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      {companyId === '' ? (
+        <Card>
+          <EmptyState
+            icon={Landmark}
+            title="Chưa chọn công ty"
+            description="Chọn công ty ở trên để xem danh mục và danh sách mộ."
+          />
+        </Card>
+      ) : (
+        <>
+          <div className="grid gap-4 lg:grid-cols-2">
+            <Card>
+              <CardHeader>
+                <CardTitle>
+                  Nghĩa trang
+                  <span className="ml-2 font-normal text-muted-foreground">
+                    ({cemeteries.data?.length ?? 0})
+                  </span>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="flex flex-wrap items-end gap-2">
+                <Field label="Mã" htmlFor="cemCode" className="w-24">
+                  <Input
+                    id="cemCode"
+                    value={cem.code}
+                    onChange={(e) => setCem({ ...cem, code: e.target.value })}
+                  />
+                </Field>
+                <Field label="Tên" htmlFor="cemName" className="min-w-40 flex-1">
+                  <Input
+                    id="cemName"
+                    value={cem.name}
+                    onChange={(e) => setCem({ ...cem, name: e.target.value })}
+                  />
+                </Field>
+                <Button variant="outline" onClick={() => mCem.mutate()} loading={mCem.isPending}>
+                  Thêm
+                </Button>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>
+                  Loại mộ
+                  <span className="ml-2 font-normal text-muted-foreground">
+                    ({graveTypes.data?.length ?? 0})
+                  </span>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="flex flex-wrap items-end gap-2">
+                <Field label="Mã" htmlFor="gtCode" className="w-24">
+                  <Input
+                    id="gtCode"
+                    value={gt.code}
+                    onChange={(e) => setGt({ ...gt, code: e.target.value })}
+                  />
+                </Field>
+                <Field label="Tên" htmlFor="gtName" className="min-w-32 flex-1">
+                  <Input
+                    id="gtName"
+                    value={gt.name}
+                    onChange={(e) => setGt({ ...gt, name: e.target.value })}
+                  />
+                </Field>
+                <Field label="Sức chứa" htmlFor="gtCap" className="w-24">
+                  <Input
+                    id="gtCap"
+                    inputMode="numeric"
+                    value={gt.cap}
+                    onChange={(e) => setGt({ ...gt, cap: e.target.value })}
+                  />
+                </Field>
+                <Button variant="outline" onClick={() => mGt.mutate()} loading={mGt.isPending}>
+                  Thêm
+                </Button>
+              </CardContent>
+            </Card>
           </div>
 
-          {/* Hold customer picker */}
-          <div className="flex items-center gap-2">
-            <span className="text-sm">Khách giữ chỗ:</span>
-            <select
-              className={inputClass}
-              value={holdCustomerId}
-              onChange={(e) => setHoldCustomerId(e.target.value)}
-            >
-              <option value="">— chọn khách —</option>
-              {customers.data?.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.customerCode} · {c.person?.fullName ?? c.orgName ?? ''}
-                </option>
-              ))}
-            </select>
-          </div>
+          <Card>
+            <CardHeader>
+              <CardTitle>Thêm vị trí mộ</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex flex-wrap items-end gap-2">
+                <Field label="Nghĩa trang" htmlFor="plotCem" className="w-44">
+                  <Select
+                    id="plotCem"
+                    value={plot.cemeteryId}
+                    onChange={(e) => setPlot({ ...plot, cemeteryId: e.target.value })}
+                  >
+                    <option value="">— chọn —</option>
+                    {cemeteries.data?.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.code}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+                <Field label="Loại mộ" htmlFor="plotType" className="w-44">
+                  <Select
+                    id="plotType"
+                    value={plot.graveTypeId}
+                    onChange={(e) => setPlot({ ...plot, graveTypeId: e.target.value })}
+                  >
+                    <option value="">— chọn —</option>
+                    {graveTypes.data?.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.code}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+                <Field label="Mã mộ" htmlFor="plotCode" className="w-44">
+                  <Input
+                    id="plotCode"
+                    value={plot.plotCode}
+                    onChange={(e) => setPlot({ ...plot, plotCode: e.target.value })}
+                  />
+                </Field>
+                <Button variant="outline" onClick={() => mPlot.mutate()} loading={mPlot.isPending}>
+                  Thêm mộ
+                </Button>
+              </div>
+              {mPlot.error !== null ? (
+                <Alert variant="destructive" title="Không thêm được vị trí mộ">
+                  {(mPlot.error as Error).message}
+                </Alert>
+              ) : null}
+            </CardContent>
+          </Card>
 
-          {/* Plots table */}
-          <div className="overflow-x-auto rounded-md border border-border">
-            <table className="w-full text-sm">
-              <thead className="bg-muted text-muted-foreground">
-                <tr>
-                  <th className="p-2 text-left font-medium">Mã mộ</th>
-                  <th className="p-2 text-left font-medium">Trạng thái</th>
-                  <th className="p-2 text-left font-medium">Sức chứa</th>
-                  <th className="p-2 text-left font-medium">Thao tác</th>
-                </tr>
-              </thead>
-              <tbody>
-                {plots.data?.length === 0 && (
-                  <tr>
-                    <td className="p-3 text-muted-foreground" colSpan={4}>
-                      Chưa có vị trí mộ.
-                    </td>
-                  </tr>
-                )}
-                {plots.data?.map((p) => (
-                  <tr key={p.id} className="border-t border-border">
-                    <td className="p-2 font-mono text-xs">{p.plotCode}</td>
-                    <td className="p-2">{p.status}</td>
-                    <td className="p-2">{p.effectiveCapacity}</td>
-                    <td className="p-2">
-                      {p.status === 'Available' && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          disabled={holdCustomerId === '' || mHold.isPending}
-                          onClick={() => mHold.mutate(p.id)}
-                        >
-                          Giữ chỗ
-                        </Button>
-                      )}
-                      {p.status === 'Held' && (
-                        <Button variant="ghost" size="sm" onClick={() => mRelease.mutate(p.id)}>
-                          Trả chỗ
-                        </Button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <Card>
+            <CardHeader>
+              <CardTitle>Danh sách mộ</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 px-0 pb-0">
+              <div className="px-5">
+                <Field
+                  label="Khách giữ chỗ"
+                  htmlFor="holdCustomer"
+                  className="w-80"
+                  hint="Chọn khách trước, rồi bấm “Giữ chỗ” ở dòng mộ còn trống."
+                >
+                  <Select
+                    id="holdCustomer"
+                    value={holdCustomerId}
+                    onChange={(e) => setHoldCustomerId(e.target.value)}
+                  >
+                    <option value="">— chọn khách —</option>
+                    {customers.data?.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.customerCode} · {c.person?.fullName ?? c.orgName ?? ''}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+              </div>
+
+              <Table containerClassName="rounded-none border-0 border-t shadow-none">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Mã mộ</TableHead>
+                    <TableHead>Trạng thái</TableHead>
+                    <TableHead align="right">Sức chứa</TableHead>
+                    <TableHead align="right">Thao tác</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {plots.isPending ? <TableSkeleton rows={5} cols={4} /> : null}
+
+                  {plots.data?.length === 0 ? (
+                    <TableMessage colSpan={4}>
+                      <EmptyState
+                        icon={Landmark}
+                        title="Chưa có vị trí mộ"
+                        description="Thêm nghĩa trang và loại mộ ở trên, rồi tạo vị trí mộ đầu tiên."
+                      />
+                    </TableMessage>
+                  ) : null}
+
+                  {plots.data?.map((p) => {
+                    const s = statusOf(p.status);
+                    return (
+                      <TableRow key={p.id}>
+                        <TableCell className="font-mono text-xs">{p.plotCode}</TableCell>
+                        <TableCell>
+                          <Badge variant={s.variant}>{s.label}</Badge>
+                        </TableCell>
+                        <TableCell align="right">{p.effectiveCapacity}</TableCell>
+                        <TableCell align="right">
+                          {p.status === 'Available' ? (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              disabled={holdCustomerId === '' || mHold.isPending}
+                              // Chỉ dòng đang chạy mới quay vòng. `loading` theo
+                              // `isPending` trần sẽ làm MỌI dòng cùng quay.
+                              loading={mHold.isPending && mHold.variables === p.id}
+                              onClick={() => mHold.mutate(p.id)}
+                            >
+                              Giữ chỗ
+                            </Button>
+                          ) : null}
+                          {p.status === 'Held' ? (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              disabled={mRelease.isPending}
+                              loading={mRelease.isPending && mRelease.variables === p.id}
+                              onClick={() => mRelease.mutate(p.id)}
+                            >
+                              Trả chỗ
+                            </Button>
+                          ) : null}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
         </>
       )}
     </section>

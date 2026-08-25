@@ -1,0 +1,64 @@
+import type { BadgeProps } from '@/components/ui/badge';
+
+type Variant = NonNullable<BadgeProps['variant']>;
+
+/* Trạng thái nghiệp vụ hiện ra màn hình.
+ *
+ * Server trả về mã tiếng Anh (`Available`, `PendingVerification`…). Trước đây
+ * trang in thẳng mã đó ra bảng, nên người dùng đọc "Occupied" giữa một trang
+ * tiếng Việt. Bảng dưới đây chỉ đổi CÁCH HIỆN, không đổi mã — mọi so sánh
+ * trong code vẫn dùng mã gốc.
+ *
+ * Nhãn mộ lấy đúng từ vựng Dashboard đang dùng, để hai chỗ không gọi khác nhau.
+ */
+const STATUS: Record<string, { label: string; variant: Variant }> = {
+  // Vị trí mộ
+  Available: { label: 'Còn trống', variant: 'success' },
+  Held: { label: 'Đang giữ chỗ', variant: 'warning' },
+  Allocated: { label: 'Đã phân bổ', variant: 'info' },
+  Occupied: { label: 'Đã an táng', variant: 'neutral' },
+
+  // Hồ sơ hợp đồng / an táng
+  Draft: { label: 'Nháp', variant: 'neutral' },
+  Uploaded: { label: 'Đã tải lên', variant: 'neutral' },
+  PendingVerification: { label: 'Chờ thẩm định', variant: 'warning' },
+  Verified: { label: 'Đã thẩm định', variant: 'info' },
+  Scheduled: { label: 'Đã lên lịch', variant: 'info' },
+  Completed: { label: 'Hoàn tất', variant: 'success' },
+
+  // Thuê bao dịch vụ / giữ chỗ
+  Active: { label: 'Đang hiệu lực', variant: 'success' },
+  Cancelled: { label: 'Đã hủy', variant: 'destructive' },
+};
+
+/* Mã lạ thì hiện nguyên mã, đừng nuốt mất — thà người dùng thấy chữ tiếng Anh
+ * còn hơn thấy ô trống hoặc một nhãn đoán sai. */
+export function statusOf(code: string): { label: string; variant: Variant } {
+  return STATUS[code] ?? { label: code, variant: 'neutral' };
+}
+
+/** Loại khách hàng — cũng là mã tiếng Anh từ server. */
+const CUSTOMER_TYPE: Record<string, string> = {
+  INDIVIDUAL: 'Cá nhân',
+  ORGANIZATION: 'Tổ chức',
+  AGENT: 'Đại lý',
+  PROSPECT: 'Tiềm năng',
+};
+
+export function customerType(code: string): string {
+  return CUSTOMER_TYPE[code] ?? code;
+}
+
+/* Mức nhạy cảm của mã quyền (doc 16 §D.4). S3 = dữ liệu cá nhân, hành vi bất
+ * khả hồi, bỏ mặt nạ — người rà phải thấy ngay mình đang cấp thứ gì, nên nó
+ * đỏ chứ không nằm lẫn trong một cột chữ đơn sắc. */
+const SENSITIVITY: Record<string, { label: string; variant: Variant }> = {
+  S0: { label: 'S0', variant: 'neutral' },
+  S1: { label: 'S1', variant: 'neutral' },
+  S2: { label: 'S2', variant: 'warning' },
+  S3: { label: 'S3', variant: 'destructive' },
+};
+
+export function sensitivityOf(code: string): { label: string; variant: Variant } {
+  return SENSITIVITY[code] ?? { label: code, variant: 'neutral' };
+}

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { Sparkles } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   createServiceCatalog,
@@ -12,11 +13,29 @@ import {
   serviceRevenue,
   subscribeService,
 } from '@/lib/api';
-import { Button } from '@/components/ui/button';
-import { CompanyPicker } from '@/components/company-picker';
 import { formatMoney } from '@/lib/money';
+import { statusOf } from '@/lib/status';
+import { CompanyPicker } from '@/components/company-picker';
+import { PageHeader } from '@/components/ui/page-header';
+import { Alert } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { EmptyState } from '@/components/ui/empty-state';
+import { Field } from '@/components/ui/label';
+import { Input } from '@/components/ui/input';
+import { Select } from '@/components/ui/select';
+import { Skeleton, TableSkeleton } from '@/components/ui/skeleton';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableMessage,
+  TableRow,
+} from '@/components/ui/table';
 
-const inputClass = 'rounded-md border border-border bg-background px-3 py-2 text-sm';
 const today = (): string => new Date().toISOString().slice(0, 10);
 
 export default function ServicesPage() {
@@ -98,167 +117,226 @@ export default function ServicesPage() {
   const err = mCat.error ?? mSub.error ?? mRenew.error;
 
   return (
-    <section className="space-y-4">
-      <h1 className="text-xl font-semibold">Dịch vụ &amp; Doanh thu</h1>
+    <section className="space-y-6">
+      <PageHeader title="Dịch vụ &amp; Doanh thu" description="Gói dịch vụ, đăng ký và gia hạn." />
+
       <CompanyPicker value={companyId} onChange={setCompanyId} />
 
-      {companyId !== '' && (
+      {companyId === '' ? (
+        <Card>
+          <EmptyState
+            icon={Sparkles}
+            title="Chưa chọn công ty"
+            description="Chọn công ty ở trên để xem gói dịch vụ và doanh thu."
+          />
+        </Card>
+      ) : (
         <>
-          {/* Revenue KPI */}
-          <div className="flex gap-4">
-            <div className="rounded-md border border-border p-4">
-              <div className="text-xs text-muted-foreground">Doanh thu đã thu</div>
-              <div className="text-2xl font-semibold">
-                {Number(revenue.data?.totalCollected ?? 0).toLocaleString('vi-VN')} đ
-              </div>
-              <div className="text-xs text-muted-foreground">
-                {revenue.data?.transactions ?? 0} giao dịch
-              </div>
-            </div>
-          </div>
+          <Card className="max-w-xs">
+            <CardContent className="space-y-1 px-5 py-4">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Doanh thu đã thu
+              </p>
+              {revenue.isPending ? (
+                <Skeleton className="h-8 w-32" />
+              ) : (
+                <>
+                  <p className="text-2xl font-semibold tabular-nums tracking-tight">
+                    {Number(revenue.data?.totalCollected ?? 0).toLocaleString('vi-VN')} đ
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {revenue.data?.transactions ?? 0} giao dịch
+                  </p>
+                </>
+              )}
+            </CardContent>
+          </Card>
 
-          {/* Catalog */}
-          <div className="flex flex-wrap items-end gap-2 rounded-md border border-border p-3">
-            <span className="text-sm font-medium">Gói dịch vụ</span>
-            <input
-              className={inputClass}
-              placeholder="Mã"
-              value={cat.code}
-              onChange={(e) => setCat({ ...cat, code: e.target.value })}
-            />
-            <input
-              className={inputClass}
-              placeholder="Tên"
-              value={cat.name}
-              onChange={(e) => setCat({ ...cat, name: e.target.value })}
-            />
-            <input
-              className={`${inputClass} w-32`}
-              placeholder="Giá VND"
-              value={cat.price}
-              onChange={(e) => setCat({ ...cat, price: e.target.value })}
-            />
-            <input
-              className={`${inputClass} w-24`}
-              placeholder="Số tháng"
-              value={cat.durationMonths}
-              onChange={(e) => setCat({ ...cat, durationMonths: e.target.value })}
-            />
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => mCat.mutate()}
-              disabled={mCat.isPending}
-            >
-              Thêm gói
-            </Button>
-            <span className="text-xs text-muted-foreground">({catalog.data?.length ?? 0} gói)</span>
-          </div>
+          {err !== null ? (
+            <Alert variant="destructive" title="Thao tác không thành công">
+              {(err as Error).message}
+            </Alert>
+          ) : null}
 
-          {/* Subscribe */}
-          <div className="flex flex-wrap items-end gap-2 rounded-md border border-border p-3">
-            <span className="text-sm font-medium">Đăng ký dịch vụ (thu đủ ngay)</span>
-            <select
-              className={inputClass}
-              value={sub.plotId}
-              onChange={(e) => setSub({ ...sub, plotId: e.target.value })}
-            >
-              <option value="">Vị trí mộ</option>
-              {plots.data?.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.plotCode}
-                </option>
-              ))}
-            </select>
-            <select
-              className={inputClass}
-              value={sub.catalogId}
-              onChange={(e) => setSub({ ...sub, catalogId: e.target.value })}
-            >
-              <option value="">Gói</option>
-              {catalog.data?.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.code} · {Number(c.price).toLocaleString('vi-VN')}đ
-                </option>
-              ))}
-            </select>
-            <select
-              className={inputClass}
-              value={sub.customerId}
-              onChange={(e) => setSub({ ...sub, customerId: e.target.value })}
-            >
-              <option value="">Khách</option>
-              {customers.data?.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.customerCode}
-                </option>
-              ))}
-            </select>
-            <input
-              className={inputClass}
-              type="date"
-              value={sub.effectiveFrom}
-              onChange={(e) => setSub({ ...sub, effectiveFrom: e.target.value })}
-            />
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => mSub.mutate()}
-              disabled={
-                sub.plotId === '' || sub.catalogId === '' || sub.customerId === '' || mSub.isPending
-              }
-            >
-              Đăng ký
-            </Button>
-          </div>
+          <Card>
+            <CardHeader>
+              <CardTitle>
+                Gói dịch vụ
+                <span className="ml-2 font-normal text-muted-foreground">
+                  ({catalog.data?.length ?? 0} gói)
+                </span>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-wrap items-end gap-3">
+              <Field label="Mã" htmlFor="catCode" className="w-28">
+                <Input
+                  id="catCode"
+                  value={cat.code}
+                  onChange={(e) => setCat({ ...cat, code: e.target.value })}
+                />
+              </Field>
+              <Field label="Tên gói" htmlFor="catName" className="min-w-44 flex-1">
+                <Input
+                  id="catName"
+                  value={cat.name}
+                  onChange={(e) => setCat({ ...cat, name: e.target.value })}
+                />
+              </Field>
+              <Field label="Giá (VND)" htmlFor="catPrice" className="w-36">
+                <Input
+                  id="catPrice"
+                  inputMode="numeric"
+                  className="text-right tabular-nums"
+                  value={cat.price}
+                  onChange={(e) => setCat({ ...cat, price: e.target.value })}
+                />
+              </Field>
+              <Field label="Số tháng" htmlFor="catDuration" className="w-24">
+                <Input
+                  id="catDuration"
+                  inputMode="numeric"
+                  className="text-right tabular-nums"
+                  value={cat.durationMonths}
+                  onChange={(e) => setCat({ ...cat, durationMonths: e.target.value })}
+                />
+              </Field>
+              <Button variant="outline" onClick={() => mCat.mutate()} loading={mCat.isPending}>
+                Thêm gói
+              </Button>
+            </CardContent>
+          </Card>
 
-          {/* Subscriptions of the selected plot + renew */}
-          {sub.plotId !== '' && (
-            <div className="overflow-x-auto rounded-md border border-border">
-              <table className="w-full text-sm">
-                <thead className="bg-muted text-muted-foreground">
-                  <tr>
-                    <th className="p-2 text-left font-medium">Gói</th>
-                    <th className="p-2 text-left font-medium">Giá</th>
-                    <th className="p-2 text-left font-medium">Hiệu lực đến</th>
-                    <th className="p-2 text-left font-medium">Trạng thái</th>
-                    <th className="p-2 text-left font-medium">Thao tác</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {subs.data?.length === 0 && (
-                    <tr>
-                      <td className="p-3 text-muted-foreground" colSpan={5}>
-                        Vị trí này chưa đăng ký dịch vụ nào.
-                      </td>
-                    </tr>
-                  )}
-                  {subs.data?.map((s) => (
-                    <tr key={s.id} className="border-t border-border">
-                      <td className="p-2">{catName(s.serviceCatalogId)}</td>
-                      <td className="p-2">{formatMoney(s.agreedPrice)}</td>
-                      <td className="p-2">{s.effectiveTo?.slice(0, 10) ?? '—'}</td>
-                      <td className="p-2">{s.status}</td>
-                      <td className="p-2">
-                        {s.status === 'Active' && (
+          <Card>
+            <CardHeader>
+              <CardTitle>Đăng ký dịch vụ</CardTitle>
+              {/* Thu đủ ngay là quy tắc nghiệp vụ (A5), không phải chi tiết giao
+                  diện — nói thẳng ra để người thu ngân không bị bất ngờ. */}
+              <p className="text-sm text-muted-foreground">Đăng ký là ghi nhận thu đủ ngay.</p>
+            </CardHeader>
+            <CardContent className="flex flex-wrap items-end gap-3">
+              <Field label="Vị trí mộ" htmlFor="subPlot" className="w-44">
+                <Select
+                  id="subPlot"
+                  value={sub.plotId}
+                  onChange={(e) => setSub({ ...sub, plotId: e.target.value })}
+                >
+                  <option value="">— chọn —</option>
+                  {plots.data?.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.plotCode}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              <Field label="Gói" htmlFor="subCatalog" className="w-52">
+                <Select
+                  id="subCatalog"
+                  value={sub.catalogId}
+                  onChange={(e) => setSub({ ...sub, catalogId: e.target.value })}
+                >
+                  <option value="">— chọn —</option>
+                  {catalog.data?.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.code} · {Number(c.price).toLocaleString('vi-VN')}đ
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              <Field label="Khách" htmlFor="subCustomer" className="w-52">
+                <Select
+                  id="subCustomer"
+                  value={sub.customerId}
+                  onChange={(e) => setSub({ ...sub, customerId: e.target.value })}
+                >
+                  <option value="">— chọn —</option>
+                  {customers.data?.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.customerCode} · {c.person?.fullName ?? c.orgName ?? ''}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              <Field label="Hiệu lực từ" htmlFor="subFrom" className="w-44">
+                <Input
+                  id="subFrom"
+                  type="date"
+                  value={sub.effectiveFrom}
+                  onChange={(e) => setSub({ ...sub, effectiveFrom: e.target.value })}
+                />
+              </Field>
+              <Button
+                onClick={() => mSub.mutate()}
+                disabled={sub.plotId === '' || sub.catalogId === '' || sub.customerId === ''}
+                loading={mSub.isPending}
+              >
+                Đăng ký
+              </Button>
+            </CardContent>
+          </Card>
+
+          {sub.plotId === '' ? (
+            <Card>
+              <EmptyState
+                icon={Sparkles}
+                title="Chọn một vị trí mộ"
+                description="Danh sách dịch vụ đã đăng ký hiện theo vị trí mộ đang chọn ở trên."
+              />
+            </Card>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Gói</TableHead>
+                  <TableHead align="right">Giá</TableHead>
+                  <TableHead>Hiệu lực đến</TableHead>
+                  <TableHead>Trạng thái</TableHead>
+                  <TableHead align="right">Thao tác</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {subs.isPending ? <TableSkeleton rows={4} cols={5} /> : null}
+
+                {subs.data?.length === 0 ? (
+                  <TableMessage colSpan={5}>
+                    <EmptyState
+                      icon={Sparkles}
+                      title="Vị trí này chưa đăng ký dịch vụ nào"
+                      description="Dùng biểu mẫu ở trên để đăng ký gói đầu tiên."
+                    />
+                  </TableMessage>
+                ) : null}
+
+                {subs.data?.map((s) => {
+                  const st = statusOf(s.status);
+                  return (
+                    <TableRow key={s.id}>
+                      <TableCell className="font-medium">{catName(s.serviceCatalogId)}</TableCell>
+                      <TableCell align="right">{formatMoney(s.agreedPrice)}</TableCell>
+                      <TableCell className="tabular-nums">
+                        {s.effectiveTo?.slice(0, 10) ?? '—'}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={st.variant}>{st.label}</Badge>
+                      </TableCell>
+                      <TableCell align="right">
+                        {s.status === 'Active' ? (
                           <Button
                             variant="outline"
                             size="sm"
-                            onClick={() => mRenew.mutate(s.id)}
                             disabled={mRenew.isPending}
+                            loading={mRenew.isPending && mRenew.variables === s.id}
+                            onClick={() => mRenew.mutate(s.id)}
                           >
                             Gia hạn
                           </Button>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                        ) : null}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
           )}
-
-          {err !== null && <p className="text-sm text-red-600">{(err as Error).message}</p>}
         </>
       )}
     </section>

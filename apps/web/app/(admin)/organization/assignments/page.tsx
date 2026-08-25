@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { Lock, UserCog } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   assignRole,
@@ -11,8 +12,26 @@ import {
 } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { can } from '@/lib/permissions';
-import { Button } from '@/components/ui/button';
 import { CompanyPicker } from '@/components/company-picker';
+import { PageHeader } from '@/components/ui/page-header';
+import { Alert } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { EmptyState } from '@/components/ui/empty-state';
+import { Field } from '@/components/ui/label';
+import { Input } from '@/components/ui/input';
+import { Select } from '@/components/ui/select';
+import { TableSkeleton } from '@/components/ui/skeleton';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableMessage,
+  TableRow,
+} from '@/components/ui/table';
 
 /* Gán vai cho người — trục "được làm gì".
  *
@@ -69,11 +88,15 @@ export default function RoleAssignmentPage() {
 
   if (!canView) {
     return (
-      <section className="space-y-2">
-        <h1 className="text-xl font-semibold">Gán vai</h1>
-        <p className="text-sm text-muted-foreground">
-          Bạn không có quyền <code>authz.role.view</code>.
-        </p>
+      <section className="space-y-6">
+        <PageHeader title="Gán vai" />
+        <Card>
+          <EmptyState
+            icon={Lock}
+            title="Bạn không có quyền xem trang này"
+            description="Cần mã quyền authz.role.view. Liên hệ quản trị nếu công việc của bạn cần tới nó."
+          />
+        </Card>
       </section>
     );
   }
@@ -84,138 +107,189 @@ export default function RoleAssignmentPage() {
   const err = mAssign.error ?? mRevoke.error ?? assignments.error;
 
   return (
-    <section className="space-y-4">
-      <div>
-        <h1 className="text-xl font-semibold">Gán vai cho người dùng</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Nhiều vai thì quyền CỘNG DỒN. Phạm vi dữ liệu là trục riêng — gán ở màn hình &ldquo;Gán
-          phạm vi&rdquo;.
-        </p>
-      </div>
+    <section className="space-y-6">
+      <PageHeader
+        title="Gán vai cho người dùng"
+        description="Nhiều vai thì quyền CỘNG DỒN. Phạm vi dữ liệu là trục riêng — gán ở màn hình “Gán phạm vi”."
+      />
 
-      {err !== null && err !== undefined && (
-        <p className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm">
+      {err !== null && err !== undefined ? (
+        <Alert variant="destructive" title="Thao tác không thành công">
           {(err as Error).message}
-        </p>
-      )}
+        </Alert>
+      ) : null}
 
-      <label className="text-sm">
-        Người dùng (id){' '}
-        <input
-          className="rounded-md border border-border bg-background px-3 py-2 text-sm"
-          value={targetUserId}
-          onChange={(e) => setTargetUserId(e.target.value)}
-          placeholder="ULID của người dùng"
-        />
-      </label>
+      <Card>
+        <CardContent className="px-5 py-4">
+          <Field label="Người dùng (id)" htmlFor="targetUserId" className="w-72">
+            <Input
+              id="targetUserId"
+              className="font-mono text-xs"
+              value={targetUserId}
+              onChange={(e) => setTargetUserId(e.target.value)}
+              placeholder="ULID của người dùng"
+            />
+          </Field>
+        </CardContent>
+      </Card>
 
-      {canAssign && targetUserId !== '' && (
-        <div className="flex flex-wrap items-end gap-2 rounded-md border border-border p-3">
-          <label className="text-sm">
-            Vai{' '}
-            <select
-              className="rounded-md border border-border bg-background px-3 py-2 text-sm"
-              value={roleCode}
-              onChange={(e) => setRoleCode(e.target.value)}
+      {canAssign && targetUserId !== '' ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Gán vai mới</CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-wrap items-end gap-3">
+            <Field label="Vai" htmlFor="roleCode" className="w-64">
+              <Select id="roleCode" value={roleCode} onChange={(e) => setRoleCode(e.target.value)}>
+                <option value="">— chọn vai —</option>
+                {roles.data?.map((r) => (
+                  <option key={r.code} value={r.code}>
+                    {r.code} · {r.name}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+
+            <CompanyPicker value={companyId} onChange={setCompanyId} />
+
+            <Field
+              label="Hết hạn"
+              htmlFor="validTo"
+              className="w-44"
+              hint="Tuỳ chọn. Có hạn thì quyền tự rụng."
             >
-              <option value="">— chọn vai —</option>
-              {roles.data?.map((r) => (
-                <option key={r.code} value={r.code}>
-                  {r.code} · {r.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <CompanyPicker value={companyId} onChange={setCompanyId} />
-          <label className="text-sm">
-            Hết hạn (tuỳ chọn){' '}
-            <input
-              type="date"
-              className="rounded-md border border-border bg-background px-3 py-2 text-sm"
-              value={validTo}
-              onChange={(e) => setValidTo(e.target.value)}
-            />
-          </label>
-          <label className="text-sm">
-            Lý do{' '}
-            <input
-              className="rounded-md border border-border bg-background px-3 py-2 text-sm"
-              value={reason}
-              onChange={(e) => setReason(e.target.value)}
-              placeholder="bắt buộc"
-            />
-          </label>
-          <Button
-            onClick={() => mAssign.mutate()}
-            disabled={roleCode === '' || reason.trim() === '' || mAssign.isPending}
-          >
-            Gán vai
-          </Button>
-        </div>
-      )}
+              <Input
+                id="validTo"
+                type="date"
+                value={validTo}
+                onChange={(e) => setValidTo(e.target.value)}
+              />
+            </Field>
+
+            <Field
+              label="Lý do"
+              htmlFor="reason"
+              required
+              className="min-w-56 flex-1"
+              hint="Nhật ký kiểm toán sẽ giữ lại nguyên văn."
+            >
+              <Input
+                id="reason"
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                placeholder="Vì sao người này giữ vai này?"
+              />
+            </Field>
+
+            <Button
+              onClick={() => mAssign.mutate()}
+              disabled={roleCode === '' || reason.trim() === ''}
+              loading={mAssign.isPending}
+            >
+              Gán vai
+            </Button>
+          </CardContent>
+        </Card>
+      ) : null}
 
       {targetUserId === '' ? (
-        <p className="text-sm text-muted-foreground">Nhập id người dùng để xem vai hiện tại.</p>
+        <Card>
+          <EmptyState
+            icon={UserCog}
+            title="Chưa nhập người dùng"
+            description="Nhập id người dùng ở trên để xem những vai họ đang giữ."
+          />
+        </Card>
       ) : (
         <>
-          <h2 className="text-sm font-medium">Đang giữ ({active.length})</h2>
-          {active.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              Chưa giữ vai nào — người dùng này không làm được gì trong hệ.
-            </p>
-          ) : (
-            <table className="w-full text-left text-sm">
-              <thead className="text-muted-foreground">
-                <tr>
-                  <th className="p-2">Vai</th>
-                  <th className="p-2">Công ty</th>
-                  <th className="p-2">Hết hạn</th>
-                  <th className="p-2">Lý do</th>
-                  <th className="p-2" />
-                </tr>
-              </thead>
-              <tbody>
+          <div className="space-y-3">
+            <h2 className="text-sm font-semibold">Đang giữ ({active.length})</h2>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Vai</TableHead>
+                  <TableHead>Công ty</TableHead>
+                  <TableHead>Hết hạn</TableHead>
+                  <TableHead>Lý do</TableHead>
+                  <TableHead align="right">Thao tác</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {assignments.isPending ? <TableSkeleton rows={3} cols={5} /> : null}
+
+                {!assignments.isPending && active.length === 0 ? (
+                  <TableMessage colSpan={5}>
+                    <EmptyState
+                      icon={UserCog}
+                      title="Chưa giữ vai nào"
+                      description="Người dùng này chưa làm được gì trong hệ cho tới khi được gán vai."
+                    />
+                  </TableMessage>
+                ) : null}
+
                 {active.map((r) => (
-                  <tr key={r.id} className="border-t border-border">
-                    <td className="p-2">
-                      {r.roleCode} · {r.roleName}
-                    </td>
-                    <td className="p-2 text-muted-foreground">{r.companyId ?? 'mọi công ty'}</td>
-                    <td className="p-2">{r.validTo?.slice(0, 10) ?? 'vô thời hạn'}</td>
-                    <td className="p-2 text-muted-foreground">{r.grantReason ?? '—'}</td>
-                    <td className="p-2">
-                      {canRevoke && (
+                  <TableRow key={r.id}>
+                    <TableCell className="font-medium">
+                      {r.roleCode}
+                      <span className="text-muted-foreground"> · {r.roleName}</span>
+                    </TableCell>
+                    <TableCell>
+                      {r.companyId === null ? (
+                        <Badge variant="warning">mọi công ty</Badge>
+                      ) : (
+                        <span className="font-mono text-xs">{r.companyId}</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="tabular-nums">
+                      {r.validTo?.slice(0, 10) ?? (
+                        <span className="text-muted-foreground">vô thời hạn</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">{r.grantReason ?? '—'}</TableCell>
+                    <TableCell align="right">
+                      {canRevoke ? (
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() => mRevoke.mutate(r)}
                           disabled={mRevoke.isPending}
+                          loading={mRevoke.isPending && mRevoke.variables?.id === r.id}
+                          onClick={() => mRevoke.mutate(r)}
                         >
                           Thu hồi
                         </Button>
-                      )}
-                    </td>
-                  </tr>
+                      ) : null}
+                    </TableCell>
+                  </TableRow>
                 ))}
-              </tbody>
-            </table>
-          )}
+              </TableBody>
+            </Table>
+          </div>
 
-          {ended.length > 0 && (
-            <div>
-              <h2 className="text-sm font-medium text-muted-foreground">
+          {ended.length > 0 ? (
+            <div className="space-y-3">
+              <h2 className="text-sm font-semibold text-muted-foreground">
                 Đã hết hiệu lực ({ended.length})
               </h2>
-              <ul className="mt-1 space-y-1 text-sm text-muted-foreground">
-                {ended.map((r) => (
-                  <li key={r.id}>
-                    {r.roleCode} — hết hiệu lực {r.validTo?.slice(0, 10)}
-                    {r.grantReason === null ? '' : ` · ${r.grantReason}`}
-                  </li>
-                ))}
-              </ul>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Vai</TableHead>
+                    <TableHead>Hết hiệu lực</TableHead>
+                    <TableHead>Lý do</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {ended.map((r) => (
+                    <TableRow key={r.id} className="text-muted-foreground">
+                      <TableCell>{r.roleCode}</TableCell>
+                      <TableCell className="tabular-nums">{r.validTo?.slice(0, 10)}</TableCell>
+                      <TableCell>{r.grantReason ?? '—'}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
             </div>
-          )}
+          ) : null}
         </>
       )}
     </section>
