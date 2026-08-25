@@ -8,8 +8,10 @@ export interface PermissionGrant {
 export interface Subject {
   userId: string;
   departmentId?: string | null;
-  companyId?: string | null;
-  groupId?: string | null;
+  /** Companies the caller is bound to. Empty means bound to none, never to all. */
+  companyIds?: string[];
+  /** Cemeteries the caller covers — the hub axis, from authz.scope_assignments. */
+  siteIds?: string[];
   assignedIds?: string[];
 }
 
@@ -18,7 +20,8 @@ export interface ResourceTarget {
   ownerId?: string | null;
   departmentId?: string | null;
   companyId?: string | null;
-  groupId?: string | null;
+  /** The cemetery a record belongs to (GravePlot.cemeteryId and friends). */
+  siteId?: string | null;
 }
 
 export interface AccessRequest {

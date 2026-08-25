@@ -167,6 +167,32 @@ model RolePermission {
 }
 
 // Named CUSTOM scope definitions referenced by grants with scope = CUSTOM.
+/* Which cemeteries a person covers — the "hub" axis, kept deliberately separate from
+ * which role they hold (blueprint doc 16 §B.1, §D.10).
+ *
+ * Many-to-many by decision: one cemetery has several people, and one person may cover
+ * several cemeteries that are nowhere near each other. That is why this is its own table
+ * and not a `cemetery_id` column on the role assignment — a column can only ever express
+ * one site per role, and would have had to be undone later.
+ *
+ * Holding a role grants nothing here. A SITE-scoped grant reaches a record only when the
+ * record's cemetery is ALSO in this table for that user: effective access is the
+ * INTERSECTION of the two axes, never their sum.
+ */
+model ScopeAssignment {
+  id         String   @id
+  userId     String   @map("user_id")
+  cemeteryId String   @map("cemetery_id")
+  grantedBy  String?  @map("granted_by")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@unique([userId, cemeteryId])
+  @@index([userId])
+  @@index([cemeteryId])
+  @@map("scope_assignments")
+  @@schema("authz")
+}
+
 model ScopePolicy {
   id          String  @id
   code        String  @unique

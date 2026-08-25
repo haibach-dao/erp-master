@@ -20,9 +20,13 @@ export interface AuthUser {
   roles: string[];
   permissions: string[];
   scope: {
-    /** GROUP-scoped: no record restriction — every company. */
+    /** Broadest scope level held. SITE with an empty `siteIds` reaches nothing. */
+    level: 'GROUP' | 'COMPANY' | 'SITE' | 'NONE';
+    /** GROUP-scoped: no record restriction — every company, every cemetery. */
     unrestricted: boolean;
     companyIds: string[];
+    /** Cemeteries this user covers — the hub axis. */
+    siteIds: string[];
   };
 }
 

@@ -13,14 +13,27 @@ export interface PermissionMeta {
  * says nothing about which records it reaches, and the effective right is the
  * INTERSECTION of the two (blueprint doc 16 §D.2).
  */
+/* The broadest scope level a caller holds. NONE means they hold no usable scope at all
+ * and therefore reach no records — which is what someone with no assignment gets.
+ *
+ * The LEVEL has to be reported, not just "restricted or not". A caller whose reach is
+ * meant to stop at specific cemeteries but who has not been given any yet must reach
+ * NOTHING; without the level, an empty site list is indistinguishable from "this role is
+ * not site-bound", and the safe reading and the dangerous one swap places.
+ */
+export type ScopeLevel = 'GROUP' | 'COMPANY' | 'SITE' | 'NONE';
+
 export interface EffectiveAccess {
   roles: string[];
   permissions: string[];
   scope: {
+    level: ScopeLevel;
     /** A GROUP-scoped grant means "no record restriction" — every company, every site. */
     unrestricted: boolean;
     /** Companies this user is bound to. Empty + not unrestricted = bound to nothing. */
     companyIds: string[];
+    /** Cemeteries this user covers (authz.scope_assignments) — the hub axis. */
+    siteIds: string[];
   };
 }
 
@@ -65,35 +78,34 @@ export class PermissionsService {
     return row;
   }
 
-  /* Everything the UI and the company picker need, in one round trip.
+  /* Everything the UI and the pickers need, in one round trip.
    *
    * Deliberately derived here rather than trusted from the client: the web app used to
    * ask the user to type a companyId, which is the same as letting the caller choose
-   * their own scope. The list below is what the server is willing to accept from them.
-   *
-   * `siteIds` is NOT here yet — the site assignment table arrives with the scope wiring.
-   * Better to omit the axis than to publish an empty one and have the UI read it as
-   * "assigned to no site".
+   * their own scope. The lists below are what the server is willing to accept from them.
    */
   async getEffectiveAccess(userId: string): Promise<EffectiveAccess> {
-    const assignments = await this.prisma.roleAssignment.findMany({
-      where: { userId },
-      include: { role: { include: { rolePermissions: { include: { permission: true } } } } },
-    });
+    const [assignments, sites] = await Promise.all([
+      this.prisma.roleAssignment.findMany({
+        where: { userId },
+        include: { role: { include: { rolePermissions: { include: { permission: true } } } } },
+      }),
+      this.prisma.scopeAssignment.findMany({
+        where: { userId },
+        select: { cemeteryId: true },
+      }),
+    ]);
 
     const roles = new Set<string>();
     const permissions = new Set<string>();
     const companyIds = new Set<string>();
-    let unrestricted = false;
+    let level: ScopeLevel = 'NONE';
 
     for (const a of assignments) {
       roles.add(a.role.code);
       for (const rp of a.role.rolePermissions) {
         permissions.add(rp.permission.code);
-        const scope = a.scope ?? rp.scope;
-        if (scope === 'GROUP') {
-          unrestricted = true;
-        }
+        level = broader(level, a.scope ?? rp.scope);
       }
       if (a.companyId !== null) {
         companyIds.add(a.companyId);
@@ -103,7 +115,26 @@ export class PermissionsService {
     return {
       roles: [...roles].sort(),
       permissions: [...permissions].sort(),
-      scope: { unrestricted, companyIds: [...companyIds].sort() },
+      scope: {
+        level,
+        unrestricted: level === 'GROUP',
+        companyIds: [...companyIds].sort(),
+        siteIds: sites.map((s) => s.cemeteryId).sort(),
+      },
     };
   }
+}
+
+/* Widest wins, matching the union rule in getGrants above. That is the CURRENT rule and
+ * it is the wrong way round — the constitution asks for the narrowest intersection, so a
+ * person holding two roles should be bounded by the tighter one. Changing it is a
+ * separate step with its own blast radius; until then this function is honest about what
+ * the system actually does rather than about what it should do.
+ */
+const RANK: Record<string, number> = { NONE: 0, SITE: 1, COMPANY: 2, GROUP: 3 };
+
+function broader(current: ScopeLevel, candidate: string): ScopeLevel {
+  const next: ScopeLevel =
+    candidate === 'GROUP' || candidate === 'COMPANY' || candidate === 'SITE' ? candidate : 'NONE';
+  return (RANK[next] ?? 0) > (RANK[current] ?? 0) ? next : current;
 }

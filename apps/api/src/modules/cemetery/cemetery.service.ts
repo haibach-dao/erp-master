@@ -52,7 +52,11 @@ export class CemeteryService {
 
   async listCemeteries(companyId: string, actor: string | null) {
     await this.scope.assertCompany(actor, companyId);
-    return this.prisma.cemetery.findMany({ where: { companyId }, orderBy: { code: 'asc' } });
+    const sites = await this.scope.listSiteFilter(actor);
+    return this.prisma.cemetery.findMany({
+      where: { companyId, ...(sites === null ? {} : { id: { in: sites } }) },
+      orderBy: { code: 'asc' },
+    });
   }
 
   async createGraveType(dto: CreateGraveTypeDto, actor: string | null) {
@@ -80,6 +84,7 @@ export class CemeteryService {
 
   async createGravePlot(dto: CreateGravePlotDto, actor: string | null) {
     await this.scope.assertCompany(actor, dto.companyId);
+    await this.scope.assertSite(actor, dto.cemeteryId);
     return this.wrapUnique(
       () =>
         this.prisma.gravePlot.create({
@@ -109,7 +114,18 @@ export class CemeteryService {
     await this.scope.assertCompany(actor, companyId);
     const where: Prisma.GravePlotWhereInput = { companyId };
     if (status !== undefined) where.status = status;
-    if (cemeteryId !== undefined) where.cemeteryId = cemeteryId;
+    if (cemeteryId !== undefined) {
+      // Asking for one cemetery: it has to be one the caller covers.
+      await this.scope.assertSite(actor, cemeteryId);
+      where.cemeteryId = cemeteryId;
+    } else {
+      // Asking for the whole company: narrow a site-bound caller to their own cemeteries
+      // rather than answering with the company's entire inventory.
+      const sites = await this.scope.listSiteFilter(actor);
+      if (sites !== null) {
+        where.cemeteryId = { in: sites };
+      }
+    }
     const plots = await this.prisma.gravePlot.findMany({
       where,
       orderBy: { plotCode: 'asc' },

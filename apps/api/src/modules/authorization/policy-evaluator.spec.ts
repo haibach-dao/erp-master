@@ -36,8 +36,8 @@ describe('PolicyEvaluator.can', () => {
   const subject = {
     userId: 'u1',
     departmentId: 'd1',
-    companyId: 'c1',
-    groupId: 'g1',
+    companyIds: ['c1'],
+    siteIds: ['s1'],
     assignedIds: ['r1'],
   };
   const req = (permission: string, target?: AccessRequest['target']): AccessRequest => ({
@@ -51,10 +51,38 @@ describe('PolicyEvaluator.can', () => {
     expect(evaluator.can(req('cemetery.grave.view', { companyId: 'c1' }), grants)).toBe(false);
   });
 
-  it('COMPANY grant allows same company, denies other', () => {
+  it('COMPANY grant allows a company the subject holds, denies another', () => {
     const grants: PermissionGrant[] = [{ permission: 'cemetery.grave.view', scope: 'COMPANY' }];
     expect(evaluator.can(req('cemetery.grave.view', { companyId: 'c1' }), grants)).toBe(true);
     expect(evaluator.can(req('cemetery.grave.view', { companyId: 'c2' }), grants)).toBe(false);
+  });
+
+  it('SITE grant is bounded to the cemeteries the subject covers', () => {
+    const grants: PermissionGrant[] = [{ permission: 'cemetery.grave.view', scope: 'SITE' }];
+    expect(evaluator.can(req('cemetery.grave.view', { siteId: 's1' }), grants)).toBe(true);
+    expect(evaluator.can(req('cemetery.grave.view', { siteId: 's2' }), grants)).toBe(false);
+  });
+
+  /* GROUP now means NO RECORD RESTRICTION. The previous implementation compared
+   * target.groupId to subject.groupId, and since no table in the schema has a group_id
+   * column that comparison could only ever be false — wiring the evaluator up would have
+   * locked out every top-level role on every endpoint. */
+  it('GROUP grant reaches every record, including one with no attributes at all', () => {
+    const grants: PermissionGrant[] = [{ permission: 'cemetery.grave.view', scope: 'GROUP' }];
+    expect(evaluator.can(req('cemetery.grave.view', { companyId: 'c9' }), grants)).toBe(true);
+    expect(evaluator.can(req('cemetery.grave.view', {}), grants)).toBe(true);
+    expect(evaluator.can(req('cemetery.grave.view'), grants)).toBe(true);
+  });
+
+  it('a subject bound to nothing reaches nothing', () => {
+    const empty = { userId: 'u2', companyIds: [], siteIds: [] };
+    const grants: PermissionGrant[] = [{ permission: 'cemetery.grave.view', scope: 'COMPANY' }];
+    expect(
+      evaluator.can(
+        { permission: 'cemetery.grave.view', subject: empty, target: { companyId: 'c1' } },
+        grants,
+      ),
+    ).toBe(false);
   });
 
   it('DEPARTMENT grant is bounded to the subject department', () => {
