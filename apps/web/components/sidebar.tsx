@@ -26,6 +26,7 @@ const ITEMS: { href: string; label: string; permissions: string[] | null }[] = [
   },
   { href: '/audit', label: 'Audit', permissions: ['audit.event.view'] },
   { href: '/organization', label: 'Tổ chức', permissions: ['org.company.view'] },
+  { href: '/organization/scope', label: 'Gán phạm vi', permissions: ['authz.scope.assign'] },
 ];
 
 export function Sidebar() {

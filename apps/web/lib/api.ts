@@ -394,3 +394,29 @@ export const verifyBurial = (id: string): Promise<BurialRecord> =>
   apiFetch(`/api/v1/burials/${id}/verify`, { method: 'POST' });
 export const completeBurial = (id: string): Promise<BurialRecord> =>
   apiFetch(`/api/v1/burials/${id}/complete`, { method: 'POST' });
+
+// --- Phân quyền: trục hub (ai phụ trách nghĩa trang nào) ---
+
+export interface ScopeAssignment {
+  id: string;
+  cemeteryId: string;
+  cemetery: { id: string; code: string; name: string; companyId: string } | null;
+  validFrom: string;
+  validTo: string | null;
+  grantedBy: string | null;
+}
+
+export const listScopeAssignments = (userId: string): Promise<ScopeAssignment[]> =>
+  apiFetch(`/api/v1/authz/scope-assignments?userId=${encodeURIComponent(userId)}`);
+
+export const assignScope = (userId: string, cemeteryId: string): Promise<ScopeAssignment> =>
+  apiFetch('/api/v1/authz/scope-assignments', {
+    method: 'POST',
+    body: JSON.stringify({ userId, cemeteryId }),
+  });
+
+export const revokeScope = (userId: string, cemeteryId: string): Promise<ScopeAssignment> =>
+  apiFetch(
+    `/api/v1/authz/scope-assignments/${encodeURIComponent(userId)}/${encodeURIComponent(cemeteryId)}`,
+    { method: 'DELETE' },
+  );
