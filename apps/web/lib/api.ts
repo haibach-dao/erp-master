@@ -10,9 +10,20 @@ export class ApiError extends Error {
   }
 }
 
+/* Identity plus what it may do. `permissions` and `scope` are the server's own answer
+ * to "what is this caller allowed to touch" — the UI reads them so it can stop asking
+ * the user to type a companyId, which was the same as letting the caller pick their
+ * own scope. The server re-checks everything regardless. */
 export interface AuthUser {
   id: string;
   email: string;
+  roles: string[];
+  permissions: string[];
+  scope: {
+    /** GROUP-scoped: no record restriction — every company. */
+    unrestricted: boolean;
+    companyIds: string[];
+  };
 }
 
 // Tokens live in localStorage (skeleton). Production should use httpOnly cookies.

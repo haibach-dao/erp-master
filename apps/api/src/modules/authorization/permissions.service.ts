@@ -9,6 +9,21 @@ export interface PermissionMeta {
   sensitivity: string;
 }
 
+/* What a caller may do, and where. Two axes kept apart on purpose: holding a permission
+ * says nothing about which records it reaches, and the effective right is the
+ * INTERSECTION of the two (blueprint doc 16 §D.2).
+ */
+export interface EffectiveAccess {
+  roles: string[];
+  permissions: string[];
+  scope: {
+    /** A GROUP-scoped grant means "no record restriction" — every company, every site. */
+    unrestricted: boolean;
+    /** Companies this user is bound to. Empty + not unrestricted = bound to nothing. */
+    companyIds: string[];
+  };
+}
+
 @Injectable()
 export class PermissionsService {
   constructor(private readonly prisma: PrismaService) {}
@@ -48,5 +63,47 @@ export class PermissionsService {
       select: { code: true, wildcardExempt: true, sensitivity: true },
     });
     return row;
+  }
+
+  /* Everything the UI and the company picker need, in one round trip.
+   *
+   * Deliberately derived here rather than trusted from the client: the web app used to
+   * ask the user to type a companyId, which is the same as letting the caller choose
+   * their own scope. The list below is what the server is willing to accept from them.
+   *
+   * `siteIds` is NOT here yet — the site assignment table arrives with the scope wiring.
+   * Better to omit the axis than to publish an empty one and have the UI read it as
+   * "assigned to no site".
+   */
+  async getEffectiveAccess(userId: string): Promise<EffectiveAccess> {
+    const assignments = await this.prisma.roleAssignment.findMany({
+      where: { userId },
+      include: { role: { include: { rolePermissions: { include: { permission: true } } } } },
+    });
+
+    const roles = new Set<string>();
+    const permissions = new Set<string>();
+    const companyIds = new Set<string>();
+    let unrestricted = false;
+
+    for (const a of assignments) {
+      roles.add(a.role.code);
+      for (const rp of a.role.rolePermissions) {
+        permissions.add(rp.permission.code);
+        const scope = a.scope ?? rp.scope;
+        if (scope === 'GROUP') {
+          unrestricted = true;
+        }
+      }
+      if (a.companyId !== null) {
+        companyIds.add(a.companyId);
+      }
+    }
+
+    return {
+      roles: [...roles].sort(),
+      permissions: [...permissions].sort(),
+      scope: { unrestricted, companyIds: [...companyIds].sort() },
+    };
   }
 }
