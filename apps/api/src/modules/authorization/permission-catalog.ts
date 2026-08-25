@@ -327,6 +327,17 @@ const CEMETERY_READ_ALL = [
  */
 const WILDCARD_EXEMPT_CODES = PERMISSION_CATALOG.filter((d) => d.wildcardExempt).map((d) => d.code);
 
+/* Quản trị chính hệ phân quyền — `authz.role.*`, `role_permission.grant/revoke`,
+ * `role_assignment.assign/revoke`, `scope.assign` — đều là leaf S3, nên ADMIN đã cầm
+ * sẵn qua danh sách trên. Không liệt kê lại ở đây: cấp trùng một mã hai lần chỉ tạo ra
+ * hai dòng grant nói cùng một điều, và bản chiếu quyền đọc thành nhiễu.
+ *
+ * Chủ doanh nghiệp chốt: ADMIN gán vai và phạm vi cho người khác, sửa được nội dung
+ * vai, và UỶ QUYỀN được — ai được cấp những mã này thì cũng làm được. Leo thang là hệ
+ * quả đã biết và đã được chấp nhận, đổi lấy tính linh hoạt vận hành; bù lại MỌI thao
+ * tác ghi lên `authz` đều phát audit event.
+ */
+
 export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
   // --- Vai cũ. Giữ nguyên tới khi wildcard bị siết, nếu không là khoá cửa cả hệ.
   ADMIN: {

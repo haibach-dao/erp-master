@@ -4,6 +4,7 @@ import { JwtService } from '@nestjs/jwt';
 import { hash, verify } from '@node-rs/argon2';
 import { ulid } from 'ulid';
 import { PrismaService } from '../../prisma/prisma.service';
+import { PermissionsService, type EffectiveAccess } from '../authorization/permissions.service';
 
 const ACCESS_TTL = '15m';
 const REFRESH_TTL_DAYS = 7;
@@ -33,6 +34,7 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
+    private readonly permissions: PermissionsService,
   ) {}
 
   private accessSecret(): string {
@@ -132,7 +134,14 @@ export class AuthService {
     });
   }
 
-  async me(userId: string): Promise<{ id: string; email: string }> {
+  /* Identity plus what that identity may actually do — roles, effective permission codes
+   * and the companies the caller is bound to.
+   *
+   * The UI needs this to stop guessing. Hiding a menu item the caller cannot use is a
+   * courtesy, never a control: the same answer is enforced by the guard on every request,
+   * so a client that ignores this payload gains nothing.
+   */
+  async me(userId: string): Promise<{ id: string; email: string } & EffectiveAccess> {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       select: { id: true, email: true },
@@ -140,7 +149,8 @@ export class AuthService {
     if (!user) {
       throw new UnauthorizedException();
     }
-    return user;
+    const access = await this.permissions.getEffectiveAccess(userId);
+    return { ...user, ...access };
   }
 
   async verifyAccess(token: string): Promise<AuthUser> {

@@ -196,7 +196,7 @@ describe('tách nhiệm vụ ở mức vai (doc 16 §E.3)', () => {
     expect(held, 'QT_HE_THONG giữ leaf bị cấm').toEqual([]);
   });
 
-  it('không ai được cấp quyền cấp/thu quyền ở bước này — cửa duy nhất là migration + review Git', () => {
+  it('chỉ ADMIN được cầm quyền cấp/thu quyền — và đó là một quyết định, không phải sơ suất', () => {
     const selfService = [
       'authz.role.create',
       'authz.role.update',
@@ -206,10 +206,14 @@ describe('tách nhiệm vụ ở mức vai (doc 16 §E.3)', () => {
       'authz.role_assignment.revoke',
       'authz.scope.assign',
     ];
-    const holders = ROLE_ENTRIES.filter(([code]) => code !== 'ADMIN')
-      .filter(([code]) => codesOf(code).some((c) => selfService.includes(c)))
-      .map(([code]) => code);
-    expect(holders).toEqual([]);
+    /* Chủ doanh nghiệp chốt: ADMIN cấp/thu quyền được, và uỷ quyền được cho người khác.
+     * Test này KHÔNG chặn điều đó — nó chặn việc một vai khác lặng lẽ có thêm mã cấp
+     * quyền mà không ai để ý. Muốn thêm vai vào danh sách thì phải sửa test này, tức
+     * phải có người đọc. */
+    const holders = ROLE_ENTRIES.filter(([code]) =>
+      codesOf(code).some((c) => selfService.includes(c)),
+    ).map(([code]) => code);
+    expect(holders).toEqual(['ADMIN']);
   });
 
   it('vai khẩn cấp BREAK_GLASS chưa được tạo (chưa có valid_to thì nó là siêu quyền vĩnh viễn)', () => {

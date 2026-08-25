@@ -10,9 +10,26 @@ export class ApiError extends Error {
   }
 }
 
+/* Identity plus what it may do. `permissions` and `scope` are the server's own answer
+ * to "what is this caller allowed to touch" — the UI reads them so it can stop asking
+ * the user to type a companyId, which was the same as letting the caller pick their
+ * own scope. The server re-checks everything regardless. */
 export interface AuthUser {
   id: string;
   email: string;
+  roles: string[];
+  permissions: string[];
+  /** Codes explicitly denied. Deny beats every grant — never render past this. */
+  denied: string[];
+  scope: {
+    /** Broadest scope level held. SITE with an empty `siteIds` reaches nothing. */
+    level: 'GROUP' | 'COMPANY' | 'SITE' | 'NONE';
+    /** GROUP-scoped: no record restriction — every company, every cemetery. */
+    unrestricted: boolean;
+    companyIds: string[];
+    /** Cemeteries this user covers — the hub axis. */
+    siteIds: string[];
+  };
 }
 
 // Tokens live in localStorage (skeleton). Production should use httpOnly cookies.
@@ -377,3 +394,94 @@ export const verifyBurial = (id: string): Promise<BurialRecord> =>
   apiFetch(`/api/v1/burials/${id}/verify`, { method: 'POST' });
 export const completeBurial = (id: string): Promise<BurialRecord> =>
   apiFetch(`/api/v1/burials/${id}/complete`, { method: 'POST' });
+
+// --- Phân quyền: trục hub (ai phụ trách nghĩa trang nào) ---
+
+export interface ScopeAssignment {
+  id: string;
+  cemeteryId: string;
+  cemetery: { id: string; code: string; name: string; companyId: string } | null;
+  validFrom: string;
+  validTo: string | null;
+  grantedBy: string | null;
+}
+
+export const listScopeAssignments = (userId: string): Promise<ScopeAssignment[]> =>
+  apiFetch(`/api/v1/authz/scope-assignments?userId=${encodeURIComponent(userId)}`);
+
+export const assignScope = (userId: string, cemeteryId: string): Promise<ScopeAssignment> =>
+  apiFetch('/api/v1/authz/scope-assignments', {
+    method: 'POST',
+    body: JSON.stringify({ userId, cemeteryId }),
+  });
+
+export const revokeScope = (userId: string, cemeteryId: string): Promise<ScopeAssignment> =>
+  apiFetch(
+    `/api/v1/authz/scope-assignments/${encodeURIComponent(userId)}/${encodeURIComponent(cemeteryId)}`,
+    { method: 'DELETE' },
+  );
+
+// --- Phân quyền: ma trận vai × quyền, và gán vai cho người ---
+
+export interface RoleRow {
+  id: string;
+  code: string;
+  name: string;
+  description: string | null;
+  grants: { code: string; scope: string; sensitivity: string }[];
+}
+
+export interface PermissionRow {
+  code: string;
+  description: string | null;
+  sensitivity: string;
+  wildcardExempt: boolean;
+}
+
+export interface RoleAssignmentRow {
+  id: string;
+  roleCode: string;
+  roleName: string;
+  companyId: string | null;
+  scope: string | null;
+  validFrom: string;
+  validTo: string | null;
+  grantedBy: string | null;
+  grantReason: string | null;
+}
+
+export const listRoles = (): Promise<RoleRow[]> => apiFetch('/api/v1/authz/roles');
+
+export const listPermissionCatalog = (): Promise<PermissionRow[]> =>
+  apiFetch('/api/v1/authz/permissions');
+
+export const grantPermission = (
+  roleCode: string,
+  permissionCode: string,
+  scope: string,
+): Promise<unknown> =>
+  apiFetch('/api/v1/authz/role-permissions', {
+    method: 'POST',
+    body: JSON.stringify({ roleCode, permissionCode, scope }),
+  });
+
+export const revokePermission = (roleCode: string, permissionCode: string): Promise<unknown> =>
+  apiFetch(
+    `/api/v1/authz/role-permissions/${encodeURIComponent(roleCode)}/${encodeURIComponent(permissionCode)}`,
+    { method: 'DELETE' },
+  );
+
+export const listRoleAssignments = (userId: string): Promise<RoleAssignmentRow[]> =>
+  apiFetch(`/api/v1/authz/role-assignments?userId=${encodeURIComponent(userId)}`);
+
+export const assignRole = (input: {
+  userId: string;
+  roleCode: string;
+  companyId?: string;
+  validTo?: string;
+  reason: string;
+}): Promise<unknown> =>
+  apiFetch('/api/v1/authz/role-assignments', { method: 'POST', body: JSON.stringify(input) });
+
+export const revokeRoleAssignment = (id: string): Promise<unknown> =>
+  apiFetch(`/api/v1/authz/role-assignments/${encodeURIComponent(id)}`, { method: 'DELETE' });

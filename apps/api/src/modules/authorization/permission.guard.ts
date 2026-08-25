@@ -16,6 +16,15 @@ import { permissionMatches } from './policy-evaluator';
  *  3. A wildcard grant cannot reach a leaf marked `wildcard_exempt` (every S3 leaf).
  *     Naming the leaf is the only way in.
  *
+ * Before any of that, the ORDERED RULE CHAIN gets first say (firewall semantics): rules
+ * are walked by ascending priority and the first match decides. A DENY rule refuses
+ * outright; an ALLOW rule admits without consulting the role matrix at all. Only when no
+ * rule matches does the matrix answer — and if it grants nothing, the request is refused.
+ * That final refusal IS the "deny all" at the bottom of the chain.
+ *
+ * Roles combine by UNION, so nothing narrows a granted right; the rule chain is the only
+ * mechanism that can take one away.
+ *
  * Still NOT enforced here: which records the caller may touch. This guard answers "may
  * you do this at all", never "may you do this to THAT row" — the scope layer is separate
  * and not wired yet (doc 16 §D.10). Do not read a green guard as record-level control.
@@ -46,6 +55,13 @@ export class PermissionGuard implements CanActivate {
     const meta = await this.permissions.getPermissionMeta(required);
     if (meta === null) {
       throw new ForbiddenException(`Mã quyền không có trong danh mục: ${required}`);
+    }
+    const ruling = await this.permissions.evaluateRules(userId, required);
+    if (ruling === 'DENY') {
+      throw new ForbiddenException(`Bị luật truy cập chặn: ${required}`);
+    }
+    if (ruling === 'ALLOW') {
+      return true;
     }
     const grants = await this.permissions.getGrants(userId);
     const ok = grants.some((g) =>

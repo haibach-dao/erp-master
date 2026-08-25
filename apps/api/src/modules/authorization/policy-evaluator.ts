@@ -57,14 +57,21 @@ export class PolicyEvaluator {
     const target: ResourceTarget | undefined = req.target;
 
     switch (scope) {
-      case 'COMPANY':
-        return eq(target?.companyId, subject.companyId);
-      case 'DEPARTMENT':
-        return eq(target?.departmentId, subject.departmentId);
+      /* GROUP means NO RECORD RESTRICTION — decided by the business owner, and the only
+       * reading the data supports: there is no `group_id` column anywhere in the schema,
+       * so the previous implementation (compare target.groupId to subject.groupId) could
+       * only ever return false. Wiring this evaluator up without fixing that would have
+       * refused every request from the top-level roles. */
       case 'GROUP':
-        return eq(target?.groupId, subject.groupId);
+        return true;
+      case 'COMPANY':
+        return includes(subject.companyIds, target?.companyId);
+      case 'SITE':
+        return includes(subject.siteIds, target?.siteId);
       case 'SELF':
         return eq(target?.ownerId, subject.userId);
+      case 'DEPARTMENT':
+        return eq(target?.departmentId, subject.departmentId);
       case 'ASSIGNED':
         return (
           target?.id != null &&
@@ -82,4 +89,10 @@ export class PolicyEvaluator {
 // Equal AND both present (a null/undefined on either side never grants access).
 function eq(a: string | null | undefined, b: string | null | undefined): boolean {
   return a != null && b != null && a === b;
+}
+
+// The target must name a value AND the subject must hold it. An unknown target or an
+// empty subject list denies — being assigned to nothing must never mean everything.
+function includes(held: string[] | undefined, value: string | null | undefined): boolean {
+  return value != null && held !== undefined && held.includes(value);
 }

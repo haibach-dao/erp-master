@@ -22,6 +22,7 @@ function build(opts: {
   isPublic?: boolean;
   meta?: PermissionMeta | null;
   grants?: PermissionGrant[];
+  ruling?: 'ALLOW' | 'DENY' | 'NO_MATCH';
 }) {
   const reflector = {
     getAllAndOverride: (key: string) => {
@@ -38,6 +39,7 @@ function build(opts: {
   const permissions = {
     getPermissionMeta: vi.fn().mockResolvedValue(opts.meta ?? null),
     getGrants: vi.fn().mockResolvedValue(opts.grants ?? []),
+    evaluateRules: vi.fn().mockResolvedValue(opts.ruling ?? 'NO_MATCH'),
   } as unknown as PermissionsService;
 
   return new PermissionGuard(reflector, permissions);
@@ -124,5 +126,55 @@ describe('PermissionGuard — wildcard reach', () => {
       grants: [{ permission: 'service.catalog.view', scope: 'COMPANY' }],
     });
     await expect(guard.canActivate(context('u1'))).rejects.toThrow(/Thiếu quyền/);
+  });
+});
+
+/* Firewall semantics: the ordered rule chain gets first say. A DENY refuses outright; an
+ * ALLOW admits without consulting the role matrix; only NO_MATCH falls through to the
+ * matrix — and a matrix that grants nothing produces the refusal that IS the implicit
+ * "deny all" at the bottom of the chain.
+ */
+describe('PermissionGuard — ordered rule chain decides first', () => {
+  it('a DENY ruling refuses even a caller granted the leaf by name', async () => {
+    const guard = build({
+      required: 'crm.person.view_sensitive',
+      meta: S3,
+      grants: [{ permission: 'crm.person.view_sensitive', scope: 'GROUP' }],
+      ruling: 'DENY',
+    });
+    await expect(guard.canActivate(context('u1'))).rejects.toThrow(/Bị luật truy cập chặn/);
+  });
+
+  it('an ALLOW ruling admits a caller the role matrix never granted anything', async () => {
+    const guard = build({
+      required: 'crm.person.view_sensitive',
+      meta: S3,
+      grants: [],
+      ruling: 'ALLOW',
+    });
+    await expect(guard.canActivate(context('u1'))).resolves.toBe(true);
+  });
+
+  it('NO_MATCH falls through to the role matrix', async () => {
+    const granted = build({
+      required: 'cemetery.plot.view',
+      meta: S1,
+      grants: [{ permission: 'cemetery.plot.view', scope: 'COMPANY' }],
+      ruling: 'NO_MATCH',
+    });
+    await expect(granted.canActivate(context('u1'))).resolves.toBe(true);
+
+    const bare = build({
+      required: 'cemetery.plot.view',
+      meta: S1,
+      grants: [],
+      ruling: 'NO_MATCH',
+    });
+    await expect(bare.canActivate(context('u1'))).rejects.toThrow(/Thiếu quyền/);
+  });
+
+  it('an unknown code is still refused before the chain can allow it', async () => {
+    const guard = build({ required: 'crm.person.nope', meta: null, ruling: 'ALLOW' });
+    await expect(guard.canActivate(context('u1'))).rejects.toThrow(/không có trong danh mục/);
   });
 });

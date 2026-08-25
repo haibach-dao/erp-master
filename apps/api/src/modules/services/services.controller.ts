@@ -27,8 +27,8 @@ export class ServicesController {
 
   @Get('catalog')
   @RequirePermission('service.catalog.view')
-  listCatalog(@Query('companyId') companyId: string) {
-    return this.svc.listCatalog(companyId);
+  listCatalog(@Query('companyId') companyId: string, @Req() req: Request) {
+    return this.svc.listCatalog(companyId, this.actor(req));
   }
 
   @Post('subscriptions')
@@ -59,10 +59,11 @@ export class ServicesController {
   @Get('revenue')
   @RequirePermission('service.revenue.view')
   revenue(
+    @Req() req: Request,
     @Query('companyId') companyId: string,
     @Query('from') from?: string,
     @Query('to') to?: string,
   ) {
-    return this.svc.revenue(companyId, from, to);
+    return this.svc.revenue(companyId, this.actor(req), from, to);
   }
 }

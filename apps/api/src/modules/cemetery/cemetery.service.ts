@@ -2,6 +2,7 @@ import { ConflictException, Injectable, NotFoundException } from '@nestjs/common
 import { Prisma } from '@prisma/client';
 import { ulid } from 'ulid';
 import { PrismaService } from '../../prisma/prisma.service';
+import { ScopeService } from '../authorization/scope.service';
 import type {
   ChangeStatusDto,
   CreateCemeteryDto,
@@ -12,7 +13,10 @@ import type {
 
 @Injectable()
 export class CemeteryService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly scope: ScopeService,
+  ) {}
 
   listRelationshipTypes() {
     return this.prisma.relationshipType.findMany({ orderBy: { code: 'asc' } });
@@ -25,11 +29,18 @@ export class CemeteryService {
     );
   }
 
-  listCompanies() {
-    return this.prisma.company.findMany({ orderBy: { createdAt: 'asc' } });
+  // The company picker is built from this list, so it must already be the caller's
+  // scope: returning every company invites them to pick one they cannot use.
+  async listCompanies(actor: string | null) {
+    const allowed = await this.scope.visibleCompanyIds(actor);
+    return this.prisma.company.findMany({
+      ...(allowed === null ? {} : { where: { id: { in: allowed } } }),
+      orderBy: { createdAt: 'asc' },
+    });
   }
 
-  createCemetery(dto: CreateCemeteryDto) {
+  async createCemetery(dto: CreateCemeteryDto, actor: string | null) {
+    await this.scope.assertCompany(actor, dto.companyId);
     return this.wrapUnique(
       () =>
         this.prisma.cemetery.create({
@@ -39,11 +50,17 @@ export class CemeteryService {
     );
   }
 
-  listCemeteries(companyId: string) {
-    return this.prisma.cemetery.findMany({ where: { companyId }, orderBy: { code: 'asc' } });
+  async listCemeteries(companyId: string, actor: string | null) {
+    await this.scope.assertCompany(actor, companyId);
+    const sites = await this.scope.listSiteFilter(actor);
+    return this.prisma.cemetery.findMany({
+      where: { companyId, ...(sites === null ? {} : { id: { in: sites } }) },
+      orderBy: { code: 'asc' },
+    });
   }
 
-  createGraveType(dto: CreateGraveTypeDto) {
+  async createGraveType(dto: CreateGraveTypeDto, actor: string | null) {
+    await this.scope.assertCompany(actor, dto.companyId);
     return this.wrapUnique(
       () =>
         this.prisma.graveType.create({
@@ -60,11 +77,14 @@ export class CemeteryService {
     );
   }
 
-  listGraveTypes(companyId: string) {
+  async listGraveTypes(companyId: string, actor: string | null) {
+    await this.scope.assertCompany(actor, companyId);
     return this.prisma.graveType.findMany({ where: { companyId }, orderBy: { code: 'asc' } });
   }
 
-  createGravePlot(dto: CreateGravePlotDto) {
+  async createGravePlot(dto: CreateGravePlotDto, actor: string | null) {
+    await this.scope.assertCompany(actor, dto.companyId);
+    await this.scope.assertSite(actor, dto.cemeteryId);
     return this.wrapUnique(
       () =>
         this.prisma.gravePlot.create({
@@ -85,10 +105,27 @@ export class CemeteryService {
     );
   }
 
-  async listGravePlots(companyId: string, status?: string, cemeteryId?: string) {
+  async listGravePlots(
+    companyId: string,
+    actor: string | null,
+    status?: string,
+    cemeteryId?: string,
+  ) {
+    await this.scope.assertCompany(actor, companyId);
     const where: Prisma.GravePlotWhereInput = { companyId };
     if (status !== undefined) where.status = status;
-    if (cemeteryId !== undefined) where.cemeteryId = cemeteryId;
+    if (cemeteryId !== undefined) {
+      // Asking for one cemetery: it has to be one the caller covers.
+      await this.scope.assertSite(actor, cemeteryId);
+      where.cemeteryId = cemeteryId;
+    } else {
+      // Asking for the whole company: narrow a site-bound caller to their own cemeteries
+      // rather than answering with the company's entire inventory.
+      const sites = await this.scope.listSiteFilter(actor);
+      if (sites !== null) {
+        where.cemeteryId = { in: sites };
+      }
+    }
     const plots = await this.prisma.gravePlot.findMany({
       where,
       orderBy: { plotCode: 'asc' },

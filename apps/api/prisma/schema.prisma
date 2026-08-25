@@ -119,18 +119,57 @@ model Role {
 // Assigns a role to a user (optionally scoped to a company). No FK to iam.users to keep
 // it simple; userId is the iam.users id.
 model RoleAssignment {
-  id        String   @id
-  userId    String   @map("user_id")
-  roleId    String   @map("role_id")
-  companyId String?  @map("company_id")
-  scope     String? // optional scope override for this assignment
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  id          String    @id
+  userId      String    @map("user_id")
+  roleId      String    @map("role_id")
+  companyId   String?   @map("company_id")
+  scope       String? // optional scope override for this assignment
+  validFrom   DateTime  @default(now()) @map("valid_from") @db.Timestamptz(6)
+  /// null = vô thời hạn. Có giá trị = quyền TỰ RỤNG, không cần ai nhớ đi thu hồi.
+  validTo     DateTime? @map("valid_to") @db.Timestamptz(6)
+  grantedBy   String?   @map("granted_by")
+  grantReason String?   @map("grant_reason")
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
   role Role @relation(fields: [roleId], references: [id])
 
   @@unique([userId, roleId, companyId])
   @@index([userId])
   @@map("role_assignments")
+  @@schema("authz")
+}
+
+/**
+ * Luật truy cập có THỨ TỰ — mô hình tường lửa.
+ * Duyệt từ `priority` nhỏ đến lớn; luật nào KHỚP TRƯỚC thì luật đó quyết, và dừng.
+ * Không luật nào khớp thì rơi xuống ma trận vai. Không grant nào phủ thì 403 — đó là
+ * "deny all" ngầm ở cuối chuỗi, do PermissionGuard mặc-định-từ-chối đảm nhiệm.
+ * Hệ quả phải biết: một luật ALLOW nằm TRÊN ma trận vai. Nó cấp được thứ không vai nào
+ * cấp, kể cả leaf S3 mà grant wildcard không với tới. Đó là bản chất của mô hình tường
+ * lửa, không phải lỗi — nên `reason` là bắt buộc và thứ tự phải đọc được
+ * (scripts/authz-rules.ts in ra đúng chuỗi luật theo thứ tự duyệt).
+ * `subjectUserId = null` + `roleCode = null` = áp cho mọi người.
+ */
+model AccessRule {
+  id             String    @id
+  /// Nhỏ hơn xét trước. Bằng nhau thì xét theo createdAt để thứ tự luôn xác định.
+  priority       Int
+  /// ALLOW | DENY
+  effect         String
+  subjectUserId  String?   @map("subject_user_id")
+  roleCode       String?   @map("role_code")
+  /// Mẫu mã quyền, 3 đoạn, cho phép '*' (ví dụ `crm.person.*`).
+  permissionCode String    @map("permission_code")
+  reason         String
+  createdBy      String?   @map("created_by")
+  validFrom      DateTime  @default(now()) @map("valid_from") @db.Timestamptz(6)
+  validTo        DateTime? @map("valid_to") @db.Timestamptz(6)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([priority])
+  @@index([subjectUserId])
+  @@index([permissionCode])
+  @@map("access_rules")
   @@schema("authz")
 }
 
@@ -167,6 +206,33 @@ model RolePermission {
 }
 
 // Named CUSTOM scope definitions referenced by grants with scope = CUSTOM.
+/**
+ * Which cemeteries a person covers — the "hub" axis, kept deliberately separate from
+ * which role they hold (blueprint doc 16 §B.1, §D.10).
+ * Many-to-many by decision: one cemetery has several people, and one person may cover
+ * several cemeteries that are nowhere near each other. That is why this is its own table
+ * and not a `cemetery_id` column on the role assignment — a column can only ever express
+ * one site per role, and would have had to be undone later.
+ * Holding a role grants nothing here. A SITE-scoped grant reaches a record only when the
+ * record's cemetery is ALSO in this table for that user: effective access is the
+ * INTERSECTION of the two axes, never their sum.
+ */
+model ScopeAssignment {
+  id         String    @id
+  userId     String    @map("user_id")
+  cemeteryId String    @map("cemetery_id")
+  grantedBy  String?   @map("granted_by")
+  validFrom  DateTime  @default(now()) @map("valid_from") @db.Timestamptz(6)
+  validTo    DateTime? @map("valid_to") @db.Timestamptz(6)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@unique([userId, cemeteryId])
+  @@index([userId])
+  @@index([cemeteryId])
+  @@map("scope_assignments")
+  @@schema("authz")
+}
+
 model ScopePolicy {
   id          String  @id
   code        String  @unique
@@ -459,11 +525,11 @@ model GraveUsageRight {
 
 // M4: deceased person (identifies a Person) + burial records.
 model DeceasedPerson {
-  id               String    @id
-  personId         String    @unique @map("person_id")
-  dateOfDeath      DateTime? @map("date_of_death") @db.Date
-  deathCertFileId  String?   @map("death_cert_file_id") // files.file_objects.id (restricted)
-  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  id              String    @id
+  personId        String    @unique @map("person_id")
+  dateOfDeath     DateTime? @map("date_of_death") @db.Date
+  deathCertFileId String?   @map("death_cert_file_id") // files.file_objects.id (restricted)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
   person        Person         @relation(fields: [personId], references: [id])
   burialRecords BurialRecord[]
@@ -526,7 +592,7 @@ model ServiceSubscription {
   status                 String   @default("Active") // Active | Expired | Renewed | Cancelled
   previousSubscriptionId String?  @map("previous_subscription_id")
   createdAt              DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt             DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  updatedAt              DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   catalog      ServiceCatalog       @relation(fields: [serviceCatalogId], references: [id])
   transactions ServiceTransaction[]

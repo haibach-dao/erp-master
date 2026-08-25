@@ -2,6 +2,7 @@ import { ConflictException, Injectable, NotFoundException } from '@nestjs/common
 import { Prisma } from '@prisma/client';
 import { ulid } from 'ulid';
 import { PrismaService } from '../../prisma/prisma.service';
+import { ScopeService } from '../authorization/scope.service';
 import { AuditService } from '../audit/audit.service';
 import type { CreateCatalogDto, RenewDto, SubscribeDto } from './services.dto';
 
@@ -18,6 +19,7 @@ export class ServicesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly scope: ScopeService,
   ) {}
 
   createCatalog(dto: CreateCatalogDto) {
@@ -41,7 +43,8 @@ export class ServicesService {
       });
   }
 
-  listCatalog(companyId: string) {
+  async listCatalog(companyId: string, actor: string | null) {
+    await this.scope.assertCompany(actor, companyId);
     return this.prisma.serviceCatalog.findMany({
       where: { companyId },
       orderBy: { code: 'asc' },
@@ -190,7 +193,8 @@ export class ServicesService {
   }
 
   // Revenue = sum of collected transactions (A5: everything is paid-in-full).
-  async revenue(companyId: string, from?: string, to?: string) {
+  async revenue(companyId: string, actor: string | null, from?: string, to?: string) {
+    await this.scope.assertCompany(actor, companyId);
     const paidAt: Prisma.DateTimeFilter = {};
     if (from !== undefined) paidAt.gte = new Date(from);
     if (to !== undefined) paidAt.lte = new Date(to);
