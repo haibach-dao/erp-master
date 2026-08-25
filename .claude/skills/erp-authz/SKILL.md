@@ -128,7 +128,7 @@ pnpm --filter @erp/api exec tsx scripts/authz-report.ts
 DATABASE_URL=... pnpm --filter @erp/api exec tsx scripts/authz-rules.ts
 ```
 
-**Mốc đo 2026-08-25 (sau #23):** lệnh 1 = **55** · lệnh 2 = **2 dòng** (`health`, `iam/auth` — cả hai CỐ Ý) · 60 route tổng = 55 gate + 3 `@Public` + 2 tự thân (`logout`, `me`) · **323 test**.
+**Mốc đo 2026-08-25 (sau #25):** lệnh 1 = **55** · lệnh 2 = **2 dòng** (`health`, `iam/auth` — cả hai CỐ Ý) · 60 route tổng = 55 gate + 3 `@Public` + 2 tự thân (`logout`, `me`) · **336 test API + 5 test worker**.
 
 **Khi số đo lệch mốc trên: repo luôn đúng, skill luôn sai.** Cập nhật ngay số + ngày đo trong file này, rồi báo người dùng đã sửa gì.
 
