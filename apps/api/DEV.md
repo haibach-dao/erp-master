@@ -55,3 +55,35 @@ npx tsx scripts/seed-dev-user.ts
 
 `scripts/seed-dev-user.ts` từ chối chạy nếu thiếu `DEV_USER_PASSWORD`, và từ chối chạy
 ngoài `development`/`test` — nó là một trong các đường ghi vào `authz`.
+
+## Đăng nhập báo sai mật khẩu mà mật khẩu đúng → xem CORS trước
+
+`localhost` và `127.0.0.1` là **HAI origin khác nhau** với CORS. Nếu web mở ở origin không
+nằm trong danh sách cho phép, trình duyệt chặn request đăng nhập **trước khi** nó tới được
+API — và lỗi hiện trên UI trông y như "sai mật khẩu". Rất dễ đi tìm sai chỗ.
+
+Kiểm bằng preflight, không cần mật khẩu (không có dòng `Access-Control-Allow-Origin`
+nghĩa là bị chặn):
+
+```bash
+curl -s -i -X OPTIONS http://localhost:4000/api/v1/auth/login -H "Origin: http://localhost:3000" -H "Access-Control-Request-Method: POST" | grep -i access-control-allow-origin
+```
+
+Phân biệt "bị CORS chặn" với "sai thông tin đăng nhập" — gửi một mật khẩu CỐ Ý SAI; nếu
+nhận `401` thì đường xác thực đã thông và vấn đề nằm ở chỗ khác:
+
+```bash
+curl -s -o /dev/null -w "%{http_code}
+" -X POST http://localhost:4000/api/v1/auth/login -H "Content-Type: application/json" -d "{\"email\":\"admin@local\",\"password\":\"chac-chan-sai\"}"
+```
+
+Sửa: đặt `CORS_ORIGINS` trong `apps/api/.env` chứa **mọi** origin bạn thực sự mở web ở đó.
+Mặc định của API là `CORS_ORIGINS ?? APP_URL ?? http://localhost:3000` — nên chỉ đặt
+`APP_URL=http://127.0.0.1:3000` là vô tình khoá `localhost`.
+
+## Hai cái bẫy khi cài dependency
+
+- **`pnpm install` chết `EPERM`** nếu API đang chạy — nó giữ
+  `query_engine-windows.dll.node` của Prisma. **Dừng API trước khi cài.**
+- **`pnpm install` làm hỏng cache của Next đang chạy** (`__webpack_modules__[moduleId] is
+not a function`). Dừng web, `rm -rf apps/web/.next`, bật lại.
