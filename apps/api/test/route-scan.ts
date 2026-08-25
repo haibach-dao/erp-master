@@ -50,9 +50,23 @@ export function scanController(file: string, source: string): ScannedRoute[] {
   // looks like it ended at the first continuation line, and the route silently loses
   // the permission that sits above it.
   let openParens = 0;
+  // Comment KHỐI giữa các decorator cũng làm đứt chuỗi nếu không theo dõi trạng thái.
+  // Đã hỏng đúng như vậy một lần: `/auth/login` mất nhãn @Public vì có một comment `/* */`
+  // đứng giữa @Public() và @RevealFields().
+  let inBlockComment = false;
 
   for (const raw of source.split('\n')) {
     const line = raw.trim();
+    if (inBlockComment) {
+      if (line.includes('*/')) {
+        inBlockComment = false;
+      }
+      continue;
+    }
+    if (line.startsWith('/*')) {
+      inBlockComment = !line.includes('*/');
+      continue;
+    }
     if (openParens > 0) {
       openParens += countParens(line);
       continue;

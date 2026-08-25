@@ -68,7 +68,7 @@ describe('(c) every ungated route is on the reviewed allowlist', () => {
   it('reports the current coverage so shrinking it is visible in review', () => {
     const gated = routes.filter((r) => r.permission !== null).length;
     // Bậc thang: mỗi PR gate thêm route thì con số này chỉ được TĂNG.
-    expect(gated).toBeGreaterThanOrEqual(45);
+    expect(gated).toBeGreaterThanOrEqual(61);
   });
 
   it('every public route says so explicitly, and only the ones that must be', () => {
@@ -302,6 +302,7 @@ describe('cái quét route tự nó phải đúng', () => {
     'export class DemoController {',
     "  @Get('wrapped')",
     "  @RequirePermission('contract.record.view')",
+    '  /* Comment khối giữa các decorator — đã từng làm đứt chuỗi thật. */',
     '  @MaskUnless(',
     "    { field: 'totalAmount', permission: 'contract.amount.view_sensitive' },",
     '  )',

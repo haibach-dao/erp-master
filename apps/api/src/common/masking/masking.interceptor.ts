@@ -4,18 +4,30 @@ import type { Request } from 'express';
 import { Observable, from, mergeMap } from 'rxjs';
 import { PermissionsService } from '../../modules/authorization/permissions.service';
 import { permissionMatches } from '../../modules/authorization/policy-evaluator';
-import { MASK_RULES_KEY, NEVER_SERIALIZE, type MaskRule } from './mask.decorator';
+import {
+  MASK_RULES_KEY,
+  NEVER_SERIALIZE,
+  REVEAL_FIELDS_KEY,
+  type MaskRule,
+} from './mask.decorator';
+import { SENSITIVE_FIELDS } from './sensitive-fields';
 
 const REDACTED = '***';
 
 /* Applies field-level masking on the way out, for every response.
  *
- * Two jobs, and the first one is unconditional: strip the fields in NEVER_SERIALIZE from
- * every response regardless of route or role. The second is per-route — apply the
- * @MaskUnless rules for callers who do not hold the unlocking code.
+ * Three jobs, in order of how little they trust the caller:
+ *  1. Unconditional: strip the fields in NEVER_SERIALIZE from every response, whatever the
+ *     route or role. Those are the raw material behind a masked value.
+ *  2. Global sensitive-field registry (SENSITIVE_FIELDS): applies to EVERY response so a
+ *     newly added `phone` column is masked without anyone remembering to say so. A route
+ *     that legitimately returns one says `@RevealFields('phone')` — an opt-OUT that is
+ *     visible in review, instead of an opt-IN that is forgotten.
+ *  3. Per-route @MaskUnless rules, for fields that are only sensitive in one context
+ *     (`totalAmount`, `agreedPrice`).
  *
- * Registered globally rather than per-controller on purpose. A "never serialize" list
- * that has to be remembered at each call site is a list that will be forgotten at one.
+ * Registered globally rather than per-controller on purpose. A "never serialize" list that
+ * has to be remembered at each call site is a list that will be forgotten at one.
  */
 @Injectable()
 export class MaskingInterceptor implements NestInterceptor {
@@ -25,11 +37,15 @@ export class MaskingInterceptor implements NestInterceptor {
   ) {}
 
   intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
-    const rules =
-      this.reflector.getAllAndOverride<MaskRule[] | undefined>(MASK_RULES_KEY, [
-        context.getHandler(),
-        context.getClass(),
-      ]) ?? [];
+    const targets = [context.getHandler(), context.getClass()];
+    const routeRules =
+      this.reflector.getAllAndOverride<MaskRule[] | undefined>(MASK_RULES_KEY, targets) ?? [];
+    const revealed = new Set(
+      this.reflector.getAllAndOverride<string[] | undefined>(REVEAL_FIELDS_KEY, targets) ?? [],
+    );
+    // Sổ toàn hệ trước, luật riêng của route sau. Route được MIỄN một trường khỏi sổ,
+    // nhưng không được nới lỏng luật riêng nó tự khai.
+    const rules = [...SENSITIVE_FIELDS.filter((r) => !revealed.has(r.field)), ...routeRules];
     const userId = context.switchToHttp().getRequest<Request>().user?.userId;
 
     return next.handle().pipe(mergeMap((body) => from(this.applyMasking(body, rules, userId))));
