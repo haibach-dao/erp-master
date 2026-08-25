@@ -6,8 +6,8 @@ import { RequirePermission } from '../authorization/require-permission.decorator
 import { AuditQueryService } from './audit-query.service';
 import { AuditQueryDto } from './dto/audit-query.dto';
 
-// Read-only audit query. Requires authentication; fine-grained audit.view permission
-// enforcement (PolicyEvaluator + loaded grants) is a follow-up once grants are seeded.
+// Read-only audit query, gated on `audit.event.view`. Reading the audit log is itself
+// an event worth recording (doc 16 §D.8) — that self-audit is not wired yet.
 @ApiTags('audit')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, PermissionGuard)

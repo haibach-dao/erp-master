@@ -22,11 +22,12 @@ const DOWNLOAD_URL_TTL = 120;
  * This is a FIELD/BEHAVIOUR gate, checked here rather than on the route: a route carries
  * exactly one @RequirePermission code, and that slot belongs to "may call this endpoint".
  *
- * The code below is the one actually seeded today. Blueprint doc 16 §D.7 splits it into
- * `crm.person.view_sensitive` (read on screen) and `file.object.download_sensitive` (carry
- * the file out); that rename lands with the catalog in PR-3/PR-5, not here.
+ * `file.object.download` (the route gate) says the caller may use the endpoint at all;
+ * `file.object.download_sensitive` says they may carry a confidential/restricted file
+ * out. Two different risks, so two codes — doc 16 §D.7 split the old shared code for
+ * exactly this reason.
  */
-const SENSITIVE_FILE_PERMISSION = 'cemetery.document.view_sensitive';
+const SENSITIVE_FILE_PERMISSION = 'file.object.download_sensitive';
 const PUBLIC_SENSITIVITY = 'normal';
 
 @Injectable()

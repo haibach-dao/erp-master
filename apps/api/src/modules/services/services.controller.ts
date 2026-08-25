@@ -2,12 +2,14 @@ import { Body, Controller, Get, Param, Post, Query, Req, UseGuards } from '@nest
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { JwtAuthGuard } from '../iam/guards/jwt-auth.guard';
+import { PermissionGuard } from '../authorization/permission.guard';
+import { RequirePermission } from '../authorization/require-permission.decorator';
 import { ServicesService } from './services.service';
 import { CreateCatalogDto, RenewDto, SubscribeDto } from './services.dto';
 
 @ApiTags('services')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, PermissionGuard)
 @Controller('services')
 export class ServicesController {
   constructor(private readonly svc: ServicesService) {}
@@ -17,36 +19,43 @@ export class ServicesController {
   }
 
   @Post('catalog')
+  @RequirePermission('service.catalog.create')
   createCatalog(@Body() dto: CreateCatalogDto) {
     return this.svc.createCatalog(dto);
   }
 
   @Get('catalog')
+  @RequirePermission('service.catalog.view')
   listCatalog(@Query('companyId') companyId: string) {
     return this.svc.listCatalog(companyId);
   }
 
   @Post('subscriptions')
+  @RequirePermission('service.subscription.create')
   subscribe(@Body() dto: SubscribeDto, @Req() req: Request) {
     return this.svc.subscribe(dto, this.actor(req));
   }
 
   @Post('subscriptions/:id/renew')
+  @RequirePermission('service.subscription.renew')
   renew(@Param('id') id: string, @Body() dto: RenewDto, @Req() req: Request) {
     return this.svc.renew(id, dto, this.actor(req));
   }
 
   @Post('subscriptions/:id/cancel')
+  @RequirePermission('service.subscription.cancel')
   cancel(@Param('id') id: string, @Req() req: Request) {
     return this.svc.cancel(id, this.actor(req));
   }
 
   @Get('subscriptions')
+  @RequirePermission('service.subscription.view')
   listSubscriptions(@Query('gravePlotId') gravePlotId?: string, @Query('status') status?: string) {
     return this.svc.listSubscriptions(gravePlotId, status);
   }
 
   @Get('revenue')
+  @RequirePermission('service.revenue.view')
   revenue(
     @Query('companyId') companyId: string,
     @Query('from') from?: string,

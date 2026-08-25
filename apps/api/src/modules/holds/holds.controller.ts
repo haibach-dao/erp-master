@@ -15,17 +15,19 @@ export class HoldsController {
   constructor(private readonly svc: HoldsService) {}
 
   @Post()
-  @RequirePermission('cemetery.grave.hold')
+  @RequirePermission('cemetery.hold.hold')
   create(@Body() dto: CreateHoldDto, @Req() req: Request) {
     return this.svc.createHold(dto, req.user?.userId ?? null);
   }
 
   @Post(':id/release')
+  @RequirePermission('cemetery.hold.release')
   release(@Param('id') id: string, @Req() req: Request) {
     return this.svc.releaseHold(id, req.user?.userId ?? null);
   }
 
   @Get()
+  @RequirePermission('cemetery.hold.view')
   list(@Query('gravePlotId') gravePlotId?: string, @Query('status') status?: string) {
     return this.svc.listHolds(gravePlotId, status);
   }

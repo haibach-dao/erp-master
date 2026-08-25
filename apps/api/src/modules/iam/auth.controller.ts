@@ -9,6 +9,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ThrottlerGuard } from '@nestjs/throttler';
+import { Public } from '../../common/decorators/public.decorator';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { AuthService } from './auth.service';
@@ -26,6 +27,7 @@ export class AuthController {
   constructor(private readonly auth: AuthService) {}
 
   @Post('login')
+  @Public()
   login(@Body() dto: LoginDto, @Req() req: Request) {
     return this.auth.login(dto.email, dto.password, {
       userAgent: req.headers['user-agent'] ?? null,
@@ -34,6 +36,7 @@ export class AuthController {
   }
 
   @Post('refresh')
+  @Public()
   refresh(@Body() dto: RefreshDto) {
     return this.auth.refresh(dto.refreshToken);
   }

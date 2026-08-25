@@ -68,7 +68,32 @@ describe('(c) every ungated route is on the reviewed allowlist', () => {
   it('reports the current coverage so shrinking it is visible in review', () => {
     const gated = routes.filter((r) => r.permission !== null).length;
     // Bậc thang: mỗi PR gate thêm route thì con số này chỉ được TĂNG.
-    expect(gated).toBeGreaterThanOrEqual(4);
+    expect(gated).toBeGreaterThanOrEqual(45);
+  });
+
+  it('every public route says so explicitly, and only the ones that must be', () => {
+    const publicRoutes = routes
+      .filter((r) => r.isPublic)
+      .map((r) => r.id)
+      .sort();
+    expect(publicRoutes).toEqual(['GET /health', 'POST /auth/login', 'POST /auth/refresh']);
+  });
+
+  it('a public route never also carries a permission — that would be a contradiction', () => {
+    const contradictory = routes
+      .filter((r) => r.isPublic && r.permission !== null)
+      .map((r) => r.id);
+    expect(contradictory).toEqual([]);
+  });
+
+  it('no deprecated code is still referenced by a route', () => {
+    const deprecated = new Set(
+      PERMISSION_CATALOG.filter((d) => d.deprecated !== undefined).map((d) => d.code),
+    );
+    const stragglers = routes
+      .filter((r) => r.permission !== null && deprecated.has(r.permission))
+      .map((r) => `${r.id} -> ${r.permission ?? ''}`);
+    expect(stragglers, 'route còn dùng mã cũ — đổi sang mã thay thế').toEqual([]);
   });
 });
 
