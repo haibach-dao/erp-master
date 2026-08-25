@@ -24,18 +24,28 @@ function fileRow(over: Partial<Record<string, unknown>> = {}) {
   };
 }
 
-function build(opts: { file?: unknown; grants?: PermissionGrant[]; env?: Record<string, string> }) {
+function build(opts: {
+  file?: unknown;
+  grants?: PermissionGrant[];
+  env?: Record<string, string>;
+  wildcardExempt?: boolean;
+}) {
   const findUnique = vi.fn().mockResolvedValue(opts.file ?? null);
   const update = vi.fn().mockImplementation((args: unknown) => Promise.resolve(args));
   const record = vi.fn().mockResolvedValue(undefined);
   const getGrants = vi.fn().mockResolvedValue(opts.grants ?? []);
+  const getPermissionMeta = vi.fn().mockResolvedValue({
+    code: 'file.object.download_sensitive',
+    sensitivity: 'S3',
+    wildcardExempt: opts.wildcardExempt ?? true,
+  });
   const env: Record<string, string> = { APP_ENV: 'development', ...(opts.env ?? {}) };
 
   const svc = new FilesService(
     { fileObject: { findUnique, update, create: vi.fn() } } as unknown as PrismaService,
     { get: (key: string) => env[key] } as never,
     { record } as unknown as AuditService,
-    { getGrants } as unknown as PermissionsService,
+    { getGrants, getPermissionMeta } as unknown as PermissionsService,
   );
   return { svc, findUnique, update, record, getGrants };
 }
@@ -58,10 +68,18 @@ describe('FilesService — sensitive files are gated, not merely authenticated',
     await expect(svc.getMeta('file-1', OTHER)).rejects.toBeInstanceOf(ForbiddenException);
   });
 
-  it('allows a restricted file to a caller whose wildcard grant covers the code', async () => {
+  it('refuses a wildcard grant on a wildcard-exempt leaf — carrying data out must be named', async () => {
     const { svc } = build({
       file: fileRow(),
       grants: [{ permission: '*.*.*', scope: 'GROUP' }],
+    });
+    await expect(svc.getMeta('file-1', OTHER)).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('allows a caller who holds the leaf by name', async () => {
+    const { svc } = build({
+      file: fileRow(),
+      grants: [{ permission: 'file.object.download_sensitive', scope: 'GROUP' }],
     });
     await expect(svc.getMeta('file-1', OTHER)).resolves.toMatchObject({ id: 'file-1' });
   });

@@ -317,12 +317,25 @@ const CEMETERY_READ_ALL = [
   'cemetery.plot.view_history',
 ];
 
+/* Leaves a wildcard can no longer reach. ADMIN is given them by name so that turning on
+ * the exemption changes the MECHANISM without changing who can do what today: `*.*.*`
+ * still covers everything else, and every wildcard-exempt leaf is now spelled out.
+ *
+ * This is what makes the superuser visible. `scripts/authz-report.ts` prints ADMIN's S3
+ * leaves as an explicit list, which is the input to deciding whether the role should
+ * exist at all (doc 16 Q13). A wildcard hides that question; a list asks it.
+ */
+const WILDCARD_EXEMPT_CODES = PERMISSION_CATALOG.filter((d) => d.wildcardExempt).map((d) => d.code);
+
 export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
   // --- Vai cũ. Giữ nguyên tới khi wildcard bị siết, nếu không là khoá cửa cả hệ.
   ADMIN: {
     name: 'Quản trị',
-    description: 'Vai cũ mang `*.*.*`. Doc 16 Q13 đề xuất BỎ HẲN sau khi 14 vai chạy thật.',
-    grants: [{ code: '*.*.*', scope: 'GROUP' }],
+    description: 'Vai cũ mang `*.*.*` + mọi leaf S3 tường minh. Doc 16 Q13 đề xuất BỎ HẲN.',
+    grants: [
+      { code: '*.*.*', scope: 'GROUP' },
+      ...WILDCARD_EXEMPT_CODES.map((code) => ({ code, scope: 'GROUP' })),
+    ],
   },
   STAFF: {
     name: 'Nhân viên (vai cũ)',

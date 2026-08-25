@@ -139,9 +139,17 @@ export class FilesService {
     throw new ForbiddenException(`Thiếu quyền: ${SENSITIVE_FILE_PERMISSION}`);
   }
 
+  // Same rule as the route guard: a wildcard grant must not reach a wildcard-exempt
+  // leaf, and an unknown code fails closed rather than matching nothing quietly.
   private async holds(userId: string, permission: string): Promise<boolean> {
+    const meta = await this.permissions.getPermissionMeta(permission);
+    if (meta === null) {
+      return false;
+    }
     const grants = await this.permissions.getGrants(userId);
-    return grants.some((g) => permissionMatches(g.permission, permission));
+    return grants.some((g) =>
+      permissionMatches(g.permission, permission, { wildcardExempt: meta.wildcardExempt }),
+    );
   }
 
   /* A file nobody scanned must not become downloadable just because scanning happens to
