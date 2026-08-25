@@ -3,7 +3,7 @@ import { lastValueFrom, of } from 'rxjs';
 import type { CallHandler, ExecutionContext } from '@nestjs/common';
 import type { Reflector } from '@nestjs/core';
 import { MaskingInterceptor } from './masking.interceptor';
-import { MASK_RULES_KEY, type MaskRule } from './mask.decorator';
+import { MASK_RULES_KEY, REVEAL_FIELDS_KEY, type MaskRule } from './mask.decorator';
 import type { PermissionsService } from '../../modules/authorization/permissions.service';
 import type { PermissionGrant } from '../../modules/authorization/policy.types';
 
@@ -14,9 +14,14 @@ function run(opts: {
   userId?: string;
   wildcardExempt?: boolean;
   unknownCode?: boolean;
+  reveal?: string[];
 }): Promise<unknown> {
   const reflector = {
-    getAllAndOverride: (key: string) => (key === MASK_RULES_KEY ? opts.rules : undefined),
+    getAllAndOverride: (key: string) => {
+      if (key === MASK_RULES_KEY) return opts.rules;
+      if (key === REVEAL_FIELDS_KEY) return opts.reveal;
+      return undefined;
+    },
   } as unknown as Reflector;
 
   const permissions = {
@@ -135,5 +140,84 @@ describe('MaskingInterceptor — fields nobody may read', () => {
     const when = new Date('2026-08-25T00:00:00Z');
     const out = (await run({ body: { occurredAt: when } })) as { occurredAt: Date };
     expect(out.occurredAt).toBe(when);
+  });
+});
+
+/* Sổ trường nhạy cảm áp cho MỌI response, không cần route nhớ khai. Đây là chỗ sửa khiếm
+ * khuyết lớn nhất của cách cũ: trước đây trường nhạy cảm THÊM VÀO SAU mặc định lọt ra.
+ */
+describe('MaskingInterceptor — sổ trường nhạy cảm toàn hệ', () => {
+  it('che phone/email dù route KHÔNG khai gì cả', async () => {
+    const out = await run({
+      body: { id: 'c1', phone: '0901234567', email: 'a@b.vn' },
+      userId: 'u1',
+    });
+    expect(out).toEqual({ id: 'c1', phone: '***', email: '***' });
+  });
+
+  it('che ngày sinh thành NĂM — đủ đối chiếu, không đủ định danh', async () => {
+    const out = (await run({
+      body: { dateOfBirth: new Date('1975-04-30T00:00:00Z') },
+      userId: 'u1',
+    })) as { dateOfBirth: string };
+    expect(out.dateOfBirth).toBe('1975');
+  });
+
+  it('che ipAddress trong nhật ký — dữ liệu cá nhân theo NĐ13', async () => {
+    const out = await run({
+      body: { action: 'AUTH.LOGIN_OK', ipAddress: '10.0.0.7' },
+      userId: 'u1',
+    });
+    expect(out).toEqual({ action: 'AUTH.LOGIN_OK', ipAddress: '***' });
+  });
+
+  it('mở khoá khi người gọi cầm mã tương ứng', async () => {
+    const out = await run({
+      body: { phone: '0901234567' },
+      userId: 'u1',
+      grants: [{ permission: 'crm.person.view_sensitive', scope: 'GROUP' }],
+    });
+    expect(out).toEqual({ phone: '0901234567' });
+  });
+
+  it('che cả trong bản ghi lồng nhau — chỗ dễ lọt nhất', async () => {
+    const out = await run({
+      body: { data: [{ person: { fullName: 'A', phone: '0901234567' } }] },
+      userId: 'u1',
+    });
+    expect(out).toEqual({ data: [{ person: { fullName: 'A', phone: '***' } }] });
+  });
+
+  it('KHÔNG che tên người — che thì hệ không dùng được, bảo vệ bằng quyền route', async () => {
+    const out = await run({ body: { fullName: 'Nguyễn Văn A' }, userId: 'u1' });
+    expect(out).toEqual({ fullName: 'Nguyễn Văn A' });
+  });
+});
+
+/* Sổ khớp theo TÊN, nên có chỗ cùng tên mà khác nghĩa: `email` của một Person là dữ liệu
+ * cá nhân; `email` của chính người đang đăng nhập là dữ liệu của họ.
+ */
+describe('MaskingInterceptor — @RevealFields miễn cho đúng một route', () => {
+  it('miễn trường được khai, giữ nguyên giá trị', async () => {
+    const out = await run({ body: { email: 'toi@erp.vn' }, userId: 'u1', reveal: ['email'] });
+    expect(out).toEqual({ email: 'toi@erp.vn' });
+  });
+
+  it('chỉ miễn ĐÚNG trường đó, các trường khác vẫn bị che', async () => {
+    const out = await run({
+      body: { email: 'toi@erp.vn', phone: '0901234567' },
+      userId: 'u1',
+      reveal: ['email'],
+    });
+    expect(out).toEqual({ email: 'toi@erp.vn', phone: '***' });
+  });
+
+  it('KHÔNG miễn được trường bị cấm serialize tuyệt đối', async () => {
+    const out = await run({
+      body: { nationalIdCipher: 'xx', email: 'toi@erp.vn' },
+      userId: 'u1',
+      reveal: ['email', 'nationalIdCipher'],
+    });
+    expect(out).toEqual({ email: 'toi@erp.vn' });
   });
 });

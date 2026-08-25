@@ -16,6 +16,7 @@ import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { RefreshDto } from './dto/refresh.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import { RevealFields } from '../../common/masking/mask.decorator';
 
 // Credential endpoints are rate limited per IP ('auth' throttler, app.module.ts):
 // without it, /auth/login is an unmetered password oracle. logout/me are cheap and
@@ -28,6 +29,9 @@ export class AuthController {
 
   @Post('login')
   @Public()
+  /* Email trả về ở đây là email người gọi VỪA TỰ NHẬP để đăng nhập, không phải dữ liệu
+   * cá nhân của người khác. Không miễn thì response trả `***` — đúng luật nhưng vô nghĩa. */
+  @RevealFields('email')
   login(@Body() dto: LoginDto, @Req() req: Request) {
     return this.auth.login(dto.email, dto.password, {
       userAgent: req.headers['user-agent'] ?? null,
@@ -55,6 +59,9 @@ export class AuthController {
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @Get('me')
+  /* Email ở đây là email của CHÍNH người đang gọi, không phải dữ liệu cá nhân của người
+   * khác. Sổ trường nhạy cảm khớp theo tên nên nó sẽ che — miễn cho đúng route này. */
+  @RevealFields('email')
   me(@Req() req: Request) {
     if (req.user === undefined) {
       throw new UnauthorizedException();
