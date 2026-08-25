@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { maskSensitive, maskValue } from './masking.util';
+import { maskSensitive, maskValue } from './masking';
 
 describe('maskValue', () => {
   it('masks a CCCD keeping first/last 3', () => {

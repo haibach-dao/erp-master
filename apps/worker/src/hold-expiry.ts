@@ -1,5 +1,6 @@
 import type { PrismaClient } from '@prisma/client';
 import { ulid } from 'ulid';
+import { appendAuditEvent, type AuditWriteClient } from '@erp/audit';
 import type { AgentIdentity } from './agent-identity';
 
 /* Expire Active holds past their expiresAt and return the plot to Available (with history).
@@ -46,6 +47,25 @@ export async function expireHolds(
             reason: 'hold expired',
             changedBy: agent.userId,
           },
+        });
+        /* Cùng chuỗi hash với API, cùng một hàm — không phải bản sao.
+         *
+         * `actorType: 'AGENT'` chứ không phải 'SYSTEM': 'SYSTEM' nghĩa là "hệ tự làm,
+         * không ai chịu trách nhiệm", đúng cái trạng thái ghế máy sinh ra để chấm dứt.
+         * Ghi TRONG cùng transaction với việc đổi trạng thái mộ, nên không có cửa nào
+         * để lô mộ được giải phóng mà nhật ký không có dòng nào. */
+        await appendAuditEvent(tx as unknown as AuditWriteClient, ulid(), {
+          companyId: plot.companyId,
+          actorType: 'AGENT',
+          actorId: agent.userId,
+          action: 'GRAVE.HOLD_EXPIRED',
+          entityType: 'grave_plot',
+          entityId: plot.id,
+          source: 'JOB',
+          reason: `Phiếu giữ chỗ ${h.id} hết hạn`,
+          beforeData: { status: 'Held' },
+          afterData: { status: 'Available', holdId: h.id },
+          changedFields: ['status'],
         });
       }
       expired += 1;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeEventHash, stableStringify, type HashableEvent } from './integrity.util';
+import { computeEventHash, stableStringify, type HashableEvent } from './integrity';
 
 const base: HashableEvent = {
   previousEventHash: null,
