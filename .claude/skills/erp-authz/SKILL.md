@@ -42,16 +42,17 @@ Nguyên tắc 1, 2, 4 học từ Oracle OPERA Cloud (**diễn giải, không tr�
 
 ## 2. Ràng buộc CỨNG của codebase — vi phạm là hỏng im lặng
 
-| #   | Sự thật                                                               | Hệ quả bắt buộc                                                                        |
-| --- | --------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| 1   | `permissionMatches` yêu cầu **số đoạn bằng nhau**                     | Mã **cứng 3 đoạn** `module.resource.action`. Sai số đoạn = **thất bại im lặng**        |
-| 2   | `@RequirePermission` nhận **một** chuỗi                               | **Một route = ĐÚNG MỘT mã gate.** Điều kiện thứ hai kiểm ở tầng service                |
-| 3   | Guard **TỪ CHỐI** route không khai quyền (default-DENY)               | Quên decorator = **route chết**, không phải cửa mở. Muốn công khai thì `@Public()`     |
-| 4   | Leaf `wildcard_exempt` (mọi leaf S3) **không** bị grant wildcard trùm | Muốn cấp leaf S3 phải **gọi đúng tên**, `cemetery.*.*` không với tới                   |
-| 5   | `getGrants()` lọc theo `valid_from`/`valid_to`                        | Grant hết hạn **tự rụng**. Test mock phải có hai cột này, nếu không truy vấn sai       |
-| 6   | Gộp nhiều vai theo **HỢP, tính THEO TỪNG MÃ** (`scopeLevelFor`)       | Đừng tính một `level` chung rồi áp cho mọi mã — đó là rò rỉ, đã từng xảy ra            |
-| 7   | `isScope()` vẫn fallback `'CUSTOM'` khi gặp chuỗi lạ                  | Seed scope sai chính tả ⇒ ép về CUSTOM ⇒ **deny im lặng**. CHƯA sửa                    |
-| 8   | `SCOPES` = SELF·ASSIGNED·DEPARTMENT·**SITE**·COMPANY·GROUP·CUSTOM     | `DEPARTMENT`/`ASSIGNED`/`CUSTOM` khai mà **không thực thi** — test chặn không cho dùng |
+| #   | Sự thật                                                               | Hệ quả bắt buộc                                                                                                               |
+| --- | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| 1   | `permissionMatches` yêu cầu **số đoạn bằng nhau**                     | Mã **cứng 3 đoạn** `module.resource.action`. Sai số đoạn = **thất bại im lặng**                                               |
+| 2   | `@RequirePermission` nhận **một** chuỗi                               | **Một route = ĐÚNG MỘT mã gate.** Điều kiện thứ hai kiểm ở tầng service                                                       |
+| 3   | Guard **TỪ CHỐI** route không khai quyền (default-DENY)               | Quên decorator = **route chết**, không phải cửa mở. Muốn công khai thì `@Public()`                                            |
+| 4   | Leaf `wildcard_exempt` (mọi leaf S3) **không** bị grant wildcard trùm | Muốn cấp leaf S3 phải **gọi đúng tên**, `cemetery.*.*` không với tới                                                          |
+| 5   | `getGrants()` lọc theo `valid_from`/`valid_to`                        | Grant hết hạn **tự rụng**. Test mock phải có hai cột này, nếu không truy vấn sai                                              |
+| 6   | Gộp nhiều vai theo **HỢP, tính THEO TỪNG MÃ** (`scopeLevelFor`)       | Đừng tính một `level` chung rồi áp cho mọi mã — đó là rò rỉ, đã từng xảy ra                                                   |
+| 7   | `isScope()` vẫn fallback `'CUSTOM'` khi gặp chuỗi lạ                  | Seed scope sai chính tả ⇒ ép về CUSTOM ⇒ **deny im lặng**. CHƯA sửa                                                           |
+| 8   | `SCOPES` = SELF·ASSIGNED·DEPARTMENT·**SITE**·COMPANY·GROUP·CUSTOM     | `DEPARTMENT`/`ASSIGNED`/`CUSTOM` khai mà **không thực thi** — test chặn không cho dùng                                        |
+| 9   | `SENSITIVE_FIELDS` áp cho MỌI response, khớp theo TÊN trường          | Trường mới tên `phone`/`email`/`address`/`dateOf*`/`ipAddress` bị che TỰ ĐỘNG. Route trả chính đáng phải khai `@RevealFields` |
 
 **Bài học đã trả giá:** mã `audit.view` (2 đoạn) **không bao giờ** khớp grant `*.*.*` (3 đoạn). Người "toàn quyền" vẫn 403, mà guard chỉ báo `Thiếu quyền` chứ không báo mã sai cấu trúc.
 → **Gỡ lỗi 403 bất thường: đếm số đoạn của mã trước tiên.**
@@ -82,9 +83,9 @@ Nguyên tắc 1, 2, 4 học từ Oracle OPERA Cloud (**diễn giải, không tr�
 
 2. **Hợp phải tính theo TỪNG MÃ.** Người vừa là `KTNB_KIEM_TOAN` (GROUP, chỉ đọc) vừa là `THU_NGAN` (COMPANY): tính chung sẽ cho họ GROUP trên `cemetery.plot.set_status` — mã vai kiểm toán **không hề cấp**. Đã xảy ra thật một lần.
 
-3. **Mask nửa vời = vô hiệu hoá A6.** API trả đủ rồi UI mới che là không có tác dụng. Trường nhạy cảm mới ⇒ thêm `@MaskUnless` **tường minh**; serializer danh sách trắng toàn hệ **chưa có**, nên trường mới mặc định LỌT RA.
+3. **Mask giờ là DEFAULT-DENY theo tên trường, không còn opt-in.** `SENSITIVE_FIELDS` che ở khắp nơi; `@RevealFields` miễn cho đúng một route. Điểm yếu cố hữu: khớp theo TÊN, nên `email` của Person và `email` của chính người đăng nhập cùng tên khác nghĩa — đó là lý do `@RevealFields` tồn tại (`/auth/me`, `/auth/login`). Test quét `schema.prisma`: cột nghi vấn chưa có quyết định thì **gãy build**.
 
-4. **Cái quét route trong test có thể nói dối.** Decorator xuống dòng (`@MaskUnless(` … `)`) từng làm đứt chuỗi decorator và route mất mã quyền trong bản quét. Đã sửa + có test cho chính cái quét. Sửa `test/route-scan.ts` thì chạy lại nhóm test đó trước.
+4. **Cái quét route trong test có thể nói dối — ĐÃ HỎNG HAI LẦN.** Lần 1: decorator xuống dòng (`@MaskUnless(`) làm đứt chuỗi. Lần 2: comment KHỐI `/* */` giữa các decorator làm `/auth/login` mất nhãn `@Public`. Cả hai đều do test bậc thang bắt được. Nó là thứ mọi bất biến khác dựa vào — sửa `test/route-scan.ts` thì chạy lại nhóm test của chính nó trước.
 
 ## 5. Quy tắc khi viết code phân quyền
 
@@ -128,17 +129,28 @@ pnpm --filter @erp/api exec tsx scripts/authz-report.ts
 DATABASE_URL=... pnpm --filter @erp/api exec tsx scripts/authz-rules.ts
 ```
 
-**Mốc đo 2026-08-25 (sau #25):** lệnh 1 = **55** · lệnh 2 = **2 dòng** (`health`, `iam/auth` — cả hai CỐ Ý) · 60 route tổng = 55 gate + 3 `@Public` + 2 tự thân (`logout`, `me`) · **336 test API + 5 test worker**.
+**Mốc đo 2026-08-25 (sau #30):** lệnh 1 = **61** · lệnh 2 = **2 dòng** (`health`, `iam/auth` — cả hai CỐ Ý) · 66 route tổng = 61 gate + 3 `@Public` + 2 tự thân (`logout`, `me`) · **370 test API + 9 worker + 16 package**.
 
 **Khi số đo lệch mốc trên: repo luôn đúng, skill luôn sai.** Cập nhật ngay số + ngày đo trong file này, rồi báo người dùng đã sửa gì.
 
 ## 7. Còn nợ — biết trước để khỏi tưởng đã có
 
-- **`access_rules` và `scope_assignments` đang RỖNG.** Cơ chế chạy và có test, nhưng LÀN CẤM **chưa được bảo vệ trên thực tế** và chưa ai bị bó theo nghĩa trang.
-- **Chưa có màn hình sửa chuỗi luật.** Thứ tự là toàn bộ ý nghĩa của bảng đó, nên cần kéo-thả chứ không phải form thêm dòng. Tạm đọc bằng `scripts/authz-rules.ts`.
-- **Q10 (mốc sinh phân bổ mộ) đã có quyết định nhưng CHƯA triển khai.** Luật: ai cầm `contract.record.activate` thì `Draft → Active` thẳng; ai không thì qua `verify` → `approve`. **Chặn trước khi làm:** hiện KHÔNG vai nào vừa có `contract.record.create` vừa có `activate`. Đề xuất cấp `create` cho `GD_CONG_TY`, **KHÔNG** cho `QL_NGHIA_TRANG` (vai đang giữ `verify`) — để chuỗi _soạn → thẩm định_ luôn có hai người.
-- **Bất biến mức BẢN GHI chưa có test** (`verifiedBy ≠ createdBy`, `activatedBy ≠ verifiedBy`). Test hiện chỉ phủ mức VAI.
-- **`isScope()` vẫn fallback `CUSTOM`** — deny im lặng, chưa sửa.
-- **Ghế máy (`apps/worker`) chưa dùng `SYSTEM_WORKER`.** `hold-expiry.ts` vẫn ghi `changedBy: null` — còn một đường giải phóng mộ không chủ thể.
-- **`phone`/`email`/`dateOfBirth` chưa mask.** Phạm vi NĐ13 rộng hơn A6.
-- **Danh mục có 124 mã, KHÔNG có `*.*.*`.** Mã mới thêm vào **không** tự chảy vào ADMIN nữa — phải cấp có chủ ý. Đó là nhãn "New" của OPERA, và là toàn bộ mục đích của việc bỏ wildcard.
+- **`access_rules` cố ý RỖNG.** Chủ doanh nghiệp đã trả lời: **không có nhân thân nào cần bảo vệ**. Đừng hỏi lại, đừng tự ghi dòng nào vào. Cơ chế + màn hình `/organization/rules-chain` nằm đó cho lúc câu trả lời đổi.
+- **`scope_assignments` đang RỖNG** — chưa ai bị bó theo nghĩa trang trên thực tế. Seed bằng `scripts/seed-scope.ts` hoặc màn hình `/organization/scope`.
+- **`isScope()` vẫn fallback `CUSTOM`** khi gặp chuỗi lạ ⇒ deny im lặng. CHƯA sửa.
+- **Serializer danh sách trắng thật chưa có.** Cái đang chạy là default-deny **theo tên trường** + ratchet quét schema — đạt cùng mục tiêu thực tế, nhưng vẫn khớp theo tên nên vẫn có chỗ cùng tên khác nghĩa.
+- **`notes` không bị che** dù người dùng có thể gõ dữ liệu cá nhân vào đó. Rủi ro đã biết, đã ghi lý do trong `REVIEWED_NON_SENSITIVE`.
+- **Bất biến mức BẢN GHI chỉ có cho hợp đồng** (`verifiedBy ≠ createdBy`). An táng (`create`/`verify`/`complete`) và quan hệ nhân thân chưa có.
+- **Người không có `crm.person.view_sensitive` thấy `***` ở điện thoại/email.** Hiện chỉ `HS_NHAN_THAN`, `DPO_DLCN`, `ADMIN` có mã đó — nghĩa là Kinh doanh và Thu ngân KHÔNG thấy số điện thoại khách. Nếu nghiệp vụ cần thì cấp thêm mã; đó là quyết định của chủ doanh nghiệp, không phải lỗi.
+
+## 8. Cái gì ĐÃ có rồi — đừng làm lại
+
+| Thứ                                                            | Ở đâu                                                           |
+| -------------------------------------------------------------- | --------------------------------------------------------------- |
+| Bản chiếu quyền (không cần DB)                                 | `scripts/authz-report.ts` (`--db` đọc DB thật)                  |
+| Tiền kiểm trước deploy (thoát mã 1 nếu có người sắp mất quyền) | `scripts/authz-scope-check.ts`                                  |
+| In chuỗi luật theo thứ tự duyệt                                | `scripts/authz-rules.ts`                                        |
+| Seed ghế máy / gán nghĩa trang ở dev                           | `prisma/seed.ts`, `scripts/seed-scope.ts`                       |
+| Màn hình quản trị                                              | `/organization/roles`, `/assignments`, `/scope`, `/rules-chain` |
+| Chuỗi hash audit dùng chung API + worker                       | `packages/audit` (`@erp/audit`)                                 |
+| Thử luật cho một (người, mã)                                   | `GET /authz/access-rules/explain`                               |
