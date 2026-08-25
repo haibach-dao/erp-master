@@ -19,37 +19,43 @@ export class CustomersController {
   }
 
   @Post('persons')
+  @RequirePermission('crm.person.create')
   createPerson(@Body() dto: CreatePersonDto, @Req() req: Request) {
     return this.svc.createPerson(dto, this.actor(req));
   }
 
   @Post('customers')
+  @RequirePermission('crm.customer.create')
   createCustomer(@Body() dto: CreateCustomerDto, @Req() req: Request) {
     return this.svc.createCustomer(dto, this.actor(req));
   }
 
   @Get('customers/search')
+  @RequirePermission('crm.customer.search')
   search(@Query('q') q: string) {
     return this.svc.search(q ?? '');
   }
 
   @Post('relationships')
+  @RequirePermission('crm.relationship.create')
   createRelationship(@Body() dto: CreateRelationshipDto, @Req() req: Request) {
     return this.svc.createRelationship(dto, this.actor(req));
   }
 
   @Post('relationships/:id/end')
+  @RequirePermission('crm.relationship.cancel')
   endRelationship(@Param('id') id: string, @Req() req: Request) {
     return this.svc.endRelationship(id, this.actor(req));
   }
 
   @Get('persons/:id/relationships')
+  @RequirePermission('crm.relationship.view')
   personRelationships(@Param('id') id: string) {
     return this.svc.getPersonRelationships(id);
   }
 
   @Get('persons/:id/national-id')
-  @RequirePermission('cemetery.document.view_sensitive')
+  @RequirePermission('crm.person.view_sensitive')
   revealNationalId(@Param('id') id: string, @Req() req: Request) {
     return this.svc.revealNationalId(id, this.actor(req));
   }

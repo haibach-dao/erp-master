@@ -14,6 +14,21 @@ describe('permissionMatches', () => {
     expect(permissionMatches('cemetery.grave.view', 'cemetery.grave.hold')).toBe(false);
     expect(permissionMatches('cemetery.grave', 'cemetery.grave.view')).toBe(false);
   });
+
+  it('a wildcard-exempt leaf refuses every wildcard, however narrow', () => {
+    const exempt = { wildcardExempt: true };
+    expect(permissionMatches('*.*.*', 'crm.person.view_sensitive', exempt)).toBe(false);
+    expect(permissionMatches('crm.*.*', 'crm.person.view_sensitive', exempt)).toBe(false);
+    expect(permissionMatches('crm.person.*', 'crm.person.view_sensitive', exempt)).toBe(false);
+  });
+
+  it('a wildcard-exempt leaf is still reachable by its exact name', () => {
+    expect(
+      permissionMatches('crm.person.view_sensitive', 'crm.person.view_sensitive', {
+        wildcardExempt: true,
+      }),
+    ).toBe(true);
+  });
 });
 
 describe('PolicyEvaluator.can', () => {

@@ -8,11 +8,25 @@ import type {
 } from './policy.types';
 import type { Scope } from './scope.enum';
 
-// Whether a granted permission code covers a requested one. Segments equal, or a
-// granted '*' wildcard matches any segment: `cemetery.*.view` covers `cemetery.grave.view`.
-export function permissionMatches(granted: string, requested: string): boolean {
+/* Whether a granted permission code covers a requested one. Segments equal, or a
+ * granted '*' wildcard matches any segment: `cemetery.*.view` covers `cemetery.grave.view`.
+ *
+ * `wildcardExempt` is how an S3 leaf refuses to be swept up by a wildcard. Without it a
+ * grant of `cemetery.*.*` silently carries every future cemetery leaf with it — including
+ * ones added years later by someone who never saw the grant. An exempt leaf can only be
+ * reached by naming it, which is the point: unmasking personal data, giving a contract
+ * legal effect or reading revenue should never be something a role acquired by accident.
+ */
+export function permissionMatches(
+  granted: string,
+  requested: string,
+  options: { wildcardExempt?: boolean } = {},
+): boolean {
   if (granted === requested) {
     return true;
+  }
+  if (options.wildcardExempt === true && granted.includes('*')) {
+    return false;
   }
   const g = granted.split('.');
   const r = requested.split('.');

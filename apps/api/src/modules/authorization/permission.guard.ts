@@ -1,13 +1,25 @@
 import { CanActivate, ExecutionContext, ForbiddenException, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import type { Request } from 'express';
+import { IS_PUBLIC_KEY } from '../../common/decorators/public.decorator';
 import { PERMISSION_KEY } from './require-permission.decorator';
 import { PermissionsService } from './permissions.service';
 import { permissionMatches } from './policy-evaluator';
 
-// Enforces @RequirePermission at the service boundary. Permission-level gate: allows if the
-// user holds a grant whose code matches (wildcards supported). Record/company-scope checks
-// are a follow-up (need org-unit assignments); routes without the decorator pass through.
+/* Enforces @RequirePermission at the service boundary — DENY BY DEFAULT.
+ *
+ * Three fail-closed rules, in order:
+ *  1. A route with no permission and no @Public() is refused. It used to be allowed,
+ *     which meant a forgotten decorator was an open door rather than a broken build.
+ *  2. A permission code that is not in the catalog is refused. A typo'd code must fail
+ *     as "unknown code", not silently match nothing and look like a rights problem.
+ *  3. A wildcard grant cannot reach a leaf marked `wildcard_exempt` (every S3 leaf).
+ *     Naming the leaf is the only way in.
+ *
+ * Still NOT enforced here: which records the caller may touch. This guard answers "may
+ * you do this at all", never "may you do this to THAT row" — the scope layer is separate
+ * and not wired yet (doc 16 §D.10). Do not read a green guard as record-level control.
+ */
 @Injectable()
 export class PermissionGuard implements CanActivate {
   constructor(
@@ -16,20 +28,29 @@ export class PermissionGuard implements CanActivate {
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const required = this.reflector.getAllAndOverride<string | undefined>(PERMISSION_KEY, [
-      context.getHandler(),
-      context.getClass(),
-    ]);
-    if (required === undefined) {
+    const targets = [context.getHandler(), context.getClass()];
+    if (this.reflector.getAllAndOverride<boolean | undefined>(IS_PUBLIC_KEY, targets) === true) {
       return true;
+    }
+    const required = this.reflector.getAllAndOverride<string | undefined>(PERMISSION_KEY, targets);
+    if (required === undefined) {
+      throw new ForbiddenException(
+        'Route chưa khai quyền: thiếu @RequirePermission (hoặc @Public nếu cố ý công khai)',
+      );
     }
     const req = context.switchToHttp().getRequest<Request>();
     const userId = req.user?.userId;
     if (userId === undefined) {
       throw new ForbiddenException('Chưa xác thực');
     }
+    const meta = await this.permissions.getPermissionMeta(required);
+    if (meta === null) {
+      throw new ForbiddenException(`Mã quyền không có trong danh mục: ${required}`);
+    }
     const grants = await this.permissions.getGrants(userId);
-    const ok = grants.some((g) => permissionMatches(g.permission, required));
+    const ok = grants.some((g) =>
+      permissionMatches(g.permission, required, { wildcardExempt: meta.wildcardExempt }),
+    );
     if (!ok) {
       throw new ForbiddenException(`Thiếu quyền: ${required}`);
     }

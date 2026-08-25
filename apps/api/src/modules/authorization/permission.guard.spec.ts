@@ -1,0 +1,128 @@
+import { describe, expect, it, vi } from 'vitest';
+import { ForbiddenException } from '@nestjs/common';
+import type { ExecutionContext } from '@nestjs/common';
+import type { Reflector } from '@nestjs/core';
+import { PermissionGuard } from './permission.guard';
+import type { PermissionsService, PermissionMeta } from './permissions.service';
+import type { PermissionGrant } from './policy.types';
+import { IS_PUBLIC_KEY } from '../../common/decorators/public.decorator';
+import { PERMISSION_KEY } from './require-permission.decorator';
+
+function context(userId: string | undefined): ExecutionContext {
+  const req = userId === undefined ? {} : { user: { userId } };
+  return {
+    getHandler: () => 'handler',
+    getClass: () => 'class',
+    switchToHttp: () => ({ getRequest: () => req }),
+  } as unknown as ExecutionContext;
+}
+
+function build(opts: {
+  required?: string;
+  isPublic?: boolean;
+  meta?: PermissionMeta | null;
+  grants?: PermissionGrant[];
+}) {
+  const reflector = {
+    getAllAndOverride: (key: string) => {
+      if (key === IS_PUBLIC_KEY) {
+        return opts.isPublic;
+      }
+      if (key === PERMISSION_KEY) {
+        return opts.required;
+      }
+      return undefined;
+    },
+  } as unknown as Reflector;
+
+  const permissions = {
+    getPermissionMeta: vi.fn().mockResolvedValue(opts.meta ?? null),
+    getGrants: vi.fn().mockResolvedValue(opts.grants ?? []),
+  } as unknown as PermissionsService;
+
+  return new PermissionGuard(reflector, permissions);
+}
+
+const S1: PermissionMeta = {
+  code: 'cemetery.plot.view',
+  sensitivity: 'S1',
+  wildcardExempt: false,
+};
+const S3: PermissionMeta = {
+  code: 'crm.person.view_sensitive',
+  sensitivity: 'S3',
+  wildcardExempt: true,
+};
+
+describe('PermissionGuard — deny by default', () => {
+  it('refuses a route that declares no permission and is not public', async () => {
+    const guard = build({});
+    await expect(guard.canActivate(context('u1'))).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('lets an explicitly public route through with no token at all', async () => {
+    const guard = build({ isPublic: true });
+    await expect(guard.canActivate(context(undefined))).resolves.toBe(true);
+  });
+
+  it('refuses an unauthenticated caller on a gated route', async () => {
+    const guard = build({ required: 'cemetery.plot.view', meta: S1 });
+    await expect(guard.canActivate(context(undefined))).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('refuses a code that is not in the catalog, instead of quietly matching nothing', async () => {
+    const guard = build({
+      required: 'cemetery.plot.vieww',
+      meta: null,
+      grants: [{ permission: '*.*.*', scope: 'GROUP' }],
+    });
+    await expect(guard.canActivate(context('u1'))).rejects.toThrow(/không có trong danh mục/);
+  });
+});
+
+describe('PermissionGuard — wildcard reach', () => {
+  it('a wildcard grant still covers an ordinary leaf', async () => {
+    const guard = build({
+      required: 'cemetery.plot.view',
+      meta: S1,
+      grants: [{ permission: '*.*.*', scope: 'GROUP' }],
+    });
+    await expect(guard.canActivate(context('u1'))).resolves.toBe(true);
+  });
+
+  it('a wildcard grant does NOT reach a wildcard-exempt leaf', async () => {
+    const guard = build({
+      required: 'crm.person.view_sensitive',
+      meta: S3,
+      grants: [{ permission: '*.*.*', scope: 'GROUP' }],
+    });
+    await expect(guard.canActivate(context('u1'))).rejects.toThrow(/Thiếu quyền/);
+  });
+
+  it('a narrower wildcard is refused on an exempt leaf too', async () => {
+    const guard = build({
+      required: 'crm.person.view_sensitive',
+      meta: S3,
+      grants: [{ permission: 'crm.person.*', scope: 'GROUP' }],
+    });
+    await expect(guard.canActivate(context('u1'))).rejects.toThrow(/Thiếu quyền/);
+  });
+
+  it('naming the exempt leaf works', async () => {
+    const guard = build({
+      required: 'crm.person.view_sensitive',
+      meta: S3,
+      grants: [{ permission: 'crm.person.view_sensitive', scope: 'COMPANY' }],
+    });
+    await expect(guard.canActivate(context('u1'))).resolves.toBe(true);
+  });
+
+  it('refuses a caller whose grants simply do not cover the code', async () => {
+    const guard = build({
+      required: 'cemetery.plot.view',
+      meta: S1,
+      grants: [{ permission: 'service.catalog.view', scope: 'COMPANY' }],
+    });
+    await expect(guard.canActivate(context('u1'))).rejects.toThrow(/Thiếu quyền/);
+  });
+});

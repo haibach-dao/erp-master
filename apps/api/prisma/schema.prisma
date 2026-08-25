@@ -134,10 +134,17 @@ model RoleAssignment {
   @@schema("authz")
 }
 
+// Catalog rows are seeded from src/modules/authorization/permission-catalog.ts.
+// sensitivity/wildcardExempt are ADMIN metadata: they bound who may be granted the
+// leaf and whether a `*` grant may reach it — they are not used for runtime matching.
 model Permission {
-  id          String  @id
-  code        String  @unique // module.resource.action
-  description String?
+  id             String    @id
+  code           String    @unique // module.resource.action
+  description    String?
+  sensitivity    String    @default("S1") // S0 | S1 | S2 | S3 (doc 16 §D.4)
+  wildcardExempt Boolean   @default(false) @map("wildcard_exempt") // S3: `*` không trùm
+  introducedIn   String?   @map("introduced_in") // bản phát hành sinh ra mã (nhãn "New")
+  reviewedAt     DateTime? @map("reviewed_at") @db.Timestamptz(6) // null = chưa ai rà
 
   rolePermissions RolePermission[]
 

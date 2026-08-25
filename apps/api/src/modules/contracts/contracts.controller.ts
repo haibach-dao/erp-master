@@ -4,6 +4,7 @@ import type { Request } from 'express';
 import { JwtAuthGuard } from '../iam/guards/jwt-auth.guard';
 import { PermissionGuard } from '../authorization/permission.guard';
 import { RequirePermission } from '../authorization/require-permission.decorator';
+import { MaskUnless } from '../../common/masking/mask.decorator';
 import { ContractsService } from './contracts.service';
 import { AddPartyDto, CreateContractDto } from './contracts.dto';
 
@@ -19,32 +20,39 @@ export class ContractsController {
   }
 
   @Post()
+  @RequirePermission('contract.record.create')
   create(@Body() dto: CreateContractDto, @Req() req: Request) {
     return this.svc.create(dto, this.actor(req));
   }
 
   @Post(':id/parties')
+  @RequirePermission('contract.party.assign')
   addParty(@Param('id') id: string, @Body() dto: AddPartyDto) {
     return this.svc.addParty(id, dto);
   }
 
   @Post(':id/verify')
+  @RequirePermission('contract.record.verify')
   verify(@Param('id') id: string, @Req() req: Request) {
     return this.svc.verify(id, this.actor(req));
   }
 
   @Post(':id/activate')
-  @RequirePermission('cemetery.contract.activate')
+  @RequirePermission('contract.record.activate')
   activate(@Param('id') id: string, @Req() req: Request) {
     return this.svc.activate(id, this.actor(req));
   }
 
   @Get(':id')
+  @RequirePermission('contract.record.view')
+  @MaskUnless({ field: 'totalAmount', permission: 'contract.amount.view_sensitive' })
   get(@Param('id') id: string) {
     return this.svc.get(id);
   }
 
   @Get()
+  @RequirePermission('contract.record.view')
+  @MaskUnless({ field: 'totalAmount', permission: 'contract.amount.view_sensitive' })
   list(
     @Query('companyId') companyId: string,
     @Query('status') status?: string,
