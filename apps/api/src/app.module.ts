@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { APP_INTERCEPTOR } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { validate } from './config/env.validation';
@@ -16,6 +17,7 @@ import { ContractsModule } from './modules/contracts/contracts.module';
 import { BurialsModule } from './modules/burials/burials.module';
 import { ServicesModule } from './modules/services/services.module';
 import { HealthModule } from './health/health.module';
+import { MaskingInterceptor } from './common/masking/masking.interceptor';
 
 // Rate limit for credential endpoints. Named 'auth' and applied only where
 // @UseGuards(ThrottlerGuard) is declared (AuthController) — no global guard, so
@@ -47,5 +49,8 @@ const AUTH_RATE_LIMIT = {
     ServicesModule,
     HealthModule,
   ],
+  // Toan cuc: danh sach KHONG BAO GIO tra ra ma phai nho gan o tung cho
+  // la danh sach se co cho bi quen.
+  providers: [{ provide: APP_INTERCEPTOR, useClass: MaskingInterceptor }],
 })
 export class AppModule {}

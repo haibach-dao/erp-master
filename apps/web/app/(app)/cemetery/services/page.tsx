@@ -14,6 +14,7 @@ import {
 } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { CompanyPicker } from '@/components/company-picker';
+import { formatMoney } from '@/lib/money';
 
 const inputClass = 'rounded-md border border-border bg-background px-3 py-2 text-sm';
 const today = (): string => new Date().toISOString().slice(0, 10);
@@ -235,7 +236,7 @@ export default function ServicesPage() {
                   {subs.data?.map((s) => (
                     <tr key={s.id} className="border-t border-border">
                       <td className="p-2">{catName(s.serviceCatalogId)}</td>
-                      <td className="p-2">{Number(s.agreedPrice).toLocaleString('vi-VN')}đ</td>
+                      <td className="p-2">{formatMoney(s.agreedPrice)}</td>
                       <td className="p-2">{s.effectiveTo?.slice(0, 10) ?? '—'}</td>
                       <td className="p-2">{s.status}</td>
                       <td className="p-2">

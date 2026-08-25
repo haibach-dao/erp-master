@@ -3,7 +3,7 @@ import { Prisma } from '@prisma/client';
 import { ulid } from 'ulid';
 import { PrismaService } from '../../prisma/prisma.service';
 import { computeEventHash } from './integrity.util';
-import { maskSensitive } from './masking.util';
+import { maskSensitive } from '../../common/masking/masking.util';
 
 export interface RecordAuditInput {
   companyId?: string | null;

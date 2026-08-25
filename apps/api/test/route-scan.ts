@@ -45,11 +45,21 @@ export function scanController(file: string, source: string): ScannedRoute[] {
 
   const routes: ScannedRoute[] = [];
   let pending: string[] = [];
+  // A decorator may wrap across lines (`@MaskUnless(` then its rules then `)`); keep
+  // swallowing lines until its parentheses balance. Without this the run of decorators
+  // looks like it ended at the first continuation line, and the route silently loses
+  // the permission that sits above it.
+  let openParens = 0;
 
   for (const raw of source.split('\n')) {
     const line = raw.trim();
+    if (openParens > 0) {
+      openParens += countParens(line);
+      continue;
+    }
     if (line.startsWith('@')) {
       pending.push(line);
+      openParens = Math.max(0, countParens(line));
       continue;
     }
     if (line.length === 0 || line.startsWith('//') || line.startsWith('*')) {
@@ -84,6 +94,15 @@ export function scanRoutes(srcRoot: string): ScannedRoute[] {
   return findControllerFiles(srcRoot).flatMap((file) =>
     scanController(toPosix(file), readFileSync(file, 'utf8')),
   );
+}
+
+function countParens(line: string): number {
+  let net = 0;
+  for (const ch of line) {
+    if (ch === '(') net += 1;
+    if (ch === ')') net -= 1;
+  }
+  return net;
 }
 
 function firstMatch(lines: string[], re: RegExp): RegExpExecArray | undefined {

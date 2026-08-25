@@ -4,6 +4,7 @@ import type { Request } from 'express';
 import { JwtAuthGuard } from '../iam/guards/jwt-auth.guard';
 import { PermissionGuard } from '../authorization/permission.guard';
 import { RequirePermission } from '../authorization/require-permission.decorator';
+import { MaskUnless } from '../../common/masking/mask.decorator';
 import { CemeteryService } from './cemetery.service';
 import {
   ChangeStatusDto,
@@ -61,6 +62,7 @@ export class CemeteryController {
 
   @Get('grave-types')
   @RequirePermission('cemetery.grave_type.view')
+  @MaskUnless({ field: 'referencePrice', permission: 'cemetery.price.view' })
   listGraveTypes(@Query('companyId') companyId: string) {
     return this.svc.listGraveTypes(companyId);
   }

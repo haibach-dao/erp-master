@@ -4,6 +4,7 @@ import type { Request } from 'express';
 import { JwtAuthGuard } from '../iam/guards/jwt-auth.guard';
 import { PermissionGuard } from '../authorization/permission.guard';
 import { RequirePermission } from '../authorization/require-permission.decorator';
+import { MaskUnless } from '../../common/masking/mask.decorator';
 import { ContractsService } from './contracts.service';
 import { AddPartyDto, CreateContractDto } from './contracts.dto';
 
@@ -44,12 +45,14 @@ export class ContractsController {
 
   @Get(':id')
   @RequirePermission('contract.record.view')
+  @MaskUnless({ field: 'totalAmount', permission: 'contract.amount.view_sensitive' })
   get(@Param('id') id: string) {
     return this.svc.get(id);
   }
 
   @Get()
   @RequirePermission('contract.record.view')
+  @MaskUnless({ field: 'totalAmount', permission: 'contract.amount.view_sensitive' })
   list(
     @Query('companyId') companyId: string,
     @Query('status') status?: string,

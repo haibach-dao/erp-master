@@ -4,6 +4,7 @@ import type { Request } from 'express';
 import { JwtAuthGuard } from '../iam/guards/jwt-auth.guard';
 import { PermissionGuard } from '../authorization/permission.guard';
 import { RequirePermission } from '../authorization/require-permission.decorator';
+import { MaskUnless } from '../../common/masking/mask.decorator';
 import { ServicesService } from './services.service';
 import { CreateCatalogDto, RenewDto, SubscribeDto } from './services.dto';
 
@@ -50,6 +51,7 @@ export class ServicesController {
 
   @Get('subscriptions')
   @RequirePermission('service.subscription.view')
+  @MaskUnless({ field: 'agreedPrice', permission: 'service.subscription.view_price' })
   listSubscriptions(@Query('gravePlotId') gravePlotId?: string, @Query('status') status?: string) {
     return this.svc.listSubscriptions(gravePlotId, status);
   }

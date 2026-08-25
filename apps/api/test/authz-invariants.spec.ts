@@ -14,7 +14,7 @@ import {
   ROLE_CATALOG,
 } from '../src/modules/authorization/permission-catalog';
 import { SCOPES } from '../src/modules/authorization/scope.enum';
-import { scanRoutes } from './route-scan';
+import { scanController, scanRoutes } from './route-scan';
 import { UNGATED_ROUTE_ALLOWLIST } from './authz-allowlist';
 
 const SRC_ROOT = join(__dirname, '..', 'src');
@@ -260,5 +260,48 @@ describe('hình dạng ma trận vai', () => {
     for (const [roleCode, def] of ROLE_ENTRIES) {
       expect(def.description.length, `vai ${roleCode} thiếu mô tả`).toBeGreaterThan(0);
     }
+  });
+});
+
+/* Cái quét là thứ mọi bất biến ở trên dựa vào. Nếu nó bỏ sót một route thì mọi test kia
+ * xanh một cách vô nghĩa. Đã suýt xảy ra thật: decorator xuống dòng (@MaskUnless(...))
+ * cắt đứt chuỗi decorator và route mất luôn mã quyền nằm ngay phía trên.
+ */
+describe('cái quét route tự nó phải đúng', () => {
+  const SOURCE = [
+    '@UseGuards(JwtAuthGuard, PermissionGuard)',
+    "@Controller('demo')",
+    'export class DemoController {',
+    "  @Get('wrapped')",
+    "  @RequirePermission('contract.record.view')",
+    '  @MaskUnless(',
+    "    { field: 'totalAmount', permission: 'contract.amount.view_sensitive' },",
+    '  )',
+    '  wrapped() {',
+    '    return null;',
+    '  }',
+    '',
+    '  @Get()',
+    '  @Public()',
+    '  open() {',
+    '    return null;',
+    '  }',
+    '}',
+  ].join(String.fromCharCode(10));
+
+  const scanned = scanController('demo.controller.ts', SOURCE);
+
+  it('giữ được mã quyền dù bên dưới có decorator xuống dòng', () => {
+    expect(scanned.find((r) => r.id === 'GET /demo/wrapped')?.permission).toBe(
+      'contract.record.view',
+    );
+  });
+
+  it('vẫn nhận ra route công khai đứng sau một decorator xuống dòng', () => {
+    expect(scanned.find((r) => r.id === 'GET /demo')?.isPublic).toBe(true);
+  });
+
+  it('không bỏ sót route nào trong đoạn mã trên', () => {
+    expect(scanned.map((r) => r.id)).toEqual(['GET /demo/wrapped', 'GET /demo']);
   });
 });

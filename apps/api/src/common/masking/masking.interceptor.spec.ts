@@ -1,0 +1,139 @@
+import { describe, expect, it, vi } from 'vitest';
+import { lastValueFrom, of } from 'rxjs';
+import type { CallHandler, ExecutionContext } from '@nestjs/common';
+import type { Reflector } from '@nestjs/core';
+import { MaskingInterceptor } from './masking.interceptor';
+import { MASK_RULES_KEY, type MaskRule } from './mask.decorator';
+import type { PermissionsService } from '../../modules/authorization/permissions.service';
+import type { PermissionGrant } from '../../modules/authorization/policy.types';
+
+function run(opts: {
+  body: unknown;
+  rules?: MaskRule[];
+  grants?: PermissionGrant[];
+  userId?: string;
+  wildcardExempt?: boolean;
+  unknownCode?: boolean;
+}): Promise<unknown> {
+  const reflector = {
+    getAllAndOverride: (key: string) => (key === MASK_RULES_KEY ? opts.rules : undefined),
+  } as unknown as Reflector;
+
+  const permissions = {
+    getGrants: vi.fn().mockResolvedValue(opts.grants ?? []),
+    getPermissionMeta: vi
+      .fn()
+      .mockResolvedValue(
+        opts.unknownCode === true
+          ? null
+          : { code: 'x', sensitivity: 'S3', wildcardExempt: opts.wildcardExempt ?? true },
+      ),
+  } as unknown as PermissionsService;
+
+  const context = {
+    getHandler: () => 'handler',
+    getClass: () => 'class',
+    switchToHttp: () => ({
+      getRequest: () => (opts.userId === undefined ? {} : { user: { userId: opts.userId } }),
+    }),
+  } as unknown as ExecutionContext;
+
+  const next: CallHandler = { handle: () => of(opts.body) };
+  return lastValueFrom(
+    new MaskingInterceptor(reflector, permissions).intercept(context, next) as never,
+  );
+}
+
+const AMOUNT: MaskRule = { field: 'totalAmount', permission: 'contract.amount.view_sensitive' };
+
+describe('MaskingInterceptor — fields the caller may not read', () => {
+  it('masks a declared field when the caller lacks the unlocking code', async () => {
+    const out = await run({
+      body: { id: 'c1', totalAmount: '250000000' },
+      rules: [AMOUNT],
+      userId: 'u1',
+    });
+    expect(out).toEqual({ id: 'c1', totalAmount: '***' });
+  });
+
+  it('leaves the value alone when the caller holds the code by name', async () => {
+    const out = await run({
+      body: { id: 'c1', totalAmount: '250000000' },
+      rules: [AMOUNT],
+      userId: 'u1',
+      grants: [{ permission: 'contract.amount.view_sensitive', scope: 'COMPANY' }],
+    });
+    expect(out).toEqual({ id: 'c1', totalAmount: '250000000' });
+  });
+
+  it('a wildcard grant does not unmask a wildcard-exempt field', async () => {
+    const out = await run({
+      body: { totalAmount: '1' },
+      rules: [AMOUNT],
+      userId: 'u1',
+      grants: [{ permission: '*.*.*', scope: 'GROUP' }],
+    });
+    expect(out).toEqual({ totalAmount: '***' });
+  });
+
+  it('masks inside arrays and nested objects, not just at the top level', async () => {
+    const out = await run({
+      body: { data: [{ totalAmount: '1' }, { totalAmount: '2' }], page: 1 },
+      rules: [AMOUNT],
+      userId: 'u1',
+    });
+    expect(out).toEqual({ data: [{ totalAmount: '***' }, { totalAmount: '***' }], page: 1 });
+  });
+
+  it('fails closed: no authenticated caller means the field stays masked', async () => {
+    const out = await run({ body: { totalAmount: '1' }, rules: [AMOUNT] });
+    expect(out).toEqual({ totalAmount: '***' });
+  });
+
+  it('fails closed: an unlocking code missing from the catalog never unmasks', async () => {
+    const out = await run({
+      body: { totalAmount: '1' },
+      rules: [AMOUNT],
+      userId: 'u1',
+      unknownCode: true,
+      grants: [{ permission: 'contract.amount.view_sensitive', scope: 'COMPANY' }],
+    });
+    expect(out).toEqual({ totalAmount: '***' });
+  });
+
+  it('keeps null as null rather than turning "no value" into "hidden value"', async () => {
+    const out = await run({ body: { totalAmount: null }, rules: [AMOUNT], userId: 'u1' });
+    expect(out).toEqual({ totalAmount: null });
+  });
+
+  it('the year strategy keeps the year and drops the rest of a date', async () => {
+    const out = await run({
+      body: { dateOfBirth: new Date('1975-04-30T00:00:00Z') },
+      rules: [{ field: 'dateOfBirth', permission: 'crm.person.view_sensitive', strategy: 'year' }],
+      userId: 'u1',
+    });
+    expect(out).toEqual({ dateOfBirth: '1975' });
+  });
+});
+
+describe('MaskingInterceptor — fields nobody may read', () => {
+  it('strips never-serialize fields even with no rules and no caller', async () => {
+    const out = await run({
+      body: { id: 'p1', fullName: 'A', nationalIdCipher: 'xx', nationalIdHash: 'yy' },
+    });
+    expect(out).toEqual({ id: 'p1', fullName: 'A' });
+  });
+
+  it('strips them from nested rows too', async () => {
+    const out = await run({
+      body: { data: [{ person: { nationalIdCipher: 'xx', nationalIdMasked: '079***123' } }] },
+    });
+    expect(out).toEqual({ data: [{ person: { nationalIdMasked: '079***123' } }] });
+  });
+
+  it('leaves values that are not plain objects untouched', async () => {
+    const when = new Date('2026-08-25T00:00:00Z');
+    const out = (await run({ body: { occurredAt: when } })) as { occurredAt: Date };
+    expect(out.occurredAt).toBe(when);
+  });
+});

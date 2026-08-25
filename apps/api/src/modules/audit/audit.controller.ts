@@ -3,6 +3,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../iam/guards/jwt-auth.guard';
 import { PermissionGuard } from '../authorization/permission.guard';
 import { RequirePermission } from '../authorization/require-permission.decorator';
+import { MaskUnless } from '../../common/masking/mask.decorator';
 import { AuditQueryService } from './audit-query.service';
 import { AuditQueryDto } from './dto/audit-query.dto';
 
@@ -17,6 +18,10 @@ export class AuditController {
 
   @Get()
   @RequirePermission('audit.event.view')
+  @MaskUnless(
+    { field: 'beforeData', permission: 'audit.event.view_sensitive' },
+    { field: 'afterData', permission: 'audit.event.view_sensitive' },
+  )
   list(@Query() query: AuditQueryDto) {
     return this.auditQuery.query(query);
   }
