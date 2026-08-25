@@ -28,15 +28,6 @@ describe('(a) permission codes are exactly three segments', () => {
   it('has no duplicate codes', () => {
     expect(new Set(PERMISSION_CODES).size).toBe(PERMISSION_CODES.length);
   });
-
-  it('every role grant references a catalogued code and a real scope', () => {
-    for (const [roleCode, def] of Object.entries(ROLE_CATALOG)) {
-      for (const grant of def.grants) {
-        expect(PERMISSION_CODES, `vai ${roleCode} cấp mã lạ: ${grant.code}`).toContain(grant.code);
-        expect(SCOPES, `vai ${roleCode} dùng scope lạ: ${grant.scope}`).toContain(grant.scope);
-      }
-    }
-  });
 });
 
 describe('(b) every @RequirePermission code exists in the catalog', () => {
@@ -121,22 +112,128 @@ describe('catalog metadata', () => {
   });
 });
 
-/* PR-3 chỉ THÊM mã, tuyệt đối không cấp cho ai. Ràng buộc này giữ nguyên giá trị về
- * sau: mỗi lần bảng grant đổi, con số dưới đây phải đổi theo trong CÙNG một PR có
- * người rà — chứ không trôi kèm một PR "chỉ thêm danh mục". */
-describe('seeding the catalog hands nobody anything', () => {
-  it('the grant table is exactly the two legacy roles', () => {
-    expect(Object.keys(ROLE_CATALOG).sort()).toEqual(['ADMIN', 'STAFF']);
-    const grantCount = Object.values(ROLE_CATALOG).reduce((n, r) => n + r.grants.length, 0);
-    expect(grantCount).toBe(3);
+/* Ma trận vai × quyền: các bất biến TÁCH NHIỆM VỤ ở doc 16 §E.3. Ở đây kiểm mức VAI
+ * (không vai nào cầm cả hai vế). Bất biến mức BẢN GHI — verifiedBy != createdBy,
+ * activatedBy != verifiedBy — phải kiểm ở tầng service, test này không thay thế được.
+ */
+const ROLE_ENTRIES = Object.entries(ROLE_CATALOG);
+const codesOf = (roleCode: string): string[] =>
+  (ROLE_CATALOG[roleCode]?.grants ?? []).map((g) => g.code);
+
+function rolesHoldingBoth(a: string, b: string): string[] {
+  return ROLE_ENTRIES.filter(([code]) => code !== 'ADMIN')
+    .filter(([code]) => codesOf(code).includes(a) && codesOf(code).includes(b))
+    .map(([code]) => code);
+}
+
+describe('tách nhiệm vụ ở mức vai (doc 16 §E.3)', () => {
+  it.each([
+    ['contract.record.create', 'contract.record.verify'],
+    ['contract.record.verify', 'contract.record.activate'],
+    ['burial.record.create', 'burial.record.verify'],
+    ['burial.record.verify', 'burial.record.complete'],
+    ['crm.relationship.create', 'crm.relationship.verify'],
+    ['cemetery.hold.hold', 'cemetery.hold.release'],
+    ['authz.change.submit', 'authz.change.approve'],
+    ['cemetery.price.set_price', 'service.subscription.create'],
+    ['service.price.set_price', 'service.subscription.create'],
+    ['service.transaction.view', 'service.transaction.adjust'],
+    ['file.object.set_sensitivity', 'file.object.download_sensitive'],
+  ])('không vai nào cầm cả %s lẫn %s', (a, b) => {
+    expect(rolesHoldingBoth(a, b)).toEqual([]);
   });
 
-  it('no S3 leaf is granted to anybody yet, except via the legacy wildcard', () => {
-    const bySensitivity = new Map(PERMISSION_CATALOG.map((d) => [d.code, d.sensitivity]));
-    const grantedS3 = Object.values(ROLE_CATALOG)
-      .flatMap((r) => r.grants.map((g) => g.code))
-      .filter((code) => code !== '*.*.*')
-      .filter((code) => bySensitivity.get(code) === 'S3');
-    expect(grantedS3).toEqual([]);
+  it('hai vai kiểm soát không có quyền GHI nghiệp vụ', () => {
+    const businessWrite = new Set(
+      PERMISSION_CATALOG.map((d) => d.code)
+        .filter((code) =>
+          ['cemetery', 'contract', 'burial', 'service'].includes(code.split('.')[0] ?? ''),
+        )
+        .filter((code) => !(code.split('.')[2] ?? '').startsWith('view'))
+        .filter((code) => !['search', 'export'].includes(code.split('.')[2] ?? '')),
+    );
+    for (const roleCode of ['KTNB_KIEM_TOAN', 'DPO_DLCN']) {
+      const writes = codesOf(roleCode).filter((c) => businessWrite.has(c));
+      expect(writes, `${roleCode} phải CHỈ ĐỌC nghiệp vụ`).toEqual([]);
+    }
+  });
+
+  it('quản trị hạ tầng không chạm dữ liệu nhạy cảm nghiệp vụ hay doanh thu', () => {
+    const forbidden = [
+      'crm.person.view_sensitive',
+      'crm.person.view_protected',
+      'contract.amount.view_sensitive',
+      'service.revenue.view',
+      'file.object.download_sensitive',
+      'authz.change.approve',
+    ];
+    const held = codesOf('QT_HE_THONG').filter((c) => forbidden.includes(c));
+    expect(held, 'QT_HE_THONG giữ leaf bị cấm').toEqual([]);
+  });
+
+  it('không ai được cấp quyền cấp/thu quyền ở bước này — cửa duy nhất là migration + review Git', () => {
+    const selfService = [
+      'authz.role.create',
+      'authz.role.update',
+      'authz.role_permission.grant',
+      'authz.role_permission.revoke',
+      'authz.role_assignment.assign',
+      'authz.role_assignment.revoke',
+      'authz.scope.assign',
+    ];
+    const holders = ROLE_ENTRIES.filter(([code]) => code !== 'ADMIN')
+      .filter(([code]) => codesOf(code).some((c) => selfService.includes(c)))
+      .map(([code]) => code);
+    expect(holders).toEqual([]);
+  });
+
+  it('vai khẩn cấp BREAK_GLASS chưa được tạo (chưa có valid_to thì nó là siêu quyền vĩnh viễn)', () => {
+    expect(Object.keys(ROLE_CATALOG)).not.toContain('BREAK_GLASS');
+  });
+
+  it('ghế máy giữ đúng hai mã', () => {
+    expect(codesOf('SYSTEM_WORKER').sort()).toEqual([
+      'cemetery.plot.set_status',
+      'service.subscription.cancel',
+    ]);
+  });
+});
+
+describe('hình dạng ma trận vai', () => {
+  it('chỉ ADMIN mang wildcard toàn quyền', () => {
+    const wildcardHolders = ROLE_ENTRIES.filter(([, def]) =>
+      def.grants.some((g) => g.code === '*.*.*'),
+    ).map(([code]) => code);
+    expect(wildcardHolders).toEqual(['ADMIN']);
+  });
+
+  it('mọi grant trỏ mã có thật và scope có thật', () => {
+    for (const [roleCode, def] of ROLE_ENTRIES) {
+      for (const g of def.grants) {
+        expect(PERMISSION_CODES, `${roleCode} cấp mã lạ: ${g.code}`).toContain(g.code);
+        expect(SCOPES, `${roleCode} dùng scope lạ: ${g.scope}`).toContain(g.scope);
+      }
+    }
+  });
+
+  it('không vai nào cấp trùng một mã hai lần', () => {
+    for (const [roleCode, def] of ROLE_ENTRIES) {
+      const codes = def.grants.map((g) => g.code);
+      expect(new Set(codes).size, `${roleCode} có mã trùng`).toBe(codes.length);
+    }
+  });
+
+  it('không dùng scope chưa thực thi được (DEPARTMENT / ASSIGNED / CUSTOM)', () => {
+    const unenforceable = ['DEPARTMENT', 'ASSIGNED', 'CUSTOM'];
+    const offenders = ROLE_ENTRIES.filter(([, def]) =>
+      def.grants.some((g) => unenforceable.includes(g.scope)),
+    ).map(([code]) => code);
+    expect(offenders, 'khai scope mà không thực thi thì tệ hơn không khai').toEqual([]);
+  });
+
+  it('mọi vai có mô tả — vai không giải thích được là vai không rà được', () => {
+    for (const [roleCode, def] of ROLE_ENTRIES) {
+      expect(def.description.length, `vai ${roleCode} thiếu mô tả`).toBeGreaterThan(0);
+    }
   });
 });

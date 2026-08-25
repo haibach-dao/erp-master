@@ -265,23 +265,398 @@ export const PERMISSION_CATALOG: readonly PermissionDef[] = [
 
 export const PERMISSION_CODES: readonly string[] = PERMISSION_CATALOG.map((p) => p.code);
 
+/* ---------------------------------------------------------------------------
+ * WHO HOLDS WHAT — role × permission matrix (blueprint doc 16 §E.2).
+ *
+ * Reading rules applied when transcribing the matrix:
+ *  - "C" -> granted. "–" -> not granted.
+ *  - "A" (only with approval) -> NOT granted at Gate 1: the approval workflow (G0-A7)
+ *    is still deferred, so "A" would otherwise mean "granted with no gate behind it".
+ *  - "X" (forbidden) -> not granted. An explicit DENY row (deny beats allow) needs the
+ *    deny table from a later step; until then "X" and "–" behave identically at runtime,
+ *    and that gap is real rather than covered here.
+ *  - A role that may `verify`/`approve`/`cancel`/`export` a thing is also granted the
+ *    matching read leaf. The §E.2 group-2 table is written as a delta over the
+ *    operational baseline, and a role that can verify a contract it cannot read is not
+ *    a role. Every such derived read is marked `// đọc dẫn xuất`.
+ *
+ * `*.*.*` for ADMIN is deliberately left in place. Removing it in the same change that
+ * introduces explicit roles is how every live operator gets locked out at once (§G.2);
+ * it goes when the wildcard is tightened, one step later.
+ * --------------------------------------------------------------------------- */
+
 export interface RoleDef {
   name: string;
+  description: string;
   grants: { code: string; scope: string }[];
 }
 
-/* Who holds what. UNCHANGED in this change on purpose: seeding the catalog must not
- * move a single row in `role_permissions`. Replacing ADMIN's `*.*.*` with the 14
- * explicit roles is the next step, and it needs a before/after report of who holds
- * what (doc 16 §F PR-4, §G.2).
- */
+/** Role-level default scope. Per-assignment narrowing lives in role_assignments.scope. */
+function role(name: string, description: string, scope: string, codes: string[]): RoleDef {
+  return { name, description, grants: codes.map((code) => ({ code, scope })) };
+}
+
+// Read leaves every operational role needs to see the catalogue it works in.
+const CATALOG_READ = [
+  'cemetery.reference.view',
+  'cemetery.site.view',
+  'cemetery.grave_type.view',
+  'cemetery.plot.view',
+];
+const FILE_BASIC = [
+  'file.object.view',
+  'file.object.upload',
+  'file.object.confirm',
+  'file.object.download',
+];
+// "cemetery.*.view" in the group-2 matrix — reading the catalogue and the assets.
+const CEMETERY_READ_ALL = [
+  ...CATALOG_READ,
+  'cemetery.price.view',
+  'cemetery.hold.view',
+  'cemetery.plot.view_history',
+];
+
 export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
-  ADMIN: { name: 'Quản trị', grants: [{ code: '*.*.*', scope: 'GROUP' }] },
+  // --- Vai cũ. Giữ nguyên tới khi wildcard bị siết, nếu không là khoá cửa cả hệ.
+  ADMIN: {
+    name: 'Quản trị',
+    description: 'Vai cũ mang `*.*.*`. Doc 16 Q13 đề xuất BỎ HẲN sau khi 14 vai chạy thật.',
+    grants: [{ code: '*.*.*', scope: 'GROUP' }],
+  },
   STAFF: {
-    name: 'Nhân viên',
+    name: 'Nhân viên (vai cũ)',
+    description: 'Vai cũ với 2 mã deprecated. Thay bằng vai tác nghiệp tương ứng.',
     grants: [
       { code: 'cemetery.customer.view', scope: 'COMPANY' },
       { code: 'cemetery.grave.hold', scope: 'COMPANY' },
     ],
   },
+
+  // --- Nhóm 1: vai tác nghiệp ---
+  CSKH_TIEP_DON: role('Tiếp đón & CSKH', 'Front desk — tiếp khách, tra hồ sơ', 'COMPANY', [
+    ...CATALOG_READ,
+    'cemetery.price.view',
+    'cemetery.hold.view',
+    'crm.customer.view',
+    'crm.customer.create',
+    'crm.person.view',
+    'contract.record.view',
+    'contract.party.view',
+    'service.catalog.view',
+    'service.price.view',
+    'service.subscription.view',
+    ...FILE_BASIC,
+  ]),
+
+  KD_KINH_DOANH: role('Kinh doanh', 'Giữ chỗ, soạn hợp đồng, bán dịch vụ', 'COMPANY', [
+    ...CATALOG_READ,
+    'cemetery.plot.search',
+    'cemetery.price.view',
+    'cemetery.hold.view',
+    'cemetery.hold.hold',
+    'crm.customer.view',
+    'crm.customer.create',
+    'crm.customer.search',
+    'crm.person.view',
+    'crm.person.create',
+    'crm.relationship.view',
+    'crm.relationship.create',
+    'crm.consent.view',
+    'crm.consent.record',
+    'contract.record.view',
+    'contract.record.search',
+    'contract.record.create',
+    'contract.record.update',
+    'contract.amount.view_sensitive',
+    'contract.party.view',
+    'contract.party.assign',
+    'service.catalog.view',
+    'service.price.view',
+    'service.subscription.view',
+    'service.subscription.create',
+    'service.subscription.renew',
+    'service.subscription.search',
+    'service.subscription.view_price',
+    ...FILE_BASIC,
+  ]),
+
+  HS_NHAN_THAN: role(
+    'Hồ sơ nhân thân & giấy tờ',
+    'Lớp Person/CCCD/quan hệ, dùng chung liên công ty (G0-E5.1)',
+    'COMPANY',
+    [
+      'cemetery.reference.view',
+      'crm.customer.view',
+      'crm.customer.create',
+      'crm.customer.search',
+      'crm.person.view',
+      'crm.person.create',
+      'crm.person.update',
+      'crm.person.view_sensitive',
+      'crm.relationship.view',
+      'crm.relationship.create',
+      'crm.consent.view',
+      'crm.consent.record',
+      'contract.party.view',
+      'burial.deceased.view',
+      'burial.deceased.create',
+      'burial.record.view',
+      'burial.record.search',
+      ...FILE_BASIC,
+      'file.object.download_sensitive',
+    ],
+  ),
+
+  NV_AN_TANG: role('Nghiệp vụ an táng', 'Thực hiện an táng — tách hẳn khỏi kinh doanh', 'COMPANY', [
+    ...CATALOG_READ,
+    'crm.customer.view',
+    'crm.person.view',
+    'crm.relationship.view',
+    'contract.record.view',
+    'contract.party.view',
+    'burial.deceased.view',
+    'burial.deceased.create',
+    'burial.record.view',
+    'burial.record.create',
+    'burial.record.search',
+    'service.catalog.view',
+    ...FILE_BASIC,
+    'file.object.download_sensitive',
+  ]),
+
+  NV_BAO_TRI: role('Chăm sóc mộ & bảo trì', 'Bảo trì tại một nghĩa trang', 'SITE', [
+    ...CATALOG_READ,
+    'cemetery.plot.search',
+    'cemetery.plot.view_history',
+    'burial.record.view',
+    'service.catalog.view',
+    'service.subscription.view',
+    'file.object.view',
+    'file.object.upload',
+    'file.object.confirm',
+  ]),
+
+  THU_NGAN: role('Thu ngân', 'Thu tiền, ghi nhận giao dịch', 'COMPANY', [
+    ...CATALOG_READ,
+    'cemetery.price.view',
+    'crm.customer.view',
+    'contract.record.view',
+    'contract.record.search',
+    'contract.amount.view_sensitive',
+    'contract.party.view',
+    'service.catalog.view',
+    'service.price.view',
+    'service.subscription.view',
+    'service.subscription.create',
+    'service.subscription.renew',
+    'service.subscription.search',
+    'service.subscription.view_price',
+    'service.transaction.view',
+    ...FILE_BASIC,
+  ]),
+
+  // --- Nhóm 2: quản lý, kiểm soát, quản trị ---
+  QL_NGHIA_TRANG: role('Quản lý nghĩa trang', 'Ghế THẨM ĐỊNH tác nghiệp', 'SITE', [
+    ...CEMETERY_READ_ALL,
+    'cemetery.plot.set_status',
+    'cemetery.hold.release',
+    'crm.customer.search',
+    'crm.customer.view', // đọc dẫn xuất cho search
+    'crm.person.view',
+    'crm.relationship.view', // đọc dẫn xuất cho verify/cancel
+    'crm.relationship.verify',
+    'crm.relationship.cancel',
+    'crm.consent.view',
+    'crm.consent.withdraw',
+    'contract.record.view', // đọc dẫn xuất cho verify
+    'contract.record.search',
+    'contract.record.verify',
+    'contract.amount.view_sensitive',
+    'burial.record.view', // đọc dẫn xuất cho verify
+    'burial.record.verify',
+    'burial.deceased.view',
+    'service.subscription.view', // đọc dẫn xuất cho cancel
+    'service.subscription.cancel',
+    'service.subscription.search',
+    'service.subscription.view_price',
+    'service.transaction.view',
+    'service.revenue.view',
+    ...FILE_BASIC,
+    'file.object.download_sensitive',
+    'audit.event.view',
+    'authz.permission.view',
+    'authz.role.view',
+    'authz.matrix.export',
+    'notification.template.view',
+    'notification.template.update',
+    'notification.message.view',
+  ]),
+
+  GD_CONG_TY: role('Ban giám đốc công ty', 'Ghế CHO HIỆU LỰC', 'COMPANY', [
+    ...CEMETERY_READ_ALL,
+    'cemetery.plot.set_status',
+    'cemetery.plot.export',
+    'cemetery.hold.release',
+    'crm.customer.search',
+    'crm.customer.view', // đọc dẫn xuất cho search
+    'crm.person.view',
+    'crm.relationship.view', // đọc dẫn xuất cho verify/cancel
+    'crm.relationship.verify',
+    'crm.relationship.cancel',
+    'crm.consent.view',
+    'crm.consent.withdraw',
+    'contract.record.view', // đọc dẫn xuất cho approve/activate
+    'contract.record.search',
+    'contract.record.approve',
+    'contract.record.activate',
+    'contract.record.cancel',
+    'contract.record.export',
+    'contract.amount.view_sensitive',
+    'burial.record.view', // đọc dẫn xuất cho complete
+    'burial.record.complete',
+    'burial.record.export',
+    'burial.deceased.view',
+    'service.subscription.view', // đọc dẫn xuất cho cancel
+    'service.subscription.cancel',
+    'service.subscription.search',
+    'service.subscription.view_price',
+    'service.transaction.view',
+    'service.period.close',
+    'service.revenue.view',
+    ...FILE_BASIC,
+    'file.object.download_sensitive',
+    'audit.event.view',
+    'audit.integrity.view',
+    'authz.permission.view',
+    'authz.role.view',
+    'authz.matrix.export',
+    'authz.change.approve',
+  ]),
+
+  HD_GIA: role('Hội đồng giá', 'Duyệt giá — tách hẳn khỏi người bán', 'COMPANY', [
+    ...CEMETERY_READ_ALL,
+    'contract.amount.view_sensitive',
+    'service.catalog.view',
+    'service.price.view',
+    'service.subscription.search',
+    'service.subscription.view',
+    'service.subscription.view_price',
+    'service.revenue.view',
+  ]),
+
+  KT_DOI_SOAT: role('Kế toán đối soát', 'CHỈ ĐỌC — đối soát số liệu', 'COMPANY', [
+    ...CEMETERY_READ_ALL,
+    'cemetery.plot.export',
+    'contract.record.view', // đọc dẫn xuất cho export
+    'contract.record.search',
+    'contract.record.export',
+    'contract.amount.view_sensitive',
+    'service.subscription.view',
+    'service.subscription.search',
+    'service.subscription.view_price',
+    'service.transaction.view',
+    'service.revenue.view',
+    'audit.event.view',
+    'audit.integrity.view',
+  ]),
+
+  KTNB_KIEM_TOAN: role('Kiểm toán nội bộ', 'CHỈ ĐỌC, toàn tập đoàn', 'GROUP', [
+    ...CEMETERY_READ_ALL,
+    'cemetery.plot.export',
+    'crm.customer.search',
+    'crm.customer.view', // đọc dẫn xuất cho search
+    'crm.person.view',
+    'crm.consent.view',
+    'contract.record.view', // đọc dẫn xuất cho export
+    'contract.record.search',
+    'contract.record.export',
+    'contract.amount.view_sensitive',
+    'burial.record.view', // đọc dẫn xuất cho export
+    'burial.record.export',
+    'burial.deceased.view',
+    'service.subscription.view',
+    'service.subscription.search',
+    'service.subscription.view_price',
+    'service.transaction.view',
+    'service.revenue.view',
+    'audit.event.view',
+    'audit.user_activity.view',
+    'audit.integrity.view',
+    'authz.permission.view',
+    'authz.role.view',
+    'authz.matrix.export',
+    'iam.user.view',
+    'iam.session.view',
+    'config.flag.view',
+    'notification.message.view',
+  ]),
+
+  DPO_DLCN: role('Cán bộ bảo vệ dữ liệu cá nhân', 'NĐ13 + G0-A6. CHỈ ĐỌC nghiệp vụ.', 'GROUP', [
+    'crm.customer.view',
+    'crm.customer.search',
+    'crm.person.view',
+    'crm.person.view_sensitive',
+    'crm.person.set_protected',
+    'crm.consent.view',
+    'crm.consent.withdraw',
+    'burial.deceased.view',
+    'audit.event.view',
+    'audit.event.view_sensitive',
+    'audit.user_activity.view',
+    'authz.permission.view',
+    'authz.role.view',
+    'authz.matrix.export',
+    'iam.user.view',
+    'iam.session.view',
+    'config.flag.view',
+    'notification.message.view',
+  ]),
+
+  QT_HE_THONG: role(
+    'Quản trị hệ thống',
+    'Hạ tầng. KHÔNG xem dữ liệu nhạy cảm nghiệp vụ, KHÔNG xem doanh thu.',
+    'GROUP',
+    [
+      'audit.integrity.view',
+      'authz.permission.view',
+      'authz.role.view',
+      'authz.matrix.export',
+      'authz.change.submit',
+      'iam.user.view',
+      'iam.user.create',
+      'iam.user.update',
+      'iam.session.view',
+      'iam.session.revoke',
+      'config.flag.view',
+    ],
+  ),
+
+  QT_NGHIEP_VU: role(
+    'Quản trị nghiệp vụ',
+    'Soạn ma trận quyền và danh mục. CHỈ submit, KHÔNG approve.',
+    'GROUP',
+    [
+      ...CEMETERY_READ_ALL,
+      'authz.permission.view',
+      'authz.role.view',
+      'authz.matrix.export',
+      'authz.change.submit',
+      'config.reference.view',
+      'notification.template.view',
+      'notification.template.update',
+    ],
+  ),
+
+  // --- Ghế máy. Hai mã, và cả hai còn phải bị giới hạn ở tầng service (PR-12):
+  //     set_status chỉ cho Held->Available, cancel chỉ cho thuê bao đã hết hạn.
+  SYSTEM_WORKER: role(
+    'Ghế máy (worker)',
+    'Tiến trình nền — hold-expiry, service-sweep',
+    'COMPANY',
+    ['cemetery.plot.set_status', 'service.subscription.cancel'],
+  ),
+
+  // BREAK_GLASS cố ý KHÔNG tạo ở đây. Không có `valid_to` trên role_assignments thì nó
+  // là siêu quyền VĨNH VIỄN, không phải vai khẩn cấp có hạn giờ (doc 16 §E.1).
 };
