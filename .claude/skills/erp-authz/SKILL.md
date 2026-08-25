@@ -15,15 +15,17 @@ Tài liệu tham chiếu đầy đủ (taxonomy, 14 vai người + 1 ghế máy,
 Doc 16 là **nháp do AI soạn**. Các quyết định Gate 0 (A1/A2/A5/A6/E5.1/E5.2/G1) vẫn **chưa có `decision_id`** trong `13-GATE-0-CHECKLIST-MOT-TRANG.md` (cột rỗng, trạng thái ☐, chưa có số phiên). Theo hiến pháp INDEVCO điều 6, **chưa trỏ được `decision_id` thì chưa phải quyết định**.
 → Khi viện dẫn A5/A6/G3.1…, gọi là **"khuyến nghị nháp"**, không gọi là "đã chốt".
 
-**Nhưng năm quyết định dưới đây thì chủ doanh nghiệp ĐÃ đưa ra trong phiên làm việc 2026-08-25**, và code đã theo. Vẫn chưa có `decision_id`, nhưng đừng đề xuất ngược lại chúng:
+**Nhưng bảy quyết định dưới đây thì chủ doanh nghiệp ĐÃ đưa ra trong phiên làm việc 2026-08-25**, và code đã theo. Vẫn chưa có `decision_id`, nhưng đừng đề xuất ngược lại chúng:
 
-| Nội dung            | Quyết định                                                                      |
-| ------------------- | ------------------------------------------------------------------------------- |
-| `*.*.*` của ADMIN   | **Bỏ hẳn** (đã bỏ khỏi ma trận; ADMIN giữ 74 leaf S3 tường minh)                |
-| `GROUP`             | **= không giới hạn bản ghi**, không phải "cùng tập đoàn"                        |
-| Người ↔ nghĩa trang | **Nhiều-nhiều** → bảng hub riêng `authz.scope_assignments`                      |
-| Nhiều vai           | **HỢP (cộng dồn)**, KHÔNG phải giao / hẹp nhất                                  |
-| ADMIN               | **Leo thang được** (gán ADMIN cho người khác) + sửa nội dung vai trên giao diện |
+| Nội dung             | Quyết định                                                                      |
+| -------------------- | ------------------------------------------------------------------------------- |
+| `*.*.*` của ADMIN    | **Bỏ hẳn** (đã bỏ khỏi ma trận; ADMIN giữ 74 leaf S3 tường minh)                |
+| `GROUP`              | **= không giới hạn bản ghi**, không phải "cùng tập đoàn"                        |
+| Người ↔ nghĩa trang  | **Nhiều-nhiều** → bảng hub riêng `authz.scope_assignments`                      |
+| Nhiều vai            | **HỢP (cộng dồn)**, KHÔNG phải giao / hẹp nhất                                  |
+| ADMIN                | **Leo thang được** (gán ADMIN cho người khác) + sửa nội dung vai trên giao diện |
+| LÀN CẤM              | **KHÔNG có nhân thân nào cần bảo vệ** → `access_rules` cố ý để RỖNG             |
+| Luồng hợp đồng (Q10) | Ai cầm `activate` thì đi thẳng; ai không thì qua `verify` bởi người khác        |
 
 ## 1. Kiến trúc — 4 nguyên tắc
 
@@ -134,10 +136,9 @@ DATABASE_URL=... pnpm --filter @erp/api exec tsx scripts/authz-rules.ts
 
 ## 7. Còn nợ — biết trước để khỏi tưởng đã có
 
-- **`access_rules` và `scope_assignments` đang RỖNG.** Cơ chế chạy và có test, nhưng LÀN CẤM **chưa được bảo vệ trên thực tế** và chưa ai bị bó theo nghĩa trang.
+- **`access_rules` cố ý RỖNG.** Chủ doanh nghiệp đã trả lời: **không có nhân thân nào cần bảo vệ**. Đừng hỏi lại, và đừng tự ghi dòng nào vào. Cơ chế nằm đó cho lúc câu trả lời đổi.
+- **`scope_assignments` đang RỖNG** — chưa ai bị bó theo nghĩa trang trên thực tế. Seed bằng `scripts/seed-scope.ts` hoặc màn hình `/organization/scope`.
 - **Chưa có màn hình sửa chuỗi luật.** Thứ tự là toàn bộ ý nghĩa của bảng đó, nên cần kéo-thả chứ không phải form thêm dòng. Tạm đọc bằng `scripts/authz-rules.ts`.
-- **Q10 (mốc sinh phân bổ mộ) đã có quyết định nhưng CHƯA triển khai.** Luật: ai cầm `contract.record.activate` thì `Draft → Active` thẳng; ai không thì qua `verify` → `approve`. **Chặn trước khi làm:** hiện KHÔNG vai nào vừa có `contract.record.create` vừa có `activate`. Đề xuất cấp `create` cho `GD_CONG_TY`, **KHÔNG** cho `QL_NGHIA_TRANG` (vai đang giữ `verify`) — để chuỗi _soạn → thẩm định_ luôn có hai người.
-- **Bất biến mức BẢN GHI chưa có test** (`verifiedBy ≠ createdBy`, `activatedBy ≠ verifiedBy`). Test hiện chỉ phủ mức VAI.
+- **Worker chưa phát audit event `actorType='AGENT'`.** Chuỗi hash toàn vẹn nằm trong `apps/api`; nhân bản sang worker mà lệch là gãy chuỗi. Cần tách `computeEventHash` ra package dùng chung trước.
 - **`isScope()` vẫn fallback `CUSTOM`** — deny im lặng, chưa sửa.
-- **Ghế máy (`apps/worker`) chưa dùng `SYSTEM_WORKER`.** `hold-expiry.ts` vẫn ghi `changedBy: null` — còn một đường giải phóng mộ không chủ thể.
 - **`phone`/`email`/`dateOfBirth` chưa mask.** Phạm vi NĐ13 rộng hơn A6.
