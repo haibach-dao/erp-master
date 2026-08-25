@@ -8,6 +8,7 @@
 import { describe, expect, it } from 'vitest';
 import { join } from 'node:path';
 import {
+  ACTIONS,
   PERMISSION_CATALOG,
   PERMISSION_CODES,
   ROLE_CATALOG,
@@ -85,5 +86,57 @@ describe('catalog metadata', () => {
     for (const def of PERMISSION_CATALOG) {
       expect(def.description.length, `mã ${def.code} thiếu mô tả`).toBeGreaterThan(0);
     }
+  });
+
+  it('every action comes from the closed set — a new verb needs a reviewed migration', () => {
+    const strays = PERMISSION_CATALOG.filter((def) => def.code !== '*.*.*')
+      .filter((def) => !(ACTIONS as readonly string[]).includes(def.code.split('.')[2] ?? ''))
+      .map((def) => def.code);
+    expect(strays, 'action lạ — thêm vào ACTIONS kèm lý do, hoặc đổi mã').toEqual([]);
+  });
+
+  it('sensitivity is one of S0..S3 and stays a column, never a fourth segment', () => {
+    for (const def of PERMISSION_CATALOG) {
+      expect(['S0', 'S1', 'S2', 'S3'], `mã ${def.code}`).toContain(def.sensitivity);
+    }
+  });
+
+  it('every S3 leaf is wildcard-exempt, so a `*` grant cannot silently reach it', () => {
+    const leaky = PERMISSION_CATALOG.filter(
+      (def) => def.sensitivity === 'S3' && !def.wildcardExempt && def.code !== '*.*.*',
+    ).map((def) => def.code);
+    expect(leaky, 'leaf S3 phải wildcardExempt (doc 16 §D.4)').toEqual([]);
+  });
+
+  it('deprecated codes point at a live replacement', () => {
+    const dangling = PERMISSION_CATALOG.filter((def) => def.deprecated !== undefined)
+      .filter((def) =>
+        (def.deprecated ?? '')
+          .split('+')
+          .map((c) => c.trim())
+          .some((c) => !PERMISSION_CODES.includes(c)),
+      )
+      .map((def) => `${def.code} -> ${def.deprecated ?? ''}`);
+    expect(dangling, 'mã thay thế chưa có trong danh mục').toEqual([]);
+  });
+});
+
+/* PR-3 chỉ THÊM mã, tuyệt đối không cấp cho ai. Ràng buộc này giữ nguyên giá trị về
+ * sau: mỗi lần bảng grant đổi, con số dưới đây phải đổi theo trong CÙNG một PR có
+ * người rà — chứ không trôi kèm một PR "chỉ thêm danh mục". */
+describe('seeding the catalog hands nobody anything', () => {
+  it('the grant table is exactly the two legacy roles', () => {
+    expect(Object.keys(ROLE_CATALOG).sort()).toEqual(['ADMIN', 'STAFF']);
+    const grantCount = Object.values(ROLE_CATALOG).reduce((n, r) => n + r.grants.length, 0);
+    expect(grantCount).toBe(3);
+  });
+
+  it('no S3 leaf is granted to anybody yet, except via the legacy wildcard', () => {
+    const bySensitivity = new Map(PERMISSION_CATALOG.map((d) => [d.code, d.sensitivity]));
+    const grantedS3 = Object.values(ROLE_CATALOG)
+      .flatMap((r) => r.grants.map((g) => g.code))
+      .filter((code) => code !== '*.*.*')
+      .filter((code) => bySensitivity.get(code) === 'S3');
+    expect(grantedS3).toEqual([]);
   });
 });

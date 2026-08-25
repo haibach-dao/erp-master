@@ -20,16 +20,27 @@ async function main(): Promise<void> {
     await prisma.relationshipType.upsert({ where: { code: rt.code }, update: rt, create: rt });
   }
 
+  // Catalog rows only. `reviewedAt` is deliberately left untouched: a code nobody has
+  // reviewed must stay visibly unreviewed (OPERA marks new tasks "New" for the same
+  // reason), and re-seeding must never quietly bless a code an admin has not seen.
   const permByCode = new Map<string, string>();
   for (const def of PERMISSION_CATALOG) {
+    const fields = {
+      description: def.description,
+      sensitivity: def.sensitivity,
+      wildcardExempt: def.wildcardExempt,
+      introducedIn: def.introducedIn,
+    };
     const p = await prisma.permission.upsert({
       where: { code: def.code },
-      update: { description: def.description },
-      create: { id: ulid(), code: def.code, description: def.description },
+      update: fields,
+      create: { id: ulid(), code: def.code, ...fields },
     });
     permByCode.set(def.code, p.id);
   }
 
+  // NOTE: this loop only writes the grants already declared in ROLE_CATALOG. Seeding a
+  // new catalog code must NOT hand it to anybody — a code arrives unassigned.
   for (const [code, def] of Object.entries(ROLE_CATALOG)) {
     const role = await prisma.role.upsert({
       where: { code },
