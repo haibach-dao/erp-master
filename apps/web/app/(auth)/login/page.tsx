@@ -6,7 +6,12 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { useAuth } from '@/lib/auth';
+import { Brand } from '@/components/brand';
+import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Field } from '@/components/ui/label';
+import { Input } from '@/components/ui/input';
 
 const schema = z.object({
   email: z.string().email('Email không hợp lệ'),
@@ -36,40 +41,51 @@ export default function LoginPage() {
   });
 
   return (
-    <div className="flex min-h-screen items-center justify-center p-4">
-      <form onSubmit={onSubmit} className="w-full max-w-sm rounded-lg border border-border p-6">
-        <h1 className="mb-4 text-lg font-semibold">Đăng nhập</h1>
+    <div className="flex min-h-screen items-center justify-center bg-muted/40 p-4">
+      <div className="w-full max-w-sm space-y-6">
+        <div className="flex justify-center">
+          <Brand />
+        </div>
 
-        <label className="mb-1 block text-sm" htmlFor="email">
-          Email
-        </label>
-        <input
-          id="email"
-          type="email"
-          autoComplete="username"
-          className="mb-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
-          {...register('email')}
-        />
-        {errors.email && <p className="mb-2 text-xs text-red-600">{errors.email.message}</p>}
+        <Card className="shadow-md">
+          <CardHeader>
+            <CardTitle className="text-base">Đăng nhập</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <form onSubmit={onSubmit} className="space-y-4" noValidate>
+              <Field label="Email" htmlFor="email" required error={errors.email?.message}>
+                <Input
+                  id="email"
+                  type="email"
+                  autoComplete="username"
+                  aria-invalid={errors.email !== undefined}
+                  {...register('email')}
+                />
+              </Field>
 
-        <label className="mb-1 mt-3 block text-sm" htmlFor="password">
-          Mật khẩu
-        </label>
-        <input
-          id="password"
-          type="password"
-          autoComplete="current-password"
-          className="mb-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
-          {...register('password')}
-        />
-        {errors.password && <p className="mb-2 text-xs text-red-600">{errors.password.message}</p>}
+              <Field label="Mật khẩu" htmlFor="password" required error={errors.password?.message}>
+                <Input
+                  id="password"
+                  type="password"
+                  autoComplete="current-password"
+                  aria-invalid={errors.password !== undefined}
+                  {...register('password')}
+                />
+              </Field>
 
-        {serverError !== null && <p className="mb-2 mt-2 text-sm text-red-600">{serverError}</p>}
+              {serverError !== null ? (
+                <Alert variant="destructive" title="Không đăng nhập được">
+                  {serverError}
+                </Alert>
+              ) : null}
 
-        <Button type="submit" disabled={isSubmitting} className="mt-4 w-full">
-          {isSubmitting ? 'Đang đăng nhập…' : 'Đăng nhập'}
-        </Button>
-      </form>
+              <Button type="submit" loading={isSubmitting} className="w-full">
+                {isSubmitting ? 'Đang đăng nhập…' : 'Đăng nhập'}
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }

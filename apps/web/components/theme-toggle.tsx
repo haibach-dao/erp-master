@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useTheme } from 'next-themes';
+import { Moon, Sun } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
 export function ThemeToggle() {
@@ -14,12 +15,20 @@ export function ThemeToggle() {
 
   return (
     <Button
-      variant="outline"
-      size="sm"
+      variant="ghost"
+      size="icon-sm"
       onClick={() => setTheme(isDark ? 'light' : 'dark')}
-      aria-label="Đổi giao diện sáng/tối"
+      aria-label={isDark ? 'Chuyển giao diện sáng' : 'Chuyển giao diện tối'}
     >
-      {mounted ? (isDark ? 'Sáng' : 'Tối') : '…'}
+      {/* Trước khi mount thì chưa biết theme thật; giữ chỗ bằng icon trong suốt
+          để nút không nhảy kích thước. */}
+      {!mounted ? (
+        <Sun className="opacity-0" aria-hidden />
+      ) : isDark ? (
+        <Sun aria-hidden />
+      ) : (
+        <Moon aria-hidden />
+      )}
     </Button>
   );
 }
