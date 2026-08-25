@@ -420,3 +420,68 @@ export const revokeScope = (userId: string, cemeteryId: string): Promise<ScopeAs
     `/api/v1/authz/scope-assignments/${encodeURIComponent(userId)}/${encodeURIComponent(cemeteryId)}`,
     { method: 'DELETE' },
   );
+
+// --- Phân quyền: ma trận vai × quyền, và gán vai cho người ---
+
+export interface RoleRow {
+  id: string;
+  code: string;
+  name: string;
+  description: string | null;
+  grants: { code: string; scope: string; sensitivity: string }[];
+}
+
+export interface PermissionRow {
+  code: string;
+  description: string | null;
+  sensitivity: string;
+  wildcardExempt: boolean;
+}
+
+export interface RoleAssignmentRow {
+  id: string;
+  roleCode: string;
+  roleName: string;
+  companyId: string | null;
+  scope: string | null;
+  validFrom: string;
+  validTo: string | null;
+  grantedBy: string | null;
+  grantReason: string | null;
+}
+
+export const listRoles = (): Promise<RoleRow[]> => apiFetch('/api/v1/authz/roles');
+
+export const listPermissionCatalog = (): Promise<PermissionRow[]> =>
+  apiFetch('/api/v1/authz/permissions');
+
+export const grantPermission = (
+  roleCode: string,
+  permissionCode: string,
+  scope: string,
+): Promise<unknown> =>
+  apiFetch('/api/v1/authz/role-permissions', {
+    method: 'POST',
+    body: JSON.stringify({ roleCode, permissionCode, scope }),
+  });
+
+export const revokePermission = (roleCode: string, permissionCode: string): Promise<unknown> =>
+  apiFetch(
+    `/api/v1/authz/role-permissions/${encodeURIComponent(roleCode)}/${encodeURIComponent(permissionCode)}`,
+    { method: 'DELETE' },
+  );
+
+export const listRoleAssignments = (userId: string): Promise<RoleAssignmentRow[]> =>
+  apiFetch(`/api/v1/authz/role-assignments?userId=${encodeURIComponent(userId)}`);
+
+export const assignRole = (input: {
+  userId: string;
+  roleCode: string;
+  companyId?: string;
+  validTo?: string;
+  reason: string;
+}): Promise<unknown> =>
+  apiFetch('/api/v1/authz/role-assignments', { method: 'POST', body: JSON.stringify(input) });
+
+export const revokeRoleAssignment = (id: string): Promise<unknown> =>
+  apiFetch(`/api/v1/authz/role-assignments/${encodeURIComponent(id)}`, { method: 'DELETE' });

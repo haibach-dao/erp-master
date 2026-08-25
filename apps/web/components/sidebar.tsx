@@ -26,6 +26,12 @@ const ITEMS: { href: string; label: string; permissions: string[] | null }[] = [
   },
   { href: '/audit', label: 'Audit', permissions: ['audit.event.view'] },
   { href: '/organization', label: 'Tổ chức', permissions: ['org.company.view'] },
+  { href: '/organization/roles', label: 'Vai & quyền', permissions: ['authz.role.view'] },
+  {
+    href: '/organization/assignments',
+    label: 'Gán vai',
+    permissions: ['authz.role_assignment.assign'],
+  },
   { href: '/organization/scope', label: 'Gán phạm vi', permissions: ['authz.scope.assign'] },
 ];
 

@@ -1,0 +1,97 @@
+import { Body, Controller, Delete, Get, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { ApiBearerAuth, ApiProperty, ApiPropertyOptional, ApiTags } from '@nestjs/swagger';
+import { IsISO8601, IsOptional, IsString, MinLength } from 'class-validator';
+import type { Request } from 'express';
+import { JwtAuthGuard } from '../iam/guards/jwt-auth.guard';
+import { PermissionGuard } from './permission.guard';
+import { RequirePermission } from './require-permission.decorator';
+import { AuthzMatrixService } from './authz-matrix.service';
+
+export class GrantDto {
+  @ApiProperty() @IsString() @MinLength(1) roleCode!: string;
+  @ApiProperty() @IsString() @MinLength(1) permissionCode!: string;
+  @ApiProperty() @IsString() @MinLength(1) scope!: string;
+}
+
+export class AssignRoleDto {
+  @ApiProperty() @IsString() @MinLength(1) userId!: string;
+  @ApiProperty() @IsString() @MinLength(1) roleCode!: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() companyId?: string;
+  /** Hết hạn thì quyền tự rụng — không ai phải nhớ đi thu hồi. */
+  @ApiPropertyOptional() @IsOptional() @IsISO8601() validTo?: string;
+  @ApiProperty() @IsString() @MinLength(1) reason!: string;
+}
+
+/* Admin surface for the permission matrix itself.
+ *
+ * Each route carries exactly one code, and they are deliberately different codes:
+ * reading the matrix, changing what a role contains, and giving a person a role are
+ * three separate decisions and should be separately grantable, even though today one
+ * role holds all of them.
+ */
+@ApiTags('authz')
+@ApiBearerAuth()
+@UseGuards(JwtAuthGuard, PermissionGuard)
+@Controller('authz')
+export class AuthzMatrixController {
+  constructor(private readonly svc: AuthzMatrixService) {}
+
+  private actor(req: Request): string | null {
+    return req.user?.userId ?? null;
+  }
+
+  @Get('roles')
+  @RequirePermission('authz.role.view')
+  listRoles() {
+    return this.svc.listRoles();
+  }
+
+  @Get('permissions')
+  @RequirePermission('authz.permission.view')
+  listPermissions() {
+    return this.svc.listPermissions();
+  }
+
+  @Post('role-permissions')
+  @RequirePermission('authz.role_permission.grant')
+  grant(@Body() dto: GrantDto, @Req() req: Request) {
+    return this.svc.grant(dto.roleCode, dto.permissionCode, dto.scope, this.actor(req));
+  }
+
+  @Delete('role-permissions/:roleCode/:permissionCode')
+  @RequirePermission('authz.role_permission.revoke')
+  revoke(
+    @Param('roleCode') roleCode: string,
+    @Param('permissionCode') permissionCode: string,
+    @Req() req: Request,
+  ) {
+    return this.svc.revoke(roleCode, permissionCode, this.actor(req));
+  }
+
+  @Get('role-assignments')
+  @RequirePermission('authz.role.view')
+  listAssignments(@Query('userId') userId: string) {
+    return this.svc.listAssignments(userId);
+  }
+
+  @Post('role-assignments')
+  @RequirePermission('authz.role_assignment.assign')
+  assignRole(@Body() dto: AssignRoleDto, @Req() req: Request) {
+    return this.svc.assignRole(
+      {
+        userId: dto.userId,
+        roleCode: dto.roleCode,
+        companyId: dto.companyId ?? null,
+        validTo: dto.validTo ?? null,
+        reason: dto.reason,
+      },
+      this.actor(req),
+    );
+  }
+
+  @Delete('role-assignments/:id')
+  @RequirePermission('authz.role_assignment.revoke')
+  revokeRole(@Param('id') id: string, @Req() req: Request) {
+    return this.svc.revokeRole(id, this.actor(req));
+  }
+}
