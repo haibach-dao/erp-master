@@ -19,7 +19,7 @@ Doc 16 là **nháp do AI soạn**. Các quyết định Gate 0 (A1/A2/A5/A6/E5.1
 
 | Nội dung            | Quyết định                                                                      |
 | ------------------- | ------------------------------------------------------------------------------- |
-| `*.*.*` của ADMIN   | **Bỏ hẳn** (đã bỏ khỏi ma trận; ADMIN giữ 74 leaf S3 tường minh)                |
+| `*.*.*` của ADMIN   | **Bỏ hẳn** — khỏi cả ma trận LẪN danh mục. ADMIN cầm 124 mã tường minh          |
 | `GROUP`             | **= không giới hạn bản ghi**, không phải "cùng tập đoàn"                        |
 | Người ↔ nghĩa trang | **Nhiều-nhiều** → bảng hub riêng `authz.scope_assignments`                      |
 | Nhiều vai           | **HỢP (cộng dồn)**, KHÔNG phải giao / hẹp nhất                                  |
@@ -141,3 +141,4 @@ DATABASE_URL=... pnpm --filter @erp/api exec tsx scripts/authz-rules.ts
 - **`isScope()` vẫn fallback `CUSTOM`** — deny im lặng, chưa sửa.
 - **Ghế máy (`apps/worker`) chưa dùng `SYSTEM_WORKER`.** `hold-expiry.ts` vẫn ghi `changedBy: null` — còn một đường giải phóng mộ không chủ thể.
 - **`phone`/`email`/`dateOfBirth` chưa mask.** Phạm vi NĐ13 rộng hơn A6.
+- **Danh mục có 124 mã, KHÔNG có `*.*.*`.** Mã mới thêm vào **không** tự chảy vào ADMIN nữa — phải cấp có chủ ý. Đó là nhãn "New" của OPERA, và là toàn bộ mục đích của việc bỏ wildcard.

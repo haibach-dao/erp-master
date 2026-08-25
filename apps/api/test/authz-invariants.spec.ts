@@ -243,11 +243,21 @@ describe('tách nhiệm vụ ở mức vai (doc 16 §E.3)', () => {
 });
 
 describe('hình dạng ma trận vai', () => {
-  it('chỉ ADMIN mang wildcard toàn quyền', () => {
+  /* G0-Q13: `*.*.*` bị bỏ HẲN. Không vai nào mang wildcard, và nó cũng không còn trong
+   * danh mục — nếu còn, nó là thứ cấp lại được từ màn hình quản trị. */
+  it('không vai nào mang grant wildcard', () => {
     const wildcardHolders = ROLE_ENTRIES.filter(([, def]) =>
-      def.grants.some((g) => g.code === '*.*.*'),
+      def.grants.some((g) => g.code.includes('*')),
     ).map(([code]) => code);
-    expect(wildcardHolders).toEqual(['ADMIN']);
+    expect(wildcardHolders).toEqual([]);
+  });
+
+  it('danh mục không còn mã wildcard nào', () => {
+    expect(PERMISSION_CODES.filter((c) => c.includes('*'))).toEqual([]);
+  });
+
+  it('ADMIN cầm TOÀN BỘ danh mục một cách tường minh — đếm được, không phải một dòng `*`', () => {
+    expect(codesOf('ADMIN').sort()).toEqual([...PERMISSION_CODES].sort());
   });
 
   it('mọi grant trỏ mã có thật và scope có thật', () => {
