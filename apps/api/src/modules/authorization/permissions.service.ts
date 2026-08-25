@@ -20,10 +20,15 @@ export interface PermissionMeta {
  */
 export type ScopeLevel = 'GROUP' | 'COMPANY' | 'SITE' | 'NONE';
 
+/* Outcome of the ordered rule chain for one code.
+ * NO_MATCH means no rule mentioned it, so the role matrix decides.
+ */
+export type Ruling = 'ALLOW' | 'DENY' | 'NO_MATCH';
+
 export interface EffectiveAccess {
   roles: string[];
   permissions: string[];
-  /** Codes explicitly denied for this caller. Deny beats allow, always. */
+  /** Codes a DENY rule blocks for this caller, with no ALLOW ahead of it. */
   denied: string[];
   scope: {
     /** Highest level held on ANY code. For display; per-code decisions use scopeLevelFor. */
@@ -50,7 +55,7 @@ export class PermissionsService {
    * agent ∩ device ∩ data layer ∩ action ∩ destination), not about how one person's
    * several roles combine. Union across roles is ordinary RBAC.
    *
-   * Because nothing narrows, the explicit deny table is the only remaining brake.
+   * Because nothing narrows, the ordered rule chain is the only remaining brake.
    */
   async getGrants(userId: string): Promise<PermissionGrant[]> {
     const assignments = await this.activeAssignments(userId);
@@ -74,7 +79,8 @@ export class PermissionsService {
    * not "take the widest thing you hold anywhere and apply it everywhere".
    */
   async scopeLevelFor(userId: string, code: string): Promise<ScopeLevel> {
-    if (await this.isDenied(userId, code)) {
+    const ruling = await this.evaluateRules(userId, code);
+    if (ruling === 'DENY') {
       return 'NONE';
     }
     const meta = await this.getPermissionMeta(code);
@@ -91,30 +97,64 @@ export class PermissionsService {
     return level;
   }
 
-  /* Codes explicitly denied for this caller, right now.
+  /* Walk the ordered rule chain for one code — firewall semantics.
    *
-   * Deny wins over any grant. `subject_user_id = null` denies for everybody — the shape
-   * used for a leaf nobody may hold. This exists for the constitution's forbidden lane:
-   * with a union rule, and an administrator who may widen their own role, an explicit
-   * deny is the last thing standing between a role and data it must never read.
+   * Rules are evaluated by ascending priority, and the FIRST one that matches decides;
+   * evaluation stops there. Nothing matched means NO_MATCH, and the role matrix answers
+   * instead. Nothing granted after that means 403 — the implicit "deny all" at the end
+   * of the chain, which PermissionGuard provides by refusing anything it was not told
+   * to allow.
+   *
+   * Consequence worth being explicit about: an ALLOW rule sits ABOVE the role matrix, so
+   * it can permit something no role grants — including a wildcard-exempt leaf. That is
+   * inherent to an ordered rule list, which is why every rule carries a reason and why
+   * the chain is printable in evaluation order.
    */
-  async deniedCodes(userId: string): Promise<string[]> {
+  async evaluateRules(userId: string, code: string): Promise<Ruling> {
     const now = new Date();
-    const rows = await this.prisma.permissionDeny.findMany({
-      where: {
-        OR: [{ subjectUserId: userId }, { subjectUserId: null }],
-        validFrom: { lte: now },
-        AND: [{ OR: [{ validTo: null }, { validTo: { gt: now } }] }],
-      },
-      select: { permissionCode: true },
-    });
-    return [...new Set(rows.map((r) => r.permissionCode))].sort();
+    const [rules, roles] = await Promise.all([
+      this.prisma.accessRule.findMany({
+        where: {
+          OR: [{ subjectUserId: userId }, { subjectUserId: null }],
+          validFrom: { lte: now },
+          AND: [{ OR: [{ validTo: null }, { validTo: { gt: now } }] }],
+        },
+        orderBy: [{ priority: 'asc' }, { createdAt: 'asc' }],
+      }),
+      this.roleCodesOf(userId),
+    ]);
+
+    for (const rule of rules) {
+      if (rule.roleCode !== null && !roles.includes(rule.roleCode)) {
+        continue;
+      }
+      if (!permissionMatches(rule.permissionCode, code)) {
+        continue;
+      }
+      return rule.effect === 'ALLOW' ? 'ALLOW' : 'DENY';
+    }
+    return 'NO_MATCH';
   }
 
-  /** True when an explicit deny covers this code. Checked before any grant is consulted. */
+  /** True when the rule chain lands on DENY for this code. */
   async isDenied(userId: string, code: string): Promise<boolean> {
-    const denied = await this.deniedCodes(userId);
-    return denied.some((pattern) => permissionMatches(pattern, code));
+    return (await this.evaluateRules(userId, code)) === 'DENY';
+  }
+
+  /** Codes the chain currently blocks, evaluated against the catalog the caller holds. */
+  private async deniedAmong(userId: string, codes: string[]): Promise<string[]> {
+    const out: string[] = [];
+    for (const code of codes) {
+      if ((await this.evaluateRules(userId, code)) === 'DENY') {
+        out.push(code);
+      }
+    }
+    return out.sort();
+  }
+
+  private async roleCodesOf(userId: string): Promise<string[]> {
+    const assignments = await this.activeAssignments(userId);
+    return [...new Set(assignments.map((a) => a.role.code))];
   }
 
   /* Catalog metadata for one code, or null when the code is not in the catalog at all.
@@ -140,7 +180,7 @@ export class PermissionsService {
    */
   async getEffectiveAccess(userId: string): Promise<EffectiveAccess> {
     const now = new Date();
-    const [assignments, sites, denied] = await Promise.all([
+    const [assignments, sites] = await Promise.all([
       this.activeAssignments(userId),
       this.prisma.scopeAssignment.findMany({
         where: {
@@ -150,7 +190,6 @@ export class PermissionsService {
         },
         select: { cemeteryId: true },
       }),
-      this.deniedCodes(userId),
     ]);
 
     const roles = new Set<string>();
@@ -169,12 +208,13 @@ export class PermissionsService {
       }
     }
 
-    // A denied code must not be advertised to the UI as something the caller holds.
-    const isDenied = (code: string): boolean => denied.some((d) => permissionMatches(d, code));
+    // A blocked code must not be advertised to the UI as something the caller holds.
+    const denied = await this.deniedAmong(userId, [...permissions]);
+    const denySet = new Set(denied);
 
     return {
       roles: [...roles].sort(),
-      permissions: [...permissions].filter((c) => !isDenied(c)).sort(),
+      permissions: [...permissions].filter((c) => !denySet.has(c)).sort(),
       denied,
       scope: {
         level,

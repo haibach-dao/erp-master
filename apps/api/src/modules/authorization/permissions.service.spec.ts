@@ -16,14 +16,14 @@ function assignment(roleCode: string, codes: string[], scope: string, companyId:
 function build(
   assignments: unknown[],
   sites: { cemeteryId: string }[] = [],
-  denies: { permissionCode: string }[] = [],
+  rules: Record<string, unknown>[] = [],
   meta: { code: string; wildcardExempt: boolean; sensitivity: string } | null = null,
 ) {
   const findMany = vi.fn().mockResolvedValue(assignments);
   const svc = new PermissionsService({
     roleAssignment: { findMany },
     scopeAssignment: { findMany: vi.fn().mockResolvedValue(sites) },
-    permissionDeny: { findMany: vi.fn().mockResolvedValue(denies) },
+    accessRule: { findMany: vi.fn().mockResolvedValue(rules) },
     permission: { findUnique: vi.fn().mockResolvedValue(meta) },
   } as unknown as PrismaService);
   return { svc, findMany };
@@ -142,35 +142,80 @@ describe('scopeLevelFor — union computed PER CODE', () => {
   });
 });
 
-describe('deny — the only brake left once roles combine by union', () => {
-  it('a denied code is not advertised as held', async () => {
+function rule(over: Record<string, unknown> = {}) {
+  return {
+    priority: 100,
+    effect: 'DENY',
+    subjectUserId: null,
+    roleCode: null,
+    permissionCode: 'crm.person.view_sensitive',
+    reason: 'LÀN CẤM',
+    validTo: null,
+    ...over,
+  };
+}
+
+/* Firewall semantics: ascending priority, first match wins, evaluation stops there.
+ * Order IS the meaning of this table — the same two rules in the other order give the
+ * opposite answer, which is exactly why the chain has to be printable in order.
+ */
+describe('rule chain — ordered, first match wins', () => {
+  it('a DENY rule blocks a code the role matrix grants', async () => {
     const { svc } = build(
       [assignment('DPO_DLCN', ['crm.person.view_sensitive'], 'GROUP', null)],
       [],
-      [{ permissionCode: 'crm.person.view_sensitive' }],
+      [rule()],
+    );
+    await expect(svc.evaluateRules('u1', 'crm.person.view_sensitive')).resolves.toBe('DENY');
+  });
+
+  it('an ALLOW placed ABOVE a DENY wins — the exception beats the blanket ban', async () => {
+    const { svc } = build(
+      [],
+      [],
+      [
+        rule({ priority: 10, effect: 'ALLOW', permissionCode: 'crm.person.view_sensitive' }),
+        rule({ priority: 20, effect: 'DENY', permissionCode: 'crm.person.*' }),
+      ],
+    );
+    await expect(svc.evaluateRules('u1', 'crm.person.view_sensitive')).resolves.toBe('ALLOW');
+  });
+
+  it('the same two rules in the other order give the opposite answer', async () => {
+    const { svc } = build(
+      [],
+      [],
+      [
+        rule({ priority: 10, effect: 'DENY', permissionCode: 'crm.person.*' }),
+        rule({ priority: 20, effect: 'ALLOW', permissionCode: 'crm.person.view_sensitive' }),
+      ],
+    );
+    await expect(svc.evaluateRules('u1', 'crm.person.view_sensitive')).resolves.toBe('DENY');
+  });
+
+  it('a code no rule mentions falls through to the role matrix', async () => {
+    const { svc } = build([], [], [rule({ permissionCode: 'crm.person.*' })]);
+    await expect(svc.evaluateRules('u1', 'service.revenue.view')).resolves.toBe('NO_MATCH');
+  });
+
+  it('a rule scoped to a role the caller does not hold is skipped', async () => {
+    const { svc } = build(
+      [assignment('THU_NGAN', ['crm.person.view_sensitive'], 'COMPANY', 'co-1')],
+      [],
+      [rule({ roleCode: 'QT_HE_THONG' })],
+    );
+    await expect(svc.evaluateRules('u1', 'crm.person.view_sensitive')).resolves.toBe('NO_MATCH');
+  });
+
+  it('a blocked code is not advertised as held, and has no scope either', async () => {
+    const { svc } = build(
+      [assignment('DPO_DLCN', ['crm.person.view_sensitive'], 'GROUP', null)],
+      [],
+      [rule()],
     );
     const access = await svc.getEffectiveAccess('u1');
     expect(access.permissions).not.toContain('crm.person.view_sensitive');
     expect(access.denied).toEqual(['crm.person.view_sensitive']);
-  });
-
-  it('isDenied beats an exact grant', async () => {
-    const { svc } = build([], [], [{ permissionCode: 'crm.person.view_protected' }]);
-    await expect(svc.isDenied('u1', 'crm.person.view_protected')).resolves.toBe(true);
-  });
-
-  it('a deny may be written as a pattern covering a whole resource', async () => {
-    const { svc } = build([], [], [{ permissionCode: 'crm.person.*' }]);
-    await expect(svc.isDenied('u1', 'crm.person.view_sensitive')).resolves.toBe(true);
-    await expect(svc.isDenied('u1', 'crm.customer.view')).resolves.toBe(false);
-  });
-
-  it('a denied code has no scope either — it does not fall back to a narrower reach', async () => {
-    const { svc } = build(
-      [assignment('DPO_DLCN', ['crm.person.view_sensitive'], 'GROUP', null)],
-      [],
-      [{ permissionCode: 'crm.person.view_sensitive' }],
-    );
     await expect(svc.scopeLevelFor('u1', 'crm.person.view_sensitive')).resolves.toBe('NONE');
   });
 });

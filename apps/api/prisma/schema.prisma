@@ -140,17 +140,25 @@ model RoleAssignment {
 }
 
 /**
- * Cấm tường minh — deny THẮNG allow, và không có đường vòng nào.
- * Với quy tắc hợp (nhiều vai thì cộng dồn, không thu hẹp), đây là cơ chế DUY NHẤT còn
- * lại có thể chặn một quyền đã được cấp. Nó tồn tại cho LÀN CẤM của hiến pháp: dữ liệu
- * nhân thân/gia đình lãnh đạo không được đọc, dù người gọi có mã gì đi nữa.
- * `subjectUserId = null` nghĩa là cấm với MỌI người — dùng cho leaf mà không ai được
- * chạm, ví dụ đưa dữ liệu cá nhân vào công cụ AI dùng chung.
+ * Luật truy cập có THỨ TỰ — mô hình tường lửa.
+ * Duyệt từ `priority` nhỏ đến lớn; luật nào KHỚP TRƯỚC thì luật đó quyết, và dừng.
+ * Không luật nào khớp thì rơi xuống ma trận vai. Không grant nào phủ thì 403 — đó là
+ * "deny all" ngầm ở cuối chuỗi, do PermissionGuard mặc-định-từ-chối đảm nhiệm.
+ * Hệ quả phải biết: một luật ALLOW nằm TRÊN ma trận vai. Nó cấp được thứ không vai nào
+ * cấp, kể cả leaf S3 mà grant wildcard không với tới. Đó là bản chất của mô hình tường
+ * lửa, không phải lỗi — nên `reason` là bắt buộc và thứ tự phải đọc được
+ * (scripts/authz-rules.ts in ra đúng chuỗi luật theo thứ tự duyệt).
+ * `subjectUserId = null` + `roleCode = null` = áp cho mọi người.
  */
-model PermissionDeny {
+model AccessRule {
   id             String    @id
+  /// Nhỏ hơn xét trước. Bằng nhau thì xét theo createdAt để thứ tự luôn xác định.
+  priority       Int
+  /// ALLOW | DENY
+  effect         String
   subjectUserId  String?   @map("subject_user_id")
-  roleId         String?   @map("role_id")
+  roleCode       String?   @map("role_code")
+  /// Mẫu mã quyền, 3 đoạn, cho phép '*' (ví dụ `crm.person.*`).
   permissionCode String    @map("permission_code")
   reason         String
   createdBy      String?   @map("created_by")
@@ -158,9 +166,10 @@ model PermissionDeny {
   validTo        DateTime? @map("valid_to") @db.Timestamptz(6)
   createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
+  @@index([priority])
   @@index([subjectUserId])
   @@index([permissionCode])
-  @@map("permission_denies")
+  @@map("access_rules")
   @@schema("authz")
 }
 
