@@ -6,6 +6,19 @@ import { ScopeService } from '../authorization/scope.service';
 import { AuditService } from '../audit/audit.service';
 import type { AddPartyDto, CreateContractDto } from './contracts.dto';
 
+/* Trạng thái hợp đồng có thể cho hiệu lực từ đó.
+ *
+ * Số bước phụ thuộc NGƯỜI LÀM, không phụ thuộc bản ghi (quyết định G0-Q10):
+ *  - Ai cầm `contract.record.activate` (route này đã gate bằng đúng mã đó) thì đi thẳng
+ *    tới Active, bỏ qua thẩm định — kể cả hợp đồng do chính mình soạn.
+ *  - Ai không cầm mã đó thì không gọi được endpoint này; hợp đồng của họ phải qua
+ *    `verify` bởi NGƯỜI KHÁC rồi mới tới đây.
+ *
+ * Nói cách khác: chuỗi bốn bước không bị bỏ, nó chỉ ngắn lại đúng với người có thẩm
+ * quyền cho hiệu lực. Bỏ qua bước nào thì audit ghi lại bước đó.
+ */
+const ACTIVATABLE_FROM = ['Uploaded', 'PendingVerification', 'Verified'];
+
 @Injectable()
 export class ContractsService {
   constructor(
@@ -27,6 +40,7 @@ export class ContractsService {
           signedAt: dto.signedAt !== undefined ? new Date(dto.signedAt) : null,
           validTo: dto.validTo !== undefined ? new Date(dto.validTo) : null,
           totalAmount: dto.totalAmount ?? null,
+          createdBy: actor,
         },
       });
       await this.audit.record({
@@ -75,6 +89,16 @@ export class ContractsService {
     if (contract.parties.length === 0) {
       throw new ConflictException('Thiếu bên hợp đồng');
     }
+    /* Người soạn không tự thẩm định hợp đồng của mình. Kiểm ở mức BẢN GHI chứ không chỉ
+     * mức vai: ma trận đã tách `create` và `verify` sang hai vai, nhưng ma trận sửa được
+     * trên giao diện, nên bất biến phải sống ở chỗ không ai sửa qua màn hình được.
+     * `createdBy = null` (hợp đồng cũ trước khi có cột này) thì không chặn — không biết
+     * ai soạn thì không khẳng định được là trùng người. */
+    if (contract.createdBy !== null && contract.createdBy === actor) {
+      throw new ConflictException(
+        'Người soạn hợp đồng không được tự thẩm định. Cần người thứ hai xác minh.',
+      );
+    }
     const updated = await this.prisma.externalContract.update({
       where: { id },
       data: { status: 'Verified', verifiedBy: actor, verifiedAt: new Date() },
@@ -99,9 +123,12 @@ export class ContractsService {
     if (contract === null) {
       throw new NotFoundException('Không tìm thấy hợp đồng');
     }
-    if (contract.status !== 'Verified') {
-      throw new ConflictException('Chỉ kích hoạt hợp đồng đã Verified');
+    if (!ACTIVATABLE_FROM.includes(contract.status)) {
+      throw new ConflictException(`Không thể cho hiệu lực ở trạng thái ${contract.status}`);
     }
+    // Người gọi được tới đây nghĩa là họ cầm `contract.record.activate`. Đi thẳng từ
+    // trạng thái chưa thẩm định là ĐƯỢC PHÉP — nhưng phải để lại vết là đã bỏ bước.
+    const skippedVerification = contract.status !== 'Verified';
     const missing: string[] = [];
     if (contract.contractFileId === null) missing.push('file');
     if (contract.parties.length === 0) missing.push('bên hợp đồng');
@@ -162,11 +189,23 @@ export class ContractsService {
         return { activated, usageRight };
       });
       await this.audit.record({
+        companyId: contract.companyId,
         actorType: 'USER',
         actorId: actor,
         action: 'CONTRACT.ACTIVATED',
         entityType: 'external_contract',
         entityId: id,
+        reason: skippedVerification
+          ? `Cho hiệu lực thẳng từ ${contract.status}, bỏ bước thẩm định (người gọi có quyền cho hiệu lực)`
+          : null,
+        afterData: {
+          fromStatus: contract.status,
+          skippedVerification,
+          createdBy: contract.createdBy,
+          verifiedBy: contract.verifiedBy,
+          activatedBy: actor,
+        },
+        changedFields: ['status'],
       });
       await this.audit.record({
         actorType: 'USER',

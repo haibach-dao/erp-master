@@ -3,6 +3,7 @@ import { Queue, Worker } from 'bullmq';
 import IORedis from 'ioredis';
 import { pollAndDispatch } from './dispatcher';
 import { expireHolds } from './hold-expiry';
+import { resolveAgentIdentity } from './agent-identity';
 import { sweepServices } from './service-sweep';
 import { createMailer } from './mailer';
 
@@ -17,6 +18,11 @@ const SERVICE_SWEEP_EVERY_MS = 3600000;
 async function main(): Promise<void> {
   const prisma = new PrismaClient();
   await prisma.$connect();
+
+  // Trước mọi thứ khác: nếu không có ghế máy hợp lệ thì DỪNG. Worker đổi được trạng thái
+  // lô mộ, nên nó phải có danh tính và quyền như bất kỳ chủ thể nào khác.
+  const agent = await resolveAgentIdentity(prisma);
+  console.log(`[worker] ghế máy: ${agent.email} (${agent.permissions.length} mã quyền)`);
   const mailer = createMailer();
   const connection = new IORedis(process.env.REDIS_URL ?? 'redis://localhost:6379', {
     maxRetriesPerRequest: null,
@@ -49,7 +55,7 @@ async function main(): Promise<void> {
         return pollAndDispatch({ prisma, mailer });
       }
       if (job.name === HOLD_EXPIRY_JOB) {
-        return expireHolds(prisma);
+        return expireHolds(prisma, agent);
       }
       if (job.name === SERVICE_SWEEP_JOB) {
         return sweepServices(prisma);

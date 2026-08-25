@@ -4,6 +4,10 @@ import { PERMISSION_CATALOG, ROLE_CATALOG } from '../src/modules/authorization/p
 
 const prisma = new PrismaClient();
 
+// Danh tính ghế máy. Worker tra đúng email này và TỪ CHỐI CHẠY nếu không thấy.
+export const SYSTEM_WORKER_EMAIL = 'system-worker@erp.local';
+export const SYSTEM_WORKER_ROLE = 'SYSTEM_WORKER';
+
 // Reference data: family relationship types with reciprocal mapping (blueprint doc 04).
 const RELATIONSHIP_TYPES = [
   { code: 'SPOUSE', name: 'Vợ/Chồng', reciprocalCode: 'SPOUSE', genderSpecific: false },
@@ -58,9 +62,52 @@ async function main(): Promise<void> {
     }
   }
 
+  await seedSystemWorker();
+
   console.log(
     `[seed] relationship types: ${RELATIONSHIP_TYPES.length}, permissions: ${PERMISSION_CATALOG.length}, roles: ${Object.keys(ROLE_CATALOG).length}`,
   );
+}
+
+/* Ghế máy cho tiến trình nền.
+ *
+ * Worker giải phóng lô mộ khi phiếu giữ chỗ hết hạn. Trước đây nó ghi `changedBy: null`
+ * — một đường đổi trạng thái mộ KHÔNG CHỦ THỂ và KHÔNG QUYỀN, tức nằm ngoài toàn bộ hệ
+ * phân quyền. Ghế này cho nó một danh tính có thật, mang đúng hai mã quyền cần thiết.
+ *
+ * Không đăng nhập được: `status = 'system'` bị chặn ngay ở `login()`, và `passwordHash`
+ * không phải hash hợp lệ nên không verify được. Hai lớp, không lớp nào dựa vào lớp kia.
+ */
+async function seedSystemWorker(): Promise<void> {
+  const role = await prisma.role.findUnique({ where: { code: SYSTEM_WORKER_ROLE } });
+  if (role === null) {
+    return;
+  }
+  const agent = await prisma.user.upsert({
+    where: { email: SYSTEM_WORKER_EMAIL },
+    update: { status: 'system' },
+    create: {
+      id: ulid(),
+      email: SYSTEM_WORKER_EMAIL,
+      passwordHash: '!no-login:system-account',
+      status: 'system',
+    },
+  });
+  const existing = await prisma.roleAssignment.findFirst({
+    where: { userId: agent.id, roleId: role.id },
+  });
+  if (existing === null) {
+    await prisma.roleAssignment.create({
+      data: {
+        id: ulid(),
+        userId: agent.id,
+        roleId: role.id,
+        grantedBy: 'seed',
+        grantReason: 'Ghế máy cho tiến trình nền (hold-expiry, service-sweep)',
+      },
+    });
+  }
+  console.log(`[seed] ghế máy: ${SYSTEM_WORKER_EMAIL} -> ${SYSTEM_WORKER_ROLE}`);
 }
 
 main()

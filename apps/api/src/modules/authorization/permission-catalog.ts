@@ -532,6 +532,13 @@ export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
     'crm.consent.withdraw',
     'contract.record.view', // đọc dẫn xuất cho approve/activate
     'contract.record.search',
+    /* G0-Q10: ghế cho hiệu lực cũng SOẠN được hợp đồng, để hợp đồng do giám đốc soạn đi
+     * thẳng Draft -> Active mà không phải chờ ai thẩm định. Cố ý KHÔNG cấp `create` cho
+     * QL_NGHIA_TRANG (vai đang giữ `verify`): nếu cấp, một người tự soạn rồi tự thẩm
+     * định hợp đồng của mình, và thẩm định là bước duy nhất có người thật đọc lại nội
+     * dung. Ở đây giám đốc tự soạn tự cho hiệu lực được — chủ doanh nghiệp đã cân nhắc
+     * và chấp nhận, bù bằng audit; nhưng chuỗi soạn -> thẩm định thì luôn có hai người. */
+    'contract.record.create',
     'contract.record.approve',
     'contract.record.activate',
     'contract.record.cancel',

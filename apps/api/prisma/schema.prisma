@@ -475,6 +475,8 @@ model ExternalContract {
   signedAt       DateTime? @map("signed_at") @db.Date
   validTo        DateTime? @map("valid_to") @db.Date
   totalAmount    Decimal?  @map("total_amount") @db.Decimal(14, 0) // VND
+  /// Ai SOẠN. Cần để chặn "người soạn tự thẩm định hợp đồng của mình".
+  createdBy      String?   @map("created_by")
   verifiedBy     String?   @map("verified_by")
   verifiedAt     DateTime? @map("verified_at") @db.Timestamptz(6)
   activatedBy    String?   @map("activated_by")
