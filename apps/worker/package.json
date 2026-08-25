@@ -10,6 +10,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@erp/audit": "workspace:*",
     "@prisma/client": "^6.1.0",
     "bullmq": "^5.34.0",
     "ioredis": "^5.4.1",
