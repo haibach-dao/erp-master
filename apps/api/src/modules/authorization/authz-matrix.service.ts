@@ -152,6 +152,7 @@ export class AuthzMatrixService {
       throw new BadRequestException('Phải ghi lý do cấp vai');
     }
     const companyId = input.companyId ?? null;
+    await this.assertCompanyBindingUsable(role.id, input.roleCode, companyId);
     const validTo =
       input.validTo === undefined || input.validTo === null ? null : new Date(input.validTo);
 
@@ -224,6 +225,38 @@ export class AuthzMatrixService {
       changedFields: ['validTo'],
     });
     return updated;
+  }
+
+  /* Refuse an assignment that would silently grant nothing.
+   *
+   * `company_id = NULL` means "not bound to any company". For a GROUP-scoped role that is
+   * correct — it reaches every record anyway. For any narrower role it is a trap: the
+   * person appears in the admin screen holding a role, but every request is refused
+   * because they are bound to no company, and nothing in the UI explains why.
+   *
+   * That state used to be creatable, and the only defence was a script somebody had to
+   * remember to run before deploying. Making it unrepresentable is the actual fix; the
+   * script stays for diagnosing rows created before this check existed.
+   */
+  private async assertCompanyBindingUsable(
+    roleId: string,
+    roleCode: string,
+    companyId: string | null,
+  ): Promise<void> {
+    if (companyId !== null) {
+      return;
+    }
+    const groupGrant = await this.prisma.rolePermission.findFirst({
+      where: { roleId, scope: 'GROUP' },
+      select: { id: true },
+    });
+    if (groupGrant === null) {
+      throw new BadRequestException(
+        `Vai ${roleCode} bị giới hạn theo công ty, nên phải chỉ rõ công ty. ` +
+          'Bỏ trống công ty chỉ hợp lệ với vai có phạm vi toàn tập đoàn (GROUP) — ' +
+          'nếu không, người được gán sẽ giữ vai mà không truy cập được bản ghi nào.',
+      );
+    }
   }
 
   private async resolve(roleCode: string, permissionCode: string) {
