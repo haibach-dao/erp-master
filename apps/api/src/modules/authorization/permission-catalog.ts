@@ -224,6 +224,8 @@ export const PERMISSION_CATALOG: readonly PermissionDef[] = [
   p('authz.change.submit', 'S2', 'Trình thay đổi ma trận quyền'),
   p('authz.change.approve', 'S3', 'Cho thay đổi ma trận quyền HIỆU LỰC'),
   p('authz.matrix.export', 'S2', 'Xuất bản chiếu ma trận vai × quyền'),
+  p('authz.rule.view', 'S2', 'Xem chuỗi luật truy cập'),
+  p('authz.rule.update', 'S3', 'Sửa chuỗi luật truy cập (thêm/đổi thứ tự/thu hồi)'),
 
   // --- iam ---
   // Doc 16 §D.5 gộp `user / session` chung một danh sách action. Ở đây tách theo nghĩa
