@@ -19,6 +19,16 @@
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["--filter", "@erp/web", "dev"],
       "port": 3000
+    },
+    {
+      "name": "web-3100",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["next", "dev", "-p", "3100"],
+      "port": 3100,
+      "cwd": "apps/web",
+      "env": {
+        "NEXT_DIST_DIR": ".next-3100"
+      }
     }
   ]
 }

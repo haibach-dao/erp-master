@@ -5,6 +5,9 @@ import { useQuery } from '@tanstack/react-query';
 import { listCompanies } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { canSeeCompany } from '@/lib/permissions';
+import { Alert } from '@/components/ui/alert';
+import { Field } from '@/components/ui/label';
+import { Select } from '@/components/ui/select';
 
 /* Company chooser, limited to the companies the caller is actually bound to.
  *
@@ -36,19 +39,19 @@ export function CompanyPicker({
 
   if (companies.isSuccess && visible.length === 0) {
     return (
-      <p className="text-sm text-muted-foreground">
-        Bạn chưa được gán công ty nào. Liên hệ quản trị để được cấp phạm vi.
-      </p>
+      <Alert variant="warning" title="Chưa được gán công ty nào">
+        Liên hệ quản trị để được cấp phạm vi.
+      </Alert>
     );
   }
 
   return (
-    <label className="text-sm">
-      Công ty{' '}
-      <select
-        className="rounded-md border border-border bg-background px-3 py-2 text-sm"
+    <Field label="Công ty" htmlFor="company-picker" className="w-full max-w-xs">
+      <Select
+        id="company-picker"
         value={value}
         onChange={(e) => onChange(e.target.value)}
+        disabled={companies.isPending}
       >
         <option value="">— chọn công ty —</option>
         {visible.map((c) => (
@@ -56,7 +59,7 @@ export function CompanyPicker({
             {c.code} · {c.name}
           </option>
         ))}
-      </select>
-    </label>
+      </Select>
+    </Field>
   );
 }

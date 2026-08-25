@@ -2,32 +2,111 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Thang màu một nguồn duy nhất.
+ *
+ * Mọi màu trong app phải đi qua token ở đây — trang không được hardcode
+ * `text-red-600` / `border-amber-500/50` nữa. Bốn màu ngữ nghĩa (destructive,
+ * warning, success, info) có sẵn cả nền nhạt (`-soft`) để làm badge/alert mà
+ * không phải pha opacity tùy hứng.
+ */
 @layer base {
   :root {
     --background: 0 0% 100%;
-    --foreground: 240 10% 3.9%;
+    --foreground: 222 47% 11%;
+
     --card: 0 0% 100%;
-    --card-foreground: 240 10% 3.9%;
-    --primary: 240 5.9% 10%;
-    --primary-foreground: 0 0% 98%;
-    --muted: 240 4.8% 95.9%;
-    --muted-foreground: 240 3.8% 46.1%;
-    --border: 240 5.9% 90%;
-    --ring: 240 5.9% 10%;
+    --card-foreground: 222 47% 11%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+
+    --primary: 217 91% 45%;
+    --primary-foreground: 0 0% 100%;
+    --primary-soft: 214 95% 96%;
+
+    --secondary: 220 14% 96%;
+    --secondary-foreground: 222 47% 11%;
+
+    --muted: 220 14% 96%;
+    --muted-foreground: 220 9% 46%;
+
+    --accent: 220 14% 94%;
+    --accent-foreground: 222 47% 11%;
+
+    --destructive: 0 72% 45%;
+    --destructive-foreground: 0 0% 100%;
+    --destructive-soft: 0 86% 97%;
+
+    --warning: 32 88% 40%;
+    --warning-foreground: 0 0% 100%;
+    --warning-soft: 45 93% 95%;
+
+    --success: 142 66% 30%;
+    --success-foreground: 0 0% 100%;
+    --success-soft: 141 79% 95%;
+
+    --info: 199 89% 38%;
+    --info-foreground: 0 0% 100%;
+    --info-soft: 204 94% 96%;
+
+    --border: 220 13% 89%;
+    --input: 220 13% 85%;
+    --ring: 217 91% 45%;
+
+    /* Vỏ ứng dụng: sidebar tách nền khỏi vùng nội dung để có chiều sâu. */
+    --sidebar: 220 20% 98%;
+    --sidebar-foreground: 222 47% 11%;
+    --sidebar-border: 220 13% 91%;
+
     --radius: 0.5rem;
   }
 
   .dark {
-    --background: 240 10% 3.9%;
-    --foreground: 0 0% 98%;
-    --card: 240 10% 3.9%;
-    --card-foreground: 0 0% 98%;
-    --primary: 0 0% 98%;
-    --primary-foreground: 240 5.9% 10%;
-    --muted: 240 3.7% 15.9%;
-    --muted-foreground: 240 5% 64.9%;
-    --border: 240 3.7% 15.9%;
-    --ring: 240 4.9% 83.9%;
+    --background: 222 47% 8%;
+    --foreground: 210 20% 96%;
+
+    --card: 222 40% 11%;
+    --card-foreground: 210 20% 96%;
+
+    --popover: 222 40% 11%;
+    --popover-foreground: 210 20% 96%;
+
+    --primary: 213 94% 62%;
+    --primary-foreground: 222 47% 8%;
+    --primary-soft: 217 60% 18%;
+
+    --secondary: 217 30% 17%;
+    --secondary-foreground: 210 20% 96%;
+
+    --muted: 217 30% 17%;
+    --muted-foreground: 218 11% 65%;
+
+    --accent: 217 30% 20%;
+    --accent-foreground: 210 20% 96%;
+
+    --destructive: 0 84% 65%;
+    --destructive-foreground: 222 47% 8%;
+    --destructive-soft: 0 50% 18%;
+
+    --warning: 38 92% 60%;
+    --warning-foreground: 222 47% 8%;
+    --warning-soft: 32 50% 17%;
+
+    --success: 142 60% 52%;
+    --success-foreground: 222 47% 8%;
+    --success-soft: 143 45% 15%;
+
+    --info: 199 89% 60%;
+    --info-foreground: 222 47% 8%;
+    --info-soft: 200 55% 16%;
+
+    --border: 217 25% 20%;
+    --input: 217 25% 25%;
+    --ring: 213 94% 62%;
+
+    --sidebar: 222 44% 10%;
+    --sidebar-foreground: 210 20% 96%;
+    --sidebar-border: 217 25% 18%;
   }
 }
 
@@ -35,7 +114,23 @@
   * {
     @apply border-border;
   }
+
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings:
+      'cv02' 1,
+      'cv03' 1,
+      'cv04' 1;
+  }
+
+  /* Số trong bảng phải thẳng cột: dùng `tabular-nums` qua tiện ích `.num`. */
+  .num {
+    font-variant-numeric: tabular-nums;
+    @apply text-right;
+  }
+
+  /* Vòng focus đồng nhất toàn hệ, thay vì mỗi chỗ tự chế. */
+  :focus-visible {
+    @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
   }
 }
