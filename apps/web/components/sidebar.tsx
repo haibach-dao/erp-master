@@ -33,6 +33,7 @@ const ITEMS: { href: string; label: string; permissions: string[] | null }[] = [
     permissions: ['authz.role_assignment.assign'],
   },
   { href: '/organization/scope', label: 'Gán phạm vi', permissions: ['authz.scope.assign'] },
+  { href: '/organization/rules-chain', label: 'Chuỗi luật', permissions: ['authz.rule.view'] },
 ];
 
 export function Sidebar() {

@@ -485,3 +485,51 @@ export const assignRole = (input: {
 
 export const revokeRoleAssignment = (id: string): Promise<unknown> =>
   apiFetch(`/api/v1/authz/role-assignments/${encodeURIComponent(id)}`, { method: 'DELETE' });
+
+// --- Phân quyền: chuỗi luật truy cập (mô hình tường lửa) ---
+
+export interface AccessRuleRow {
+  id: string;
+  priority: number;
+  effect: 'ALLOW' | 'DENY';
+  permissionCode: string;
+  subjectUserId: string | null;
+  roleCode: string | null;
+  reason: string;
+  createdBy: string | null;
+  validFrom: string;
+  validTo: string | null;
+  active: boolean;
+}
+
+export interface RuleExplanation {
+  ruling: 'ALLOW' | 'DENY' | 'NO_MATCH';
+  matchedRule: AccessRuleRow | null;
+  fallsBackToRoleMatrix: boolean;
+  scopeLevel: 'GROUP' | 'COMPANY' | 'SITE' | 'NONE';
+}
+
+export const listAccessRules = (): Promise<AccessRuleRow[]> =>
+  apiFetch('/api/v1/authz/access-rules');
+
+export const explainAccessRule = (userId: string, code: string): Promise<RuleExplanation> =>
+  apiFetch(
+    `/api/v1/authz/access-rules/explain?userId=${encodeURIComponent(userId)}&code=${encodeURIComponent(code)}`,
+  );
+
+export const createAccessRule = (input: {
+  effect: 'ALLOW' | 'DENY';
+  permissionCode: string;
+  subjectUserId?: string;
+  roleCode?: string;
+  reason: string;
+}): Promise<AccessRuleRow> =>
+  apiFetch('/api/v1/authz/access-rules', { method: 'POST', body: JSON.stringify(input) });
+
+export const moveAccessRule = (id: string, direction: 'up' | 'down'): Promise<unknown> =>
+  apiFetch(`/api/v1/authz/access-rules/${encodeURIComponent(id)}/move-${direction}`, {
+    method: 'POST',
+  });
+
+export const revokeAccessRule = (id: string): Promise<unknown> =>
+  apiFetch(`/api/v1/authz/access-rules/${encodeURIComponent(id)}`, { method: 'DELETE' });
