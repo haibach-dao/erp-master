@@ -4,6 +4,13 @@ import Link from 'next/link';
 import { ShieldCheck } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { ApiError, apiFetch } from '@/lib/api';
+import {
+  actionLabel,
+  actionVariant,
+  actorTypeLabel,
+  formatAuditTime,
+  resultLabel,
+} from '@/lib/audit';
 import { PageHeader } from '@/components/ui/page-header';
 import { Alert } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -24,9 +31,15 @@ interface AuditEvent {
   occurredAt: string;
   actorType: string;
   actorId: string | null;
+  /** Email người thao tác, do API tra từ `iam.users`. `null` khi tra không ra. */
+  actorLabel: string | null;
   action: string;
   entityType: string;
   entityId: string;
+  /** Nhãn loại đối tượng bằng tiếng Việt, do API dịch. */
+  entityTypeLabel: string;
+  /** Tên đối tượng; rơi về id rút gọn nếu đối tượng đã bị xoá. */
+  entityLabel: string;
   result: string;
   correlationId: string | null;
 }
@@ -63,7 +76,7 @@ export default function AuditPage() {
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>Thời điểm (UTC)</TableHead>
+            <TableHead>Thời điểm</TableHead>
             <TableHead>Ai</TableHead>
             <TableHead>Hành động</TableHead>
             <TableHead>Đối tượng</TableHead>
@@ -100,33 +113,42 @@ export default function AuditPage() {
             </TableMessage>
           ) : null}
 
-          {data?.data.map((e) => (
-            <TableRow key={e.id}>
-              <TableCell className="whitespace-nowrap font-mono text-xs text-muted-foreground">
-                {new Date(e.occurredAt).toISOString()}
-              </TableCell>
-              <TableCell>
-                {e.actorType}
-                {e.actorId !== null ? (
-                  <span className="text-muted-foreground"> · {e.actorId}</span>
-                ) : null}
-              </TableCell>
-              <TableCell className="font-mono text-xs">{e.action}</TableCell>
-              <TableCell>
-                {e.entityType}
-                <span className="text-muted-foreground"> · {e.entityId}</span>
-              </TableCell>
-              <TableCell>
-                {/* `result` là chuỗi tự do từ server, không nằm trong từ vựng
-                    trạng thái nghiệp vụ — chỉ tô đỏ khi thấy dấu hiệu từ chối. */}
-                <Badge
-                  variant={/deny|denied|fail|error/i.test(e.result) ? 'destructive' : 'neutral'}
+          {data?.data.map((e) => {
+            const time = formatAuditTime(e.occurredAt);
+            const result = resultLabel(e.result);
+            return (
+              <TableRow key={e.id}>
+                {/* Giờ địa phương để đọc; mốc ISO tuyệt đối trong `title` để đối chiếu
+                    với log máy chủ. */}
+                <TableCell
+                  className="whitespace-nowrap font-mono text-xs text-muted-foreground"
+                  title={time.iso}
                 >
-                  {e.result}
-                </Badge>
-              </TableCell>
-            </TableRow>
-          ))}
+                  {time.display}
+                </TableCell>
+                <TableCell>
+                  {/* Email người thao tác. Tra không ra (tài khoản đã xoá, hoặc ghế máy)
+                      thì hiện loại chủ thể — đừng để trống, dòng nào cũng phải quy được
+                      trách nhiệm về một chỗ. */}
+                  {e.actorLabel !== null ? (
+                    <span className="font-medium">{e.actorLabel}</span>
+                  ) : (
+                    <span className="text-muted-foreground">{actorTypeLabel(e.actorType)}</span>
+                  )}
+                </TableCell>
+                <TableCell>
+                  <Badge variant={actionVariant(e.action)}>{actionLabel(e.action)}</Badge>
+                </TableCell>
+                <TableCell>
+                  <span className="font-medium">{e.entityLabel}</span>
+                  <span className="block text-xs text-muted-foreground">{e.entityTypeLabel}</span>
+                </TableCell>
+                <TableCell>
+                  <Badge variant={result.variant}>{result.label}</Badge>
+                </TableCell>
+              </TableRow>
+            );
+          })}
         </TableBody>
       </Table>
 

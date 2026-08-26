@@ -84,6 +84,24 @@ export const REVIEWED_NON_SENSITIVE: Readonly<Record<string, string>> = {
   addresses: 'Tên quan hệ PersonAddress[]; lá `address` bên trong mới là thứ được che',
   bankAccounts: 'Tên quan hệ PersonBankAccount[]; lá `accountNumber` bên trong mới là thứ được che',
   accountHolder: 'Tên chủ tài khoản — là TÊN NGƯỜI, cùng lý do với fullName: gate bằng quyền route',
+  /* Hai nhãn của nhật ký kiểm toán (thêm 2026-08-26). Ghi ở đây vì chúng CHỨA dữ liệu mà
+   * sổ trên có che: `actorLabel` là email, `entityLabel` có thể là họ tên. Sổ khớp theo
+   * TÊN trường nên hai nhãn này không bị che — đó là CHỦ ĐÍCH, không phải sơ suất, và
+   * quyết định phải đọc được ở đây chứ không nằm im trong một file khác.
+   *
+   * Căn cứ: (1) nhật ký kiểm toán tồn tại để QUY TRÁCH NHIỆM — che người thao tác là xoá
+   * công dụng của nó; (2) hiến pháp INDEVCO công bố trước việc audit hoạt động trên tài
+   * sản số công ty; (3) `fullName` vốn đã được rà là dữ liệu tác nghiệp, gate bằng quyền
+   * route; (4) chỉ 5 vai có `audit.event.view`.
+   *
+   * Nếu về sau chủ doanh nghiệp muốn siết, chỗ sửa là thêm hai dòng vào SENSITIVE_FIELDS
+   * với mã `audit.event.view_sensitive` — cùng mã đang mở ảnh chụp before/after và IP. */
+  actorLabel:
+    'Email người thao tác trong nhật ký kiểm toán — danh tính NHÂN VIÊN để quy trách nhiệm, không phải dữ liệu khách hàng',
+  entityLabel:
+    'Tên đối tượng bị tác động trong nhật ký kiểm toán — cùng lý do với fullName, gate bằng audit.event.view',
+  entityTypeLabel:
+    'Nhãn loại đối tượng (Nhân thân/Khách hàng/Phần mộ...) — không phải dữ liệu của ai',
 };
 
 /* Tên trường nghi vấn — dùng cho test quét schema. Thà cảnh báo thừa hơn bỏ sót.
