@@ -60,6 +60,21 @@ export class CustomersController {
     return this.svc.search(q ?? '');
   }
 
+  /* PHẢI khai SAU `customers/search`. Express khớp route theo thứ tự đăng ký, nên
+   * `customers/:id` đứng trước sẽ nuốt luôn `customers/search` và nhận chuỗi "search" làm
+   * id — tìm kiếm trả 404 "Không tìm thấy khách hàng", một triệu chứng không dẫn tới
+   * nguyên nhân.
+   *
+   * Gate bằng `crm.customer.view`; các trường nhạy cảm bên trong (CCCD, liên lạc, dân
+   * tộc/tôn giáo, số tài khoản) vẫn do lớp che quyết định — route chỉ nói "được gọi hay
+   * không", không nói "đọc được cột nào".
+   */
+  @Get('customers/:id')
+  @RequirePermission('crm.customer.view')
+  customerDetail(@Param('id') id: string) {
+    return this.svc.getCustomerDetail(id);
+  }
+
   @Post('relationships')
   @RequirePermission('crm.relationship.create')
   createRelationship(@Body() dto: CreateRelationshipDto, @Req() req: Request) {

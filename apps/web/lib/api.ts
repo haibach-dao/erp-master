@@ -126,7 +126,22 @@ export interface DedupWarning {
 
 export interface CreateCustomerInput {
   type: string;
-  person?: { fullName: string; gender?: string; nationalId?: string };
+  person?: {
+    fullName: string;
+    gender?: string;
+    dateOfBirth?: string;
+    nationalId?: string;
+    nationalIdIssuedOn?: string;
+    nationalIdIssuedPlace?: string;
+    phone?: string;
+    email?: string;
+    permanentAddress?: string;
+    contactAddress?: string;
+    /* Dân tộc / tôn giáo — dữ liệu nhạy cảm theo NĐ13 Điều 2.4, chỉ người cầm
+     * `crm.person.view_sensitive` đọc lại được bản không che. */
+    ethnicity?: string;
+    religion?: string;
+  };
   orgName?: string;
   phone?: string;
   email?: string;
@@ -745,3 +760,42 @@ export const deactivatePersonSubRecord = (
     `/api/v1/crm/persons/${encodeURIComponent(personId)}/${kind}/${encodeURIComponent(recordId)}/deactivate`,
     { method: 'POST' },
   );
+
+/* ---- Chi tiết khách hàng 360 ---- */
+
+export interface CustomerPlot {
+  gravePlotId: string;
+  plotCode: string | null;
+  cemeteryName: string | null;
+  zone: string | null;
+  block: string | null;
+  row: string | null;
+  status: string | null;
+  capacity: number | null;
+  effectiveFrom: string | null;
+}
+
+export interface CustomerRelationship {
+  id: string;
+  relationshipType: string;
+  status: string;
+  target: { id: string; fullName: string; gender: string | null };
+}
+
+export interface CustomerDetail {
+  id: string;
+  customerCode: string;
+  type: string;
+  orgName: string | null;
+  phone: string | null;
+  email: string | null;
+  companyId: string | null;
+  personId: string | null;
+  createdAt: string;
+  person: PersonProfile | null;
+  gravePlots: CustomerPlot[];
+  relationships: CustomerRelationship[];
+}
+
+export const getCustomerDetail = (customerId: string): Promise<CustomerDetail> =>
+  apiFetch(`/api/v1/crm/customers/${encodeURIComponent(customerId)}`);

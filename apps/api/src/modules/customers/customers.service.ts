@@ -262,6 +262,78 @@ export class CustomersService {
     });
   }
 
+  /* Hồ sơ khách hàng 360 — một lần gọi cho cả màn hình chi tiết.
+   *
+   * Gộp ở API chứ không để giao diện gọi năm lần rồi tự ghép: năm lời gọi là năm trạng
+   * thái tải khác nhau, và màn hình sẽ hiện ra từng mảnh một. Quan trọng hơn, mọi mảnh
+   * đều đi qua CÙNG một lớp che — ghép ở client thì mỗi mảnh che theo một đường.
+   *
+   * Chỉ trả mục còn hiệu lực ở các bảng phụ; mục đã ngừng dùng thuộc màn hình lịch sử.
+   */
+  async getCustomerDetail(customerId: string) {
+    const activeSub = { where: { status: 'active' }, orderBy: { createdAt: 'asc' } } as const;
+    const customer = await this.prisma.customer.findUnique({
+      where: { id: customerId },
+      include: {
+        person: {
+          include: {
+            phones: activeSub,
+            addresses: activeSub,
+            education: activeSub,
+            bankAccounts: activeSub,
+          },
+        },
+      },
+    });
+    if (customer === null) {
+      throw new NotFoundException('Không tìm thấy khách hàng');
+    }
+
+    /* Phần mộ đang đứng tên. Đi qua `GraveUsageRight` chứ không qua hợp đồng: quyền sử
+     * dụng mới là thứ nói ai đang là chủ mộ HÔM NAY, hợp đồng chỉ là căn cứ sinh ra nó. */
+    const rights = await this.prisma.graveUsageRight.findMany({
+      where: { holderCustomerId: customerId, status: 'Active' },
+      orderBy: { createdAt: 'asc' },
+    });
+    const plots =
+      rights.length === 0
+        ? []
+        : await this.prisma.gravePlot.findMany({
+            where: { id: { in: rights.map((r) => r.gravePlotId) } },
+            include: { cemetery: { select: { name: true } }, graveType: true },
+          });
+    const plotById = new Map(plots.map((pl) => [pl.id, pl]));
+
+    const relationships =
+      customer.personId === null
+        ? []
+        : await this.prisma.familyRelationship.findMany({
+            where: { sourcePersonId: customer.personId, status: { not: 'Ended' } },
+            include: { target: { select: { id: true, fullName: true, gender: true } } },
+            orderBy: { createdAt: 'desc' },
+          });
+
+    return {
+      ...customer,
+      gravePlots: rights.map((r) => {
+        const plot = plotById.get(r.gravePlotId);
+        return {
+          gravePlotId: r.gravePlotId,
+          plotCode: plot?.plotCode ?? null,
+          cemeteryName: plot?.cemetery.name ?? null,
+          zone: plot?.zone ?? null,
+          block: plot?.block ?? null,
+          row: plot?.row ?? null,
+          status: plot?.status ?? null,
+          capacity:
+            plot === undefined ? null : (plot.capacityOverride ?? plot.graveType.defaultCapacity),
+          effectiveFrom: r.effectiveFrom,
+        };
+      }),
+      relationships,
+    };
+  }
+
   // Customer 360 search by code / name / phone / email / org name.
   search(q: string) {
     return this.prisma.customer.findMany({
