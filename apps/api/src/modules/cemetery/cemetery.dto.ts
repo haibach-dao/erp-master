@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsIn, IsInt, IsOptional, IsString, Min, MinLength } from 'class-validator';
+import { IsIn, IsInt, IsNumber, IsOptional, IsString, Min, MinLength } from 'class-validator';
 import { GRAVE_PLOT_STATUSES } from './cemetery.constants';
 
 export class CreateCompanyDto {
@@ -47,4 +47,20 @@ export class ChangeStatusDto {
   toStatus!: string;
 
   @ApiPropertyOptional() @IsOptional() @IsString() reason?: string;
+}
+
+/* Toạ độ sơ đồ mặt bằng. Hệ CỤC BỘ theo từng nghĩa trang, đơn vị mét — không phải kinh/vĩ
+ * độ, nên không ràng buộc [-180,180]. Cho phép null tường minh để gỡ một mộ khỏi sơ đồ mà
+ * không phải xoá bản ghi.
+ */
+export class SetPlotPositionDto {
+  @ApiPropertyOptional({ description: 'Toạ độ X cục bộ (mét); null để gỡ khỏi sơ đồ' })
+  @IsOptional()
+  @IsNumber()
+  mapX?: number | null;
+
+  @ApiPropertyOptional({ description: 'Toạ độ Y cục bộ (mét); null để gỡ khỏi sơ đồ' })
+  @IsOptional()
+  @IsNumber()
+  mapY?: number | null;
 }

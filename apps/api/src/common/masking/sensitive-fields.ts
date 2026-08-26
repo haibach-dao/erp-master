@@ -29,6 +29,22 @@ export const SENSITIVE_FIELDS: readonly MaskRule[] = [
   { field: 'dateOfBirth', permission: 'crm.person.view_contact', strategy: 'year' },
   { field: 'dateOfDeath', permission: 'crm.person.view_contact', strategy: 'year' },
   { field: 'address', permission: 'crm.person.view_contact' },
+  { field: 'permanentAddress', permission: 'crm.person.view_contact' },
+  { field: 'contactAddress', permission: 'crm.person.view_contact' },
+  /* Dân tộc và tôn giáo: NĐ 13/2023 Điều 2.4 xếp vào dữ liệu cá nhân NHẠY CẢM, cùng nhóm
+   * với CCCD chứ không phải nhóm liên lạc — nên mở bằng `view_sensitive` (S3), KHÔNG phải
+   * `view_contact` (S2). Người bán cần gọi được cho khách; họ không cần biết khách theo
+   * đạo gì. */
+  { field: 'ethnicity', permission: 'crm.person.view_sensitive' },
+  { field: 'religion', permission: 'crm.person.view_sensitive' },
+  /* Nơi/ngày cấp CCCD đi liền với số CCCD nên cùng mức S3. Ngày cấp che thành NĂM: đủ để
+   * đối chiếu giấy tờ còn hạn hay không, không đủ để dò ra số. */
+  { field: 'nationalIdIssuedOn', permission: 'crm.person.view_sensitive', strategy: 'year' },
+  { field: 'nationalIdIssuedPlace', permission: 'crm.person.view_sensitive' },
+  /* Số tài khoản: mã RIÊNG, không dùng chung `view_sensitive`. CCCD lộ ra là rủi ro định
+   * danh; số tài khoản lộ ra là rủi ro tài chính. Ai cần cái thứ nhất để làm thủ tục tang
+   * lễ thì không vì thế mà cần cái thứ hai. */
+  { field: 'accountNumber', permission: 'crm.person.view_financial' },
   /* Địa chỉ IP là dữ liệu cá nhân theo NĐ13, và audit event nào cũng có một cái. Mở khoá
    * bằng cùng mã mở khoá ảnh chụp before/after — người đọc được nội dung thay đổi thì cũng
    * là người cần biết nó đến từ đâu; người chỉ xem nhật ký ở mức thường thì không cần
@@ -56,8 +72,27 @@ export const REVIEWED_NON_SENSITIVE: Readonly<Record<string, string>> = {
   notes: 'Ghi chú nghiệp vụ. RỦI RO ĐÃ BIẾT: người dùng có thể gõ dữ liệu cá nhân vào đây',
   genderSpecific:
     'Cờ boolean trên loại quan hệ nhân thân (Cha/Mẹ có phân biệt giới). Không phải dữ liệu của ai',
+  // Mã ngân hàng (VCB, BIDV...) là danh mục công khai. Che nó không giấu được gì, mà số
+  // tài khoản — thứ thật sự nhạy cảm — đã có luật che riêng bằng `view_financial`.
+  bankCode: 'Mã ngân hàng là danh mục công khai; số tài khoản mới là thứ được che',
+  /* Ba tên dưới đây là TÊN QUAN HỆ (mảng con của Person), không phải cột dữ liệu. Che
+   * chúng là xoá trắng cả mảng — sai chỗ: thứ nhạy cảm nằm ở LÁ bên trong (`phone`,
+   * `address`, `accountNumber`), và mỗi lá đã có luật che riêng, áp đệ quy qua maskTree.
+   * Ratchet bắt được chúng vì nó khớp theo tên chứ không phân biệt cột với quan hệ — đó
+   * là cảnh báo thừa đúng như thiết kế, thà thừa hơn sót. */
+  phones: 'Tên quan hệ PersonPhone[]; lá `phone` bên trong mới là thứ được che',
+  addresses: 'Tên quan hệ PersonAddress[]; lá `address` bên trong mới là thứ được che',
+  bankAccounts: 'Tên quan hệ PersonBankAccount[]; lá `accountNumber` bên trong mới là thứ được che',
+  accountHolder: 'Tên chủ tài khoản — là TÊN NGƯỜI, cùng lý do với fullName: gate bằng quyền route',
 };
 
-/** Tên trường nghi vấn — dùng cho test quét schema. Thà cảnh báo thừa hơn bỏ sót. */
+/* Tên trường nghi vấn — dùng cho test quét schema. Thà cảnh báo thừa hơn bỏ sót.
+ *
+ * Nhóm thứ hai (dân tộc/tôn giáo/ngân hàng/sức khoẻ/sinh trắc…) được thêm 2026-08-26.
+ * Trước đó ratchet KHÔNG bắt chúng: NĐ 13/2023 Điều 2.4 liệt kê chúng là dữ liệu nhạy
+ * cảm, nhưng vì hệ chưa có cột nào tên như vậy nên không ai để ý là tấm lưới có lỗ. Nếu
+ * sau này nhập dữ liệu nhân sự từ hệ cũ (`dan_toc`, `ton_giao`, `ProfileBankAccounts`),
+ * cột mới sẽ lọt thẳng ra API mà build vẫn xanh. Vá trước khi cần, không vá sau khi lộ.
+ */
 export const SUSPICIOUS_FIELD_PATTERN =
-  /(phone|email|address|dateOfBirth|dateOfDeath|nationalId|fullName|orgName|gender|notes|cccd|cmnd|ngaySinh|soCccd)/i;
+  /(phone|email|address|dateOfBirth|dateOfDeath|nationalId|fullName|orgName|gender|notes|cccd|cmnd|ngaySinh|soCccd|religion|ethnic|race|bank|account(?:Number|No)|health|medical|disability|blood|biometric|fingerprint|marital|placeOfBirth|criminal|politic|union|sexual|danToc|tonGiao|soTaiKhoan)/i;

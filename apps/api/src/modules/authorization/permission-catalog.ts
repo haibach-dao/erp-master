@@ -56,6 +56,17 @@ export const ACTIONS = [
    * vì bộ action là danh sách ĐÓNG — thêm một từ là một quyết định, không phải một chuỗi
    * gõ vội ở call site. */
   'view_contact',
+  /* Thêm 2026-08-26 cùng bảng `person_bank_accounts`. Tách khỏi `view_sensitive` vì hai
+   * rủi ro khác nhau: CCCD lộ ra là rủi ro ĐỊNH DANH, số tài khoản lộ ra là rủi ro TÀI
+   * CHÍNH. Người giữ hồ sơ nhân thân cần cái thứ nhất để làm thủ tục; họ không cần cái
+   * thứ hai. Gộp lại thì "cho xem CCCD" đồng nghĩa "cho xem số tài khoản" — leo thang do
+   * đặt tên mã, không do ai quyết định. */
+  'view_financial',
+  /* Thêm 2026-08-26 cùng chức năng cấp thẻ quản lý mộ. KHÔNG dùng lại `export`: `export`
+   * là trích dữ liệu ra tệp cho người trong hệ dùng tiếp, còn `print` là CẤP một giấy tờ
+   * có số lần cấp, có chữ ký, có giá trị đối chứng với khách. Hai việc khác nhau về hậu
+   * quả nên phải đếm được riêng trong nhật ký. */
+  'print',
   'grant',
   'revoke',
   'submit',
@@ -126,6 +137,12 @@ export const PERMISSION_CATALOG: readonly PermissionDef[] = [
   p('cemetery.plot.set_status', 'S2', 'Đổi trạng thái lô mộ'),
   p('cemetery.plot.override', 'S3', 'Vượt quy tắc trạng thái/sức chứa lô mộ'),
   p('cemetery.plot.view_history', 'S2', 'Xem lịch sử đổi trạng thái lô mộ'),
+  p('cemetery.plot.update', 'S2', 'Sửa lô mộ (gồm toạ độ sơ đồ mặt bằng)'),
+  /* Thẻ quản lý mộ. Hai mã tách nhau vì hai hành vi khác hẳn: XEM TRƯỚC không để lại gì,
+   * CẤP THẺ thì tăng số lần cấp và ghi nhật ký vĩnh viễn. Gộp một mã thì mỗi lần liếc
+   * qua thẻ đều thành một lần cấp — đúng lỗi hệ cũ mắc phải. */
+  p('cemetery.card.view', 'S2', 'Xem trước thẻ quản lý mộ (không cấp số)'),
+  p('cemetery.card.print', 'S3', 'Cấp/in thẻ quản lý mộ — tăng số lần cấp, ghi nhật ký'),
   p('cemetery.hold.view', 'S1', 'Xem phiếu giữ chỗ'),
   p('cemetery.hold.hold', 'S2', 'Giữ chỗ lô mộ'),
   p('cemetery.hold.release', 'S3', 'Huỷ giữ chỗ lô mộ'),
@@ -140,6 +157,10 @@ export const PERMISSION_CATALOG: readonly PermissionDef[] = [
    * luôn CCCD đầy đủ; đó là leo thang do thiết kế mã, không do ai quyết định. */
   p('crm.person.view_contact', 'S2', 'Xem thông tin liên lạc (điện thoại/email/địa chỉ/ngày sinh)'),
   p('crm.person.view_sensitive', 'S3', 'Xem CCCD/định danh không mask'),
+  /* Số tài khoản ngân hàng của nhân thân. CỐ Ý chưa gán cho vai nào ngoài ADMIN: nghĩa
+   * trang chưa có nghiệp vụ nào chi trả cho thân nhân, nên chưa ai cần. Khi có nghiệp vụ
+   * (hoàn tiền, chi hỗ trợ), chủ doanh nghiệp quyết vai nào được cấp — không phải AI. */
+  p('crm.person.view_financial', 'S3', 'Xem số tài khoản ngân hàng của nhân thân'),
   p('crm.person.export', 'S3', 'Trích xuất nhân thân ra ngoài hệ'),
   p('crm.person.set_protected', 'S3', 'Đặt cờ bảo vệ nhân thân (LÀN CẤM)'),
   p('crm.person.view_protected', 'S3', 'Xem nhân thân được bảo vệ (LÀN CẤM)'),
@@ -371,6 +392,12 @@ export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
     'service.catalog.view',
     'service.price.view',
     'service.subscription.view',
+    /* Front desk là nơi trao thẻ cho khách, nên có cả xem trước lẫn cấp thẻ. LƯU Ý: họ
+     * KHÔNG có `crm.person.view_sensitive`, nên thẻ họ in ra hiện CCCD dạng `079***123`.
+     * Đó là hành vi ĐÚNG theo thiết kế, không phải lỗi — nếu nghiệp vụ đòi thẻ phải có
+     * CCCD đầy đủ thì đó là quyết định của chủ doanh nghiệp về việc cấp thêm mã S3. */
+    'cemetery.card.view',
+    'cemetery.card.print',
     ...FILE_BASIC,
   ]),
 
@@ -489,6 +516,11 @@ export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
   QL_NGHIA_TRANG: role('Quản lý nghĩa trang', 'Ghế THẨM ĐỊNH tác nghiệp', 'SITE', [
     ...CEMETERY_READ_ALL,
     'cemetery.plot.set_status',
+    /* Toạ độ sơ đồ là dữ liệu MẶT BẰNG — người quản lý nghĩa trang là người biết thực địa,
+     * và vai này có phạm vi SITE nên chỉ sửa được sơ đồ nghĩa trang mình phụ trách. */
+    'cemetery.plot.update',
+    'cemetery.card.view',
+    'cemetery.card.print',
     'cemetery.hold.release',
     'crm.customer.search',
     'crm.customer.view', // đọc dẫn xuất cho search

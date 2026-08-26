@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { ulid } from 'ulid';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ScopeService } from '../authorization/scope.service';
+import { AuditService } from '../audit/audit.service';
 import type {
   ChangeStatusDto,
   CreateCemeteryDto,
@@ -16,6 +17,7 @@ export class CemeteryService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly scope: ScopeService,
+    private readonly audit: AuditService,
   ) {}
 
   listRelationshipTypes() {
@@ -182,5 +184,83 @@ export class CemeteryService {
       }
       throw err;
     }
+  }
+
+  /* Đặt toạ độ sơ đồ cho một phần mộ.
+   *
+   * Kiểm phạm vi theo NGHĨA TRANG chứa phần mộ, không theo companyId client gửi lên: vai
+   * quản lý nghĩa trang có phạm vi SITE, và tin companyId từ client là bỏ qua đúng cái
+   * ranh giới đó.
+   */
+  async setPlotPosition(
+    id: string,
+    dto: { mapX?: number | null; mapY?: number | null },
+    actor: string | null,
+  ) {
+    const plot = await this.prisma.gravePlot.findUnique({
+      where: { id },
+      select: { id: true, companyId: true, cemeteryId: true, mapX: true, mapY: true },
+    });
+    if (plot === null) {
+      throw new NotFoundException('Không tìm thấy lô mộ');
+    }
+    await this.scope.assertCompany(actor, plot.companyId);
+    await this.scope.assertSite(actor, plot.cemeteryId);
+
+    const updated = await this.prisma.gravePlot.update({
+      where: { id },
+      data: {
+        ...(dto.mapX !== undefined ? { mapX: dto.mapX } : {}),
+        ...(dto.mapY !== undefined ? { mapY: dto.mapY } : {}),
+      },
+    });
+    await this.audit.record({
+      actorType: 'USER',
+      actorId: actor,
+      action: 'GRAVE_PLOT.POSITION_SET',
+      entityType: 'grave_plot',
+      entityId: id,
+      beforeData: { mapX: plot.mapX, mapY: plot.mapY },
+      afterData: { mapX: updated.mapX, mapY: updated.mapY },
+    });
+    return updated;
+  }
+
+  /* Dữ liệu vẽ sơ đồ một nghĩa trang. Chỉ trả mộ ĐÃ có toạ độ — mộ chưa số hoá vị trí
+   * không vẽ được, và trả về kèm toạ độ null buộc mọi phía vẽ phải tự lọc lại.
+   */
+  async plotMap(cemeteryId: string, actor: string | null) {
+    const cemetery = await this.prisma.cemetery.findUnique({ where: { id: cemeteryId } });
+    if (cemetery === null) {
+      throw new NotFoundException('Không tìm thấy nghĩa trang');
+    }
+    await this.scope.assertCompany(actor, cemetery.companyId);
+    await this.scope.assertSite(actor, cemeteryId);
+
+    const plots = await this.prisma.gravePlot.findMany({
+      where: { cemeteryId, mapX: { not: null }, mapY: { not: null } },
+      select: {
+        id: true,
+        plotCode: true,
+        status: true,
+        zone: true,
+        subzone: true,
+        block: true,
+        row: true,
+        mapX: true,
+        mapY: true,
+      },
+      orderBy: { plotCode: 'asc' },
+    });
+    const total = await this.prisma.gravePlot.count({ where: { cemeteryId } });
+    return {
+      cemeteryId,
+      cemeteryName: cemetery.name,
+      plots,
+      /* Nói thẳng phần chưa vẽ được thay vì im lặng bỏ qua — sơ đồ thiếu mộ mà không báo
+       * gì thì người xem tưởng nghĩa trang chỉ có bấy nhiêu. */
+      totalPlots: total,
+      missingPosition: total - plots.length,
+    };
   }
 }

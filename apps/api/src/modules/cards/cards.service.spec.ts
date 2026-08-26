@@ -1,0 +1,280 @@
+import { describe, expect, it, vi } from 'vitest';
+import { ConflictException, NotFoundException } from '@nestjs/common';
+import { CardsService } from './cards.service';
+import type { PrismaService } from '../../prisma/prisma.service';
+import type { AuditService } from '../audit/audit.service';
+import type { ScopeService } from '../authorization/scope.service';
+
+const CUSTOMER = 'cus-1';
+const PLOT = 'plot-1';
+
+function burial(over: Record<string, unknown> = {}) {
+  return {
+    id: 'br-1',
+    gravePlotId: PLOT,
+    status: 'Completed',
+    burialDate: new Date('2024-03-01'),
+    relationshipToOwner: 'CHILD',
+    deceased: {
+      dateOfDeath: new Date('2024-02-20'),
+      person: { fullName: 'Nguyễn Văn B', dateOfBirth: new Date('1950-01-01') },
+    },
+    ...over,
+  };
+}
+
+function build(
+  opts: {
+    rights?: unknown[];
+    burials?: unknown[];
+    capacity?: number;
+    capacityOverride?: number | null;
+    lastPrintNumber?: number | null;
+    companyId?: string | null;
+    customerMissing?: boolean;
+    log?: unknown;
+  } = {},
+) {
+  const {
+    rights = [
+      { id: 'ur-1', gravePlotId: PLOT, status: 'Active', effectiveFrom: new Date('2020-05-01') },
+    ],
+    burials = [burial()],
+    capacity = 4,
+    capacityOverride = null,
+    lastPrintNumber = null,
+    companyId = 'co-1',
+    customerMissing = false,
+    log = null,
+  } = opts;
+
+  const record = vi.fn().mockResolvedValue(undefined);
+  const createLog = vi
+    .fn()
+    .mockImplementation((args: { data: Record<string, unknown> }) =>
+      Promise.resolve({ ...args.data, id: 'log-new' }),
+    );
+  const findFirstLog = vi
+    .fn()
+    .mockResolvedValue(lastPrintNumber === null ? null : { printNumber: lastPrintNumber });
+
+  const prisma = {
+    customer: {
+      findUnique: vi.fn().mockResolvedValue(
+        customerMissing
+          ? null
+          : {
+              id: CUSTOMER,
+              customerCode: 'KH-0001',
+              companyId,
+              orgName: null,
+              phone: '0900000000',
+              person: {
+                fullName: 'Nguyễn Văn A',
+                gender: 'MALE',
+                dateOfBirth: new Date('1970-07-07'),
+                nationalIdMasked: '079***123',
+                nationalIdIssuedOn: new Date('2021-06-15'),
+                nationalIdIssuedPlace: 'Cục CSQLHC',
+                phone: '0911111111',
+                permanentAddress: 'Số 1, Hạ Long',
+                religion: 'Phật giáo',
+              },
+            },
+      ),
+    },
+    graveUsageRight: { findMany: vi.fn().mockResolvedValue(rights) },
+    gravePlot: {
+      findMany: vi.fn().mockResolvedValue([
+        {
+          id: PLOT,
+          plotCode: 'A-01-05',
+          zone: 'Khu A',
+          subzone: null,
+          block: 'Khối 1',
+          row: 'Dãy 5',
+          mapX: 12.5,
+          mapY: 30,
+          capacityOverride,
+          cemetery: { name: 'An Lạc Viên' },
+          graveType: { name: 'Mộ gia đình', defaultCapacity: capacity },
+        },
+      ]),
+    },
+    burialRecord: { findMany: vi.fn().mockResolvedValue(burials) },
+    cardPrintLog: {
+      findFirst: findFirstLog,
+      findUnique: vi.fn().mockResolvedValue(log),
+      create: createLog,
+      findMany: vi.fn().mockResolvedValue([]),
+    },
+    $transaction: vi
+      .fn()
+      .mockImplementation((fn: (t: unknown) => unknown) =>
+        fn({ cardPrintLog: { findFirst: findFirstLog, create: createLog } }),
+      ),
+  } as unknown as PrismaService;
+
+  const assertCompany = vi.fn().mockResolvedValue(undefined);
+  const svc = new CardsService(
+    prisma,
+    { record } as unknown as AuditService,
+    { assertCompany } as unknown as ScopeService,
+  );
+  return { svc, record, createLog, assertCompany };
+}
+
+/* Lỗi đắt nhất của bản hệ cũ: mở thẻ ra xem cũng ghi một dòng nhật ký, nên bấm Hủy ở hộp
+ * thoại in vẫn làm "Lần cấp" nhảy. Số đó in trên giấy và khách dùng để đối chứng, nên nó
+ * sai là hồ sơ sai. Đây là nhóm test giữ cho lỗi đó không quay lại.
+ */
+describe('thẻ mộ — xem trước KHÔNG phải là cấp thẻ', () => {
+  it('xem trước không ghi dòng nhật ký nào', async () => {
+    const { svc, createLog, record } = build();
+
+    const card = (await svc.preview(CUSTOMER, 'u1')) as Record<string, unknown>;
+
+    expect(createLog).not.toHaveBeenCalled();
+    expect(record).not.toHaveBeenCalled();
+    expect(card.issued).toBe(false);
+  });
+
+  it('xem trước báo số DỰ KIẾN, không phải số đã cấp', async () => {
+    const { svc } = build({ lastPrintNumber: 2 });
+
+    const card = (await svc.preview(CUSTOMER, 'u1')) as Record<string, unknown>;
+
+    expect(card.nextPrintNumber).toBe(3);
+    expect(card.printNumber).toBeUndefined();
+  });
+
+  it('cấp thẻ mới ghi nhật ký và phát audit', async () => {
+    const { svc, createLog, record } = build({ lastPrintNumber: 1 });
+
+    const card = (await svc.issue(CUSTOMER, { printReason: 'Đổi thông tin' }, 'u1')) as Record<
+      string,
+      unknown
+    >;
+
+    expect(card.printNumber).toBe(2);
+    expect(card.issued).toBe(true);
+    expect(createLog).toHaveBeenCalledOnce();
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ action: 'GRAVE_CARD.ISSUED' }));
+  });
+
+  it('lần cấp đầu tiên là 1', async () => {
+    const { svc } = build({ lastPrintNumber: null });
+
+    const card = (await svc.issue(CUSTOMER, {}, 'u1')) as Record<string, unknown>;
+
+    expect(card.printNumber).toBe(1);
+  });
+
+  it('in lại đọc đúng số cũ, KHÔNG sinh số mới', async () => {
+    const { svc, createLog } = build({
+      log: {
+        id: 'log-7',
+        customerId: CUSTOMER,
+        companyId: 'co-1',
+        printNumber: 2,
+        approvedBy: 'Trần Văn C',
+        approvedTitle: 'PHÓ GIÁM ĐỐC',
+      },
+    });
+
+    const card = (await svc.reprint('log-7', 'u1')) as Record<string, unknown>;
+
+    expect(card.printNumber).toBe(2);
+    expect(card.reprint).toBe(true);
+    expect(card.approvedBy).toBe('Trần Văn C');
+    expect(createLog).not.toHaveBeenCalled();
+  });
+
+  it('in lại một lần cấp không tồn tại thì 404', async () => {
+    const { svc } = build({ log: null });
+
+    await expect(svc.reprint('khong-co', 'u1')).rejects.toThrow(NotFoundException);
+  });
+});
+
+describe('thẻ mộ — nội dung in ra', () => {
+  it('chừa đủ dòng trống theo sức chứa của phần mộ', async () => {
+    // Sức chứa 4, đã an táng 1 => thẻ phải chừa 3 dòng trống.
+    const { svc } = build({ capacity: 4, burials: [burial()] });
+
+    const card = (await svc.preview(CUSTOMER, 'u1')) as { plots: Record<string, unknown>[] };
+
+    expect(card.plots[0].capacity).toBe(4);
+    expect(card.plots[0].emptySlots).toBe(3);
+  });
+
+  it('sức chứa ghi đè trên phần mộ thắng mặc định của loại mộ', async () => {
+    const { svc } = build({ capacity: 4, capacityOverride: 2, burials: [burial()] });
+
+    const card = (await svc.preview(CUSTOMER, 'u1')) as { plots: Record<string, unknown>[] };
+
+    expect(card.plots[0].capacity).toBe(2);
+    expect(card.plots[0].emptySlots).toBe(1);
+  });
+
+  it('mộ đã kín thì không chừa dòng âm', async () => {
+    const { svc } = build({
+      capacity: 1,
+      burials: [burial(), burial({ id: 'br-2' })],
+    });
+
+    const card = (await svc.preview(CUSTOMER, 'u1')) as { plots: Record<string, unknown>[] };
+
+    expect(card.plots[0].emptySlots).toBe(0);
+  });
+
+  it('in quan hệ đã CHỤP LẠI lúc an táng, không tra lại quan hệ hiện tại', async () => {
+    const { svc } = build({ burials: [burial({ relationshipToOwner: 'SPOUSE' })] });
+
+    const card = (await svc.preview(CUSTOMER, 'u1')) as {
+      plots: { occupants: Record<string, unknown>[] }[];
+    };
+
+    expect(card.plots[0].occupants[0].relationshipToOwner).toBe('SPOUSE');
+  });
+
+  it('trả CCCD dạng đã che sẵn — bản đầy đủ không đi qua đường này', async () => {
+    const { svc } = build();
+
+    const card = (await svc.preview(CUSTOMER, 'u1')) as { owner: Record<string, unknown> };
+
+    expect(card.owner.nationalIdMasked).toBe('079***123');
+    expect(card.owner).not.toHaveProperty('nationalId');
+    expect(card.owner).not.toHaveProperty('nationalIdCipher');
+  });
+});
+
+describe('thẻ mộ — chặn trước khi cấp', () => {
+  it('khách chưa đứng tên mộ nào thì không cấp thẻ', async () => {
+    const { svc, createLog } = build({ rights: [] });
+
+    await expect(svc.issue(CUSTOMER, {}, 'u1')).rejects.toThrow(ConflictException);
+    expect(createLog).not.toHaveBeenCalled();
+  });
+
+  it('khách chưa gắn công ty quản lý thì không cấp thẻ', async () => {
+    const { svc, createLog } = build({ companyId: null });
+
+    await expect(svc.issue(CUSTOMER, {}, 'u1')).rejects.toThrow(ConflictException);
+    expect(createLog).not.toHaveBeenCalled();
+  });
+
+  it('không tìm thấy khách thì 404', async () => {
+    const { svc } = build({ customerMissing: true });
+
+    await expect(svc.preview(CUSTOMER, 'u1')).rejects.toThrow(NotFoundException);
+  });
+
+  it('kiểm phạm vi công ty TRƯỚC khi dựng thẻ', async () => {
+    const { svc, assertCompany } = build();
+
+    await svc.preview(CUSTOMER, 'u1');
+
+    expect(assertCompany).toHaveBeenCalledWith('u1', 'co-1');
+  });
+});

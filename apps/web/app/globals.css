@@ -134,3 +134,59 @@
     @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
   }
 }
+
+/* ---- In thẻ quản lý mộ ----
+ *
+ * Hệ cũ dựng CSS in bằng chuỗi ghép rồi nhét vào một `window.open` mới, kèm `setTimeout`
+ * 500ms trước khi gọi print. Cách đó hỏng theo ba đường: trình duyệt chặn popup, ảnh nền
+ * chưa tải xong trong 500ms thì in ra thẻ trắng, và không có xử lý lỗi nào.
+ *
+ * Ở đây in ngay trong trang: khi in, mọi thứ ngoài `.print-root` bị ẩn, nên vỏ ứng dụng
+ * (sidebar, breadcrumb, nút bấm) không lọt lên giấy mà cũng không cần cửa sổ thứ hai.
+ */
+@page {
+  size: A4 landscape;
+  margin: 0;
+}
+
+@media print {
+  body {
+    background: #fff;
+  }
+
+  /* Ẩn TOÀN BỘ, rồi hiện lại đúng nhánh chứa thẻ. Làm ngược lại — đi liệt kê từng thứ
+   * cần ẩn — là danh sách sẽ thiếu ngay lần thêm thành phần tiếp theo. */
+  body * {
+    visibility: hidden;
+  }
+
+  .print-root,
+  .print-root * {
+    visibility: visible;
+  }
+
+  .print-root {
+    position: absolute;
+    inset: 0;
+    margin: 0;
+  }
+
+  .print-hide {
+    display: none !important;
+  }
+
+  .print-sheet {
+    width: 297mm;
+    height: 210mm;
+    box-shadow: none !important;
+    border: 0 !important;
+    margin: 0 !important;
+    page-break-after: always;
+    break-after: page;
+  }
+
+  .print-sheet:last-child {
+    page-break-after: auto;
+    break-after: auto;
+  }
+}

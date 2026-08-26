@@ -232,3 +232,63 @@ describe('MaskingInterceptor — @RevealFields miễn cho đúng một route', (
     expect(out).toEqual({ email: 'toi@erp.vn' });
   });
 });
+
+/* Trường nhân thân bổ sung 2026-08-26. Điều đáng test không phải "có bị che không" — sổ
+ * đăng ký đã bảo đảm điều đó — mà là CHE BẰNG MÃ NÀO. Dân tộc/tôn giáo phải nằm sau S3
+ * (`view_sensitive`), không được rơi xuống S2 (`view_contact`): ai được cấp quyền gọi
+ * điện cho khách thì không vì thế mà được biết khách theo đạo gì.
+ */
+describe('MaskingInterceptor — dữ liệu nhạy cảm NĐ13 Điều 2.4', () => {
+  const CONTACT: PermissionGrant[] = [
+    { permission: 'crm.person.view_contact', scope: 'GROUP' } as PermissionGrant,
+  ];
+  const SENSITIVE: PermissionGrant[] = [
+    { permission: 'crm.person.view_sensitive', scope: 'GROUP' } as PermissionGrant,
+  ];
+  const body = {
+    fullName: 'Nguyễn Văn A',
+    religion: 'Phật giáo',
+    ethnicity: 'Kinh',
+    permanentAddress: 'Số 1, Hạ Long',
+    nationalIdIssuedPlace: 'Cục CSQLHC',
+  };
+
+  it('người chỉ có quyền liên lạc KHÔNG thấy dân tộc/tôn giáo', async () => {
+    const out = (await run({ body, grants: CONTACT, userId: 'u1' })) as Record<string, unknown>;
+
+    expect(out.religion).toBe('***');
+    expect(out.ethnicity).toBe('***');
+    // ...nhưng vẫn thấy địa chỉ, vì đó đúng là thứ mã của họ mở.
+    expect(out.permanentAddress).toBe('Số 1, Hạ Long');
+    // Tên là dữ liệu tác nghiệp, gate bằng quyền route chứ không mask.
+    expect(out.fullName).toBe('Nguyễn Văn A');
+  });
+
+  it('người giữ hồ sơ nhân thân thấy đủ dân tộc/tôn giáo và nơi cấp CCCD', async () => {
+    const out = (await run({ body, grants: SENSITIVE, userId: 'u1' })) as Record<string, unknown>;
+
+    expect(out.religion).toBe('Phật giáo');
+    expect(out.ethnicity).toBe('Kinh');
+    expect(out.nationalIdIssuedPlace).toBe('Cục CSQLHC');
+    // Địa chỉ thì họ KHÔNG mở được bằng mã S3 — hai trục tách nhau, không bao hàm nhau.
+    expect(out.permanentAddress).toBe('***');
+  });
+
+  it('không đăng nhập thì che tất, kể cả trường mới', async () => {
+    const out = (await run({ body })) as Record<string, unknown>;
+
+    expect(out.religion).toBe('***');
+    expect(out.ethnicity).toBe('***');
+    expect(out.permanentAddress).toBe('***');
+  });
+
+  it('ngày cấp CCCD che thành NĂM, không che trắng', async () => {
+    const out = (await run({
+      body: { nationalIdIssuedOn: new Date('2021-06-15') },
+      grants: CONTACT,
+      userId: 'u1',
+    })) as Record<string, unknown>;
+
+    expect(out.nationalIdIssuedOn).toBe('2021');
+  });
+});

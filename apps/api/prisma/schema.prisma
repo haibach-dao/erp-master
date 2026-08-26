@@ -302,6 +302,17 @@ model GravePlot {
   block   String?
   row     String?
 
+  /**
+   * Toạ độ để vẽ sơ đồ mặt bằng khu mộ (in ở mặt trong thẻ quản lý mộ).
+   * Hệ TOẠ ĐỘ CỤC BỘ theo từng nghĩa trang, đơn vị mét, gốc ở góc do người vẽ chọn —
+   * KHÔNG phải kinh/vĩ độ. Lý do: sơ đồ nghĩa trang là bản vẽ mặt bằng, cần chính xác
+   * tương đối giữa các mộ chứ không cần định vị trên bản đồ trái đất; và nhập được bằng
+   * thước từ bản vẽ có sẵn, không cần đo GPS từng ngôi.
+   * Cho phép NULL: mộ chưa số hoá vị trí vẫn dùng bình thường, chỉ không hiện trên sơ đồ.
+   */
+  mapX Float? @map("map_x")
+  mapY Float? @map("map_y")
+
   capacityOverride Int?     @map("capacity_override") // null => use grave type default (G0-A1)
   status           String   @default("Available") // Available|Held|Reserved|Allocated|Occupied|Maintenance|Locked
   version          Int      @default(0) // optimistic lock for hold/allocation later
@@ -359,18 +370,140 @@ model Person {
   nationalIdHash   String?   @map("national_id_hash") // sha256 for dedup
   nationalIdMasked String?   @map("national_id_masked") // e.g. 079***123 for display
   nationalIdCipher String?   @map("national_id_cipher") // iv:tag:ciphertext (AES-256-GCM)
-  status           String    @default("active")
-  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  /**
+   * Nơi/ngày cấp CCCD. Đi liền với số CCCD nên cùng mức bảo vệ S3: biết "cấp ngày X tại
+   * tỉnh Y" là đã thu hẹp đáng kể việc dò ra số.
+   */
+  nationalIdIssuedOn    DateTime? @map("national_id_issued_on") @db.Date
+  nationalIdIssuedPlace String?   @map("national_id_issued_place")
+
+  /**
+   * Liên lạc CHÍNH — thứ ghi trên giấy tờ. Trước đây chỉ Customer mới có, nhưng người
+   * được an táng và thân nhân không phải ai cũng có bản ghi Customer mà vẫn cần liên hệ.
+   * Bốn cột này KHÔNG trùng lặp với `phones`/`addresses` bên dưới, chúng khác nghĩa:
+   * ở đây là "số/địa chỉ chính thức", bảng con là "các số/địa chỉ KHÁC". Vì khác nghĩa
+   * nên không cần đồng bộ hai chiều — chỗ hay hỏng nhất của mô hình có cột đệm.
+   */
+  phone            String?
+  email            String?
+  permanentAddress String? @map("permanent_address")
+  contactAddress   String? @map("contact_address")
+
+  /**
+   * NĐ 13/2023 Điều 2.4 gọi ĐÍCH DANH nguồn gốc dân tộc và quan điểm tôn giáo là dữ liệu
+   * cá nhân NHẠY CẢM — cùng nhóm với CCCD, không phải nhóm liên lạc. Nghiệp vụ tang lễ
+   * cần chúng (nghi thức theo tôn giáo, phong tục theo dân tộc), nên lưu; nhưng che ở mức
+   * S3 và chỉ mở cho vai giữ hồ sơ nhân thân.
+   */
+  ethnicity String?
+  religion  String?
+
+  status    String   @default("active")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   customer          Customer?
   deceased          DeceasedPerson?
   relationshipsFrom FamilyRelationship[] @relation("relSource")
   relationshipsTo   FamilyRelationship[] @relation("relTarget")
+  phones            PersonPhone[]
+  addresses         PersonAddress[]
+  education         PersonEducation[]
+  bankAccounts      PersonBankAccount[]
 
   @@index([nationalIdHash])
   @@index([fullName])
   @@map("persons")
+  @@schema("cemetery")
+}
+
+/**
+ * ---- Bảng phụ nhân thân (2026-08-26) ----
+ * Bốn bảng dưới đây là "các mục KHÁC" ngoài mục chính đã nằm trên `Person`. Chúng dùng
+ * chung một hình dạng: khoá ngoại về Person, một nhãn phân loại, cờ `isPrimary`, và
+ * `status` để NGỪNG DÙNG thay vì xoá — dữ liệu nhân thân đã từng đúng thì vẫn phải đọc
+ * lại được khi đối chiếu hồ sơ cũ.
+ */
+
+model PersonPhone {
+  id        String   @id
+  personId  String   @map("person_id")
+  phone     String
+  /// MOBILE | HOME | WORK | RELATIVE — nhãn tự do, không ép danh mục đóng.
+  kind      String?
+  isPrimary Boolean  @default(false) @map("is_primary")
+  status    String   @default("active")
+  notes     String?
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  person Person @relation(fields: [personId], references: [id])
+
+  @@index([personId])
+  @@map("person_phones")
+  @@schema("cemetery")
+}
+
+model PersonAddress {
+  id        String   @id
+  personId  String   @map("person_id")
+  address   String
+  /// TEMPORARY | WORK | HOMETOWN | OTHER. Thường trú và liên hệ nằm thẳng trên Person.
+  kind      String?
+  isPrimary Boolean  @default(false) @map("is_primary")
+  status    String   @default("active")
+  notes     String?
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  person Person @relation(fields: [personId], references: [id])
+
+  @@index([personId])
+  @@map("person_addresses")
+  @@schema("cemetery")
+}
+
+/**
+ * Học vấn: NĐ 13/2023 Điều 2.4 KHÔNG xếp trình độ học vấn vào nhóm nhạy cảm, nên đây là
+ * dữ liệu cá nhân thường — bảo vệ bằng quyền ở tầng route (`crm.person.view`), không mask
+ * từng trường. Ghi rõ ở đây để lần sau không ai phải đoán lại.
+ */
+model PersonEducation {
+  id             String   @id
+  personId       String   @map("person_id")
+  school         String?
+  major          String?
+  degree         String?
+  graduationYear Int?     @map("graduation_year")
+  status         String   @default("active")
+  notes          String?
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  person Person @relation(fields: [personId], references: [id])
+
+  @@index([personId])
+  @@map("person_education")
+  @@schema("cemetery")
+}
+
+/**
+ * Tài khoản ngân hàng: rủi ro TÀI CHÍNH, khác rủi ro ĐỊNH DANH của CCCD — nên mở bằng mã
+ * riêng `crm.person.view_financial`, không dùng chung `view_sensitive`. Hiện CHƯA vai
+ * nghiệp vụ nào được cấp mã đó: nghĩa trang chưa có nghiệp vụ chi trả cho thân nhân.
+ */
+model PersonBankAccount {
+  id            String   @id
+  personId      String   @map("person_id")
+  bankCode      String   @map("bank_code")
+  accountNumber String   @map("account_number")
+  accountHolder String?  @map("account_holder")
+  isPrimary     Boolean  @default(false) @map("is_primary")
+  status        String   @default("active")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  person Person @relation(fields: [personId], references: [id])
+
+  @@index([personId])
+  @@map("person_bank_accounts")
   @@schema("cemetery")
 }
 
@@ -541,23 +674,65 @@ model DeceasedPerson {
 }
 
 model BurialRecord {
-  id               String    @id
-  gravePlotId      String    @map("grave_plot_id")
-  deceasedPersonId String    @map("deceased_person_id")
-  contractId       String?   @map("contract_id")
-  status           String    @default("Draft") // Draft | Verified | Scheduled | Completed | Cancelled
-  burialDate       DateTime? @map("burial_date") @db.Date
-  legalDocFileId   String?   @map("legal_doc_file_id")
-  notes            String?
-  version          Int       @default(0)
-  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id               String  @id
+  gravePlotId      String  @map("grave_plot_id")
+  deceasedPersonId String  @map("deceased_person_id")
+  contractId       String? @map("contract_id")
+
+  /**
+   * Ai là chủ mộ, và người được an táng có quan hệ gì với họ — CHỤP LẠI lúc an táng.
+   * Không suy ra khi đọc: chủ mộ đổi (kế thừa) hoặc quan hệ bị chấm dứt về sau thì hồ sơ
+   * an táng vẫn phải kể đúng căn cứ tại thời điểm đặt cốt. Đây cũng là hai trường in ra
+   * thẻ quản lý mộ, nên chúng phải bất biến.
+   */
+  ownerCustomerId     String? @map("owner_customer_id")
+  relationshipToOwner String? @map("relationship_to_owner") // relationship_types.code, hoặc 'SELF'
+
+  status         String    @default("Draft") // Draft | Verified | Scheduled | Completed | Cancelled
+  burialDate     DateTime? @map("burial_date") @db.Date
+  legalDocFileId String?   @map("legal_doc_file_id")
+  notes          String?
+  version        Int       @default(0)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   deceased DeceasedPerson @relation(fields: [deceasedPersonId], references: [id])
 
   @@index([gravePlotId, status])
   @@index([deceasedPersonId])
   @@map("burial_records")
+  @@schema("cemetery")
+}
+
+/**
+ * Nhật ký cấp thẻ quản lý mộ.
+ * Số lần cấp là DỮ LIỆU IN TRÊN THẺ ("Lần cấp: 02"), nên nó phải đến từ một bản ghi bền
+ * vững chứ không phải biến đếm ở giao diện.
+ * Hệ cũ ghi dòng này TRƯỚC khi mở hộp thoại in, nên khách bấm Hủy là số vẫn nhảy. Ở đây
+ * tách hẳn hai việc: XEM TRƯỚC không ghi gì, chỉ endpoint CẤP THẺ mới sinh dòng; in lại
+ * một thẻ đã cấp thì đọc đúng dòng cũ, không sinh số mới.
+ * CỐ Ý KHÔNG chụp lại nội dung thẻ vào đây. Hai lý do: (1) chụp lại nghĩa là ghi CCCD ra
+ * một cột Json không mã hoá, đi vòng qua đúng cơ chế `national_id_cipher` dựng ra để
+ * tránh; (2) chính điều 3 in trên thẻ đã nói khách đổi thông tin thì phải nộp thẻ để cấp
+ * đổi — nên thẻ luôn phản ánh dữ liệu HIỆN TẠI là đúng nghiệp vụ, không phải thiếu sót.
+ */
+model CardPrintLog {
+  id            String   @id
+  companyId     String   @map("company_id")
+  customerId    String   @map("customer_id")
+  printNumber   Int      @map("print_number")
+  cardType      String   @default("GRAVE") @map("card_type")
+  printReason   String?  @map("print_reason")
+  /// Tên và chức danh người ký, in ở ô chữ ký bên phải mặt bìa trước.
+  approvedBy    String?  @map("approved_by")
+  approvedTitle String?  @map("approved_title")
+  issuedBy      String?  @map("issued_by")
+  issuedAt      DateTime @default(now()) @map("issued_at") @db.Timestamptz(6)
+
+  /// Chặn hai người cùng cấp ra "lần 02" cho một khách — số in trên giấy phải là duy nhất.
+  @@unique([customerId, cardType, printNumber])
+  @@index([customerId, issuedAt])
+  @@map("card_print_logs")
   @@schema("cemetery")
 }
 
