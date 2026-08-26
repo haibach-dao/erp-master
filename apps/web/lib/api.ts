@@ -780,6 +780,8 @@ export const deactivatePersonSubRecord = (
 /* ---- Chi tiết khách hàng 360 ---- */
 
 export interface CustomerPlot {
+  /** Id của QUYỀN SỬ DỤNG — thu hồi và sang tên thao tác trên quyền, không trên mộ. */
+  usageRightId: string;
   gravePlotId: string;
   plotCode: string | null;
   cemeteryName: string | null;
@@ -974,3 +976,40 @@ export const deleteCustomer = (
   customerId: string,
 ): Promise<{ deleted: boolean; deletedRelationships: number }> =>
   apiFetch(`/api/v1/crm/customers/${encodeURIComponent(customerId)}`, { method: 'DELETE' });
+
+/* ---- Thu hồi / sang tên quyền sử dụng phần mộ ---- */
+
+export const releaseUsageRight = (usageRightId: string, reason: string) =>
+  apiFetch(`/api/v1/cemetery/usage-rights/${encodeURIComponent(usageRightId)}/release`, {
+    method: 'POST',
+    body: JSON.stringify({ reason }),
+  });
+
+export const transferUsageRight = (
+  usageRightId: string,
+  input: { toCustomerId: string; reason: string; effectiveFrom?: string },
+) =>
+  apiFetch(`/api/v1/cemetery/usage-rights/${encodeURIComponent(usageRightId)}/transfer`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+
+export interface UsageRightHistoryEntry {
+  usageRightId: string;
+  holderCustomerId: string;
+  holderName: string | null;
+  holderCode: string | null;
+  status: string;
+  effectiveFrom: string | null;
+  effectiveTo: string | null;
+  endedReason: string | null;
+  previousRightId: string | null;
+  /** Quyền sinh ra ngoài hợp đồng phải đọc ra được — nếu không, không ai phân biệt được
+   *  quyền nào đã qua thẩm định. */
+  viaContract: boolean;
+}
+
+export const getUsageRightHistory = (
+  gravePlotId: string,
+): Promise<{ gravePlotId: string; plotCode: string; history: UsageRightHistoryEntry[] }> =>
+  apiFetch(`/api/v1/cemetery/grave-plots/${encodeURIComponent(gravePlotId)}/usage-right-history`);

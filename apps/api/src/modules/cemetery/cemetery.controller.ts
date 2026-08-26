@@ -14,6 +14,8 @@ import {
   CreateGraveTypeDto,
   SetPlotPositionDto,
   AssignUsageRightDto,
+  ReleaseUsageRightDto,
+  TransferUsageRightDto,
 } from './cemetery.dto';
 
 // M0 cemetery catalog. Every route carries a permission code; the record-level scope
@@ -131,5 +133,35 @@ export class CemeteryController {
   @RequirePermission('cemetery.usage_right.view')
   plotOwnership(@Param('id') id: string, @Req() req: Request) {
     return this.svc.plotOwnership(id, req.user?.userId ?? null);
+  }
+
+  /* Thu hồi: mộ trở về TRỐNG. Service chặn khi mộ còn hồ sơ an táng — muốn đổi người chịu
+   * trách nhiệm cho một mộ đã có người nằm thì đó là SANG TÊN. */
+  @Post('usage-rights/:id/release')
+  @RequirePermission('cemetery.usage_right.release')
+  releaseUsageRight(
+    @Param('id') id: string,
+    @Body() dto: ReleaseUsageRightDto,
+    @Req() req: Request,
+  ) {
+    return this.svc.releaseUsageRight(id, dto, req.user?.userId ?? null);
+  }
+
+  /* Sang tên — đây là đường THỪA KẾ. Gán mộ chặn người đã mất đứng tên, nên không có
+   * đường này thì mộ của người đã mất kẹt vĩnh viễn ở tên họ. */
+  @Post('usage-rights/:id/transfer')
+  @RequirePermission('cemetery.usage_right.transfer')
+  transferUsageRight(
+    @Param('id') id: string,
+    @Body() dto: TransferUsageRightDto,
+    @Req() req: Request,
+  ) {
+    return this.svc.transferUsageRight(id, dto, req.user?.userId ?? null);
+  }
+
+  @Get('grave-plots/:id/usage-right-history')
+  @RequirePermission('cemetery.usage_right.view')
+  usageRightHistory(@Param('id') id: string, @Req() req: Request) {
+    return this.svc.usageRightHistory(id, req.user?.userId ?? null);
   }
 }

@@ -67,6 +67,11 @@ export const ACTIONS = [
    * có số lần cấp, có chữ ký, có giá trị đối chứng với khách. Hai việc khác nhau về hậu
    * quả nên phải đếm được riêng trong nhật ký. */
   'print',
+  /* Thêm 2026-08-26. KHÔNG dùng lại `assign`: gán là cho một phần mộ CHƯA có chủ, sang
+   * tên là chuyển quyền ĐANG có của người này sang người khác. Hai việc khác nhau về hậu
+   * quả (một cái tạo quyền mới, một cái tước quyền của ai đó) nên phải cấp được riêng và
+   * đếm được riêng trong nhật ký. */
+  'transfer',
   'grant',
   'revoke',
   'submit',
@@ -152,6 +157,12 @@ export const PERMISSION_CATALOG: readonly PermissionDef[] = [
    * `cemetery.plot.set_status`. */
   p('cemetery.usage_right.view', 'S2', 'Xem quyền sử dụng phần mộ (ai đứng tên)'),
   p('cemetery.usage_right.assign', 'S3', 'Gán phần mộ cho chủ mộ, không qua hợp đồng'),
+  /* Thu hồi: mộ trở về TRỐNG. Chặn khi mộ còn người an táng — một phần mộ có người nằm
+   * mà không ai đứng tên là hồ sơ không ai chịu trách nhiệm. */
+  p('cemetery.usage_right.release', 'S3', 'Thu hồi quyền sử dụng, mộ trở về trống'),
+  /* Sang tên: đây là đường THỪA KẾ. Gán mộ chặn người đã mất, nên nếu không có đường này
+   * thì mộ của người đã mất kẹt vĩnh viễn ở tên họ. */
+  p('cemetery.usage_right.transfer', 'S3', 'Sang tên phần mộ cho chủ mới (kể cả thừa kế)'),
   p('cemetery.hold.view', 'S1', 'Xem phiếu giữ chỗ'),
   p('cemetery.hold.hold', 'S2', 'Giữ chỗ lô mộ'),
   p('cemetery.hold.release', 'S3', 'Huỷ giữ chỗ lô mộ'),
@@ -542,6 +553,8 @@ export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
      * duyệt hồ sơ an táng và đổi trạng thái mộ, và phạm vi SITE bó họ vào nghĩa trang
      * mình phụ trách. */
     'cemetery.usage_right.assign',
+    'cemetery.usage_right.release',
+    'cemetery.usage_right.transfer',
     'cemetery.card.view',
     'cemetery.card.print',
     'cemetery.hold.release',

@@ -335,6 +335,10 @@ export class CustomersService {
       gravePlots: rights.map((r) => {
         const plot = plotById.get(r.gravePlotId);
         return {
+          /* Id của QUYỀN, không chỉ id của mộ: thu hồi và sang tên thao tác trên quyền
+           * sử dụng, và bắt giao diện đi tra lại quyền từ id mộ là một lượt gọi thừa cho
+           * thứ vốn đã có sẵn ở đây. */
+          usageRightId: r.id,
           gravePlotId: r.gravePlotId,
           plotCode: plot?.plotCode ?? null,
           cemeteryName: plot?.cemetery.name ?? null,

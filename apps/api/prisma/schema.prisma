@@ -657,9 +657,24 @@ model GraveUsageRight {
   status           String    @default("Active") // Active | Ended | Transferred
   effectiveFrom    DateTime? @map("effective_from") @db.Date
   effectiveTo      DateTime? @map("effective_to") @db.Date
-  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  /**
+   * Quyền này sang tên TỪ quyền nào. Nối thành chuỗi để đọc ngược được lịch sử chủ mộ:
+   * ai đứng tên trước, sang tên ngày nào, vì sao. Suy từ ngày tháng thì không chắc —
+   * hai lần sang tên trong cùng ngày là hết phân biệt được thứ tự.
+   */
+  previousRightId String? @map("previous_right_id")
+
+  /**
+   * Vì sao chấm dứt hoặc sang tên. BẮT BUỘC ở tầng DTO, không phải ở đây: bản ghi cũ
+   * không có lý do, và ép NOT NULL là phải bịa lý do cho chúng.
+   */
+  endedReason String? @map("ended_reason")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
   @@index([gravePlotId])
+  @@index([previousRightId])
   @@index([holderCustomerId])
   @@map("grave_usage_rights")
   @@schema("cemetery")

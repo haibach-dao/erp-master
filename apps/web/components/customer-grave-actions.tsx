@@ -1,19 +1,24 @@
 'use client';
 
 import { useState } from 'react';
-import { Landmark, Plus, UserPlus } from 'lucide-react';
+import { ArrowLeftRight, Landmark, Plus, Undo2, UserPlus } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   assignUsageRight,
   createBurial,
   createDeceased,
   getPlotOwnership,
+  getUsageRightHistory,
+  releaseUsageRight,
+  transferUsageRight,
+  type CustomerPlot,
   listCompanies,
   listGravePlots,
   searchCustomers,
   type CustomerDetail,
 } from '@/lib/api';
 import { statusOf } from '@/lib/status';
+import { cn } from '@/lib/utils';
 import { Alert } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -54,6 +59,8 @@ export function CustomerGraveActions({
   const qc = useQueryClient();
   const [assignOpen, setAssignOpen] = useState(false);
   const [buryPlotId, setBuryPlotId] = useState<string | null>(null);
+  const [transferPlot, setTransferPlot] = useState<CustomerPlot | null>(null);
+  const [releasePlot, setReleasePlot] = useState<CustomerPlot | null>(null);
 
   /* Chủ mộ đã mất thì KHÔNG gán thêm mộ được — cùng luật server ép, nhắc lại ở đây để nút
    * không mời người dùng bấm vào một việc chắc chắn bị từ chối. Server vẫn là chỗ ép
@@ -121,14 +128,26 @@ export function CustomerGraveActions({
                     </TableCell>
                     <TableCell className="num">{g.capacity ?? '—'}</TableCell>
                     <TableCell>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => setBuryPlotId(g.gravePlotId)}
-                      >
-                        <UserPlus className="size-4" aria-hidden />
-                        An táng vào cốt
-                      </Button>
+                      <div className="flex flex-wrap justify-end gap-1">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setBuryPlotId(g.gravePlotId)}
+                        >
+                          <UserPlus className="size-4" aria-hidden />
+                          An táng vào cốt
+                        </Button>
+                        {/* Sang tên là đường THỪA KẾ — vẫn bấm được khi chủ đã mất, đó
+                            mới là lúc cần nó nhất. */}
+                        <Button variant="ghost" size="sm" onClick={() => setTransferPlot(g)}>
+                          <ArrowLeftRight className="size-4" aria-hidden />
+                          Sang tên
+                        </Button>
+                        <Button variant="ghost" size="sm" onClick={() => setReleasePlot(g)}>
+                          <Undo2 className="size-4" aria-hidden />
+                          Thu hồi
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -144,6 +163,31 @@ export function CustomerGraveActions({
           onClose={() => setAssignOpen(false)}
           onDone={() => {
             setAssignOpen(false);
+            onChanged();
+            void qc.invalidateQueries({ queryKey: ['customers'] });
+          }}
+        />
+      ) : null}
+
+      {transferPlot !== null ? (
+        <TransferDialog
+          plot={transferPlot}
+          currentOwnerId={customer.id}
+          onClose={() => setTransferPlot(null)}
+          onDone={() => {
+            setTransferPlot(null);
+            onChanged();
+            void qc.invalidateQueries({ queryKey: ['customers'] });
+          }}
+        />
+      ) : null}
+
+      {releasePlot !== null ? (
+        <ReleaseDialog
+          plot={releasePlot}
+          onClose={() => setReleasePlot(null)}
+          onDone={() => {
+            setReleasePlot(null);
             onChanged();
             void qc.invalidateQueries({ queryKey: ['customers'] });
           }}
@@ -484,6 +528,218 @@ function BuryDialog({
             {o.unnumberedBurials} hồ sơ trong mộ này chưa mang số cốt (nhập từ trước khi hệ có cột
             đó). Danh sách cốt trống có thể chưa phản ánh đúng thực địa.
           </Alert>
+        ) : null}
+      </div>
+    </Dialog>
+  );
+}
+
+/* Thu hồi quyền sử dụng — phần mộ trở về trống.
+ *
+ * Lý do BẮT BUỘC: thu hồi là tước quyền của một người. Sáu tháng sau nhìn lại mà không có
+ * lý do thì không ai nói được vì sao mộ này đổi chủ.
+ */
+function ReleaseDialog({
+  plot,
+  onClose,
+  onDone,
+}: {
+  plot: CustomerPlot;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [reason, setReason] = useState('');
+
+  const release = useMutation({
+    mutationFn: () => releaseUsageRight(plot.usageRightId, reason),
+    onSuccess: onDone,
+  });
+
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      title={`Thu hồi quyền sử dụng ${plot.plotCode ?? ''}`}
+      description="Phần mộ trở về trạng thái trống."
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose}>
+            Huỷ
+          </Button>
+          <Button
+            variant="destructive"
+            disabled={reason.trim().length < 3 || release.isPending}
+            loading={release.isPending}
+            onClick={() => release.mutate()}
+          >
+            Thu hồi
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        {release.error !== null ? (
+          <Alert variant="destructive">{errText(release.error)}</Alert>
+        ) : null}
+
+        <Alert variant="warning">
+          Mộ còn hồ sơ an táng thì hệ sẽ TỪ CHỐI — một phần mộ có người nằm mà không ai đứng tên là
+          hồ sơ không ai chịu trách nhiệm. Trường hợp đó dùng <strong>Sang tên</strong>.
+        </Alert>
+
+        <Field label="Lý do thu hồi" required hint="Ít nhất 3 ký tự. Ghi vào nhật ký vĩnh viễn.">
+          <Input
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="Khách trả lại mộ / nhập nhầm chủ / huỷ hợp đồng…"
+            autoFocus
+          />
+        </Field>
+      </div>
+    </Dialog>
+  );
+}
+
+/* Sang tên — đường THỪA KẾ.
+ *
+ * Gán mộ chặn người đã mất đứng tên, nên nếu không có đường này thì mộ của người đã mất
+ * kẹt vĩnh viễn ở tên họ. Chủ CŨ được phép đã mất (đó mới là lý do sang tên); chủ MỚI thì
+ * phải còn sống.
+ */
+function TransferDialog({
+  plot,
+  currentOwnerId,
+  onClose,
+  onDone,
+}: {
+  plot: CustomerPlot;
+  currentOwnerId: string;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [q, setQ] = useState('');
+  const [toCustomerId, setToCustomerId] = useState('');
+  const [reason, setReason] = useState('');
+
+  const customers = useQuery({ queryKey: ['customers', q], queryFn: () => searchCustomers(q) });
+  const history = useQuery({
+    queryKey: ['usageRightHistory', plot.gravePlotId],
+    queryFn: () => getUsageRightHistory(plot.gravePlotId),
+  });
+
+  const transfer = useMutation({
+    mutationFn: () => transferUsageRight(plot.usageRightId, { toCustomerId, reason }),
+    onSuccess: onDone,
+  });
+
+  /* Bỏ chủ hiện tại và người đã mất khỏi danh sách: server chặn cả hai, nên đừng mời
+   * người dùng chọn một lựa chọn chắc chắn bị từ chối. */
+  const candidates = (customers.data ?? []).filter((c) => c.id !== currentOwnerId && !c.isDeceased);
+
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      title={`Sang tên ${plot.plotCode ?? 'phần mộ'}`}
+      description="Chuyển quyền đứng tên sang chủ mới. Người an táng trong mộ giữ nguyên."
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose}>
+            Huỷ
+          </Button>
+          <Button
+            disabled={toCustomerId === '' || reason.trim().length < 3 || transfer.isPending}
+            loading={transfer.isPending}
+            onClick={() => transfer.mutate()}
+          >
+            Sang tên
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        {transfer.error !== null ? (
+          <Alert variant="destructive">{errText(transfer.error)}</Alert>
+        ) : null}
+
+        <Field label="Tìm chủ mới" hint="Chỉ khách hàng còn sống mới nhận sang tên được.">
+          <Input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Họ tên, mã KH…"
+            autoFocus
+          />
+        </Field>
+
+        <div className="max-h-40 overflow-y-auto rounded-md border">
+          {candidates.length === 0 ? (
+            <p className="px-3 py-4 text-center text-sm text-muted-foreground">
+              {q === '' ? 'Gõ để tìm khách hàng.' : 'Không ai khớp, hoặc người tìm được đã mất.'}
+            </p>
+          ) : (
+            <ul className="divide-y divide-border">
+              {candidates.map((c) => (
+                <li key={c.id}>
+                  <button
+                    type="button"
+                    onClick={() => setToCustomerId(c.id)}
+                    className={cn(
+                      'flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-accent/50',
+                      toCustomerId === c.id ? 'bg-accent' : '',
+                    )}
+                  >
+                    <span>
+                      <span className="font-medium">{c.person?.fullName ?? c.orgName}</span>
+                      <span className="block text-xs text-muted-foreground">{c.customerCode}</span>
+                    </span>
+                    {toCustomerId === c.id ? <Badge variant="default">Đã chọn</Badge> : null}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <Field
+          label="Lý do sang tên"
+          required
+          hint="Ít nhất 3 ký tự. Thừa kế, chuyển nhượng, sửa sai…"
+        >
+          <Input
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="Thừa kế sau khi chủ mộ mất…"
+          />
+        </Field>
+
+        {/* Lịch sử chủ mộ: sang tên là việc lặp lại nhiều lần trên cùng một phần mộ, nên
+            người thao tác cần thấy mộ này đã qua tay ai. */}
+        {history.data !== undefined && history.data.history.length > 0 ? (
+          <div>
+            <p className="mb-1.5 text-sm font-medium">Lịch sử chủ mộ</p>
+            <ul className="divide-y divide-border rounded-md border text-sm">
+              {history.data.history.map((h) => (
+                <li key={h.usageRightId} className="flex justify-between gap-3 px-3 py-2">
+                  <span>
+                    <span className="font-medium">{h.holderName ?? h.holderCode}</span>
+                    {h.endedReason !== null ? (
+                      <span className="block text-xs text-muted-foreground">{h.endedReason}</span>
+                    ) : null}
+                  </span>
+                  <span className="flex shrink-0 items-start gap-1.5">
+                    <Badge variant={h.status === 'Active' ? 'success' : 'neutral'}>
+                      {h.status === 'Active'
+                        ? 'Đang đứng tên'
+                        : h.status === 'Transferred'
+                          ? 'Đã sang tên'
+                          : 'Đã chấm dứt'}
+                    </Badge>
+                    {!h.viaContract ? <Badge variant="warning">Gán tay</Badge> : null}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
         ) : null}
       </div>
     </Dialog>
