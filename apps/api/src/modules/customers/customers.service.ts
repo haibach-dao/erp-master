@@ -17,6 +17,7 @@ import type {
   CreateCustomerDto,
   CreatePersonDto,
   CreateRelationshipDto,
+  UpdateCustomerDto,
 } from './customers.dto';
 
 interface DedupWarning {
@@ -348,6 +349,199 @@ export class CustomersService {
       }),
       relationships,
     };
+  }
+
+  /* ---- Sửa hồ sơ khách hàng ----
+   *
+   * Nhận cả trường của Customer lẫn của Person trong MỘT lời gọi: với người dùng đó là
+   * một hồ sơ, và bắt họ lưu hai lần ở hai chỗ là chỗ dữ liệu lệch nhau khi lần lưu thứ
+   * hai thất bại.
+   *
+   * CCCD sửa được nhưng phải sinh lại CẢ BA cột (hash để chống trùng, masked để hiện,
+   * cipher để lưu) — sửa một cột là ba câu trả lời khác nhau về cùng một số.
+   */
+  async updateCustomer(customerId: string, dto: UpdateCustomerDto, actor: string | null) {
+    const before = await this.prisma.customer.findUnique({
+      where: { id: customerId },
+      include: { person: true },
+    });
+    if (before === null) {
+      throw new NotFoundException('Không tìm thấy khách hàng');
+    }
+
+    const customerData: Prisma.CustomerUpdateInput = {};
+    if (dto.type !== undefined) customerData.type = dto.type;
+    if (dto.orgName !== undefined) customerData.orgName = dto.orgName === '' ? null : dto.orgName;
+    if (dto.phone !== undefined) customerData.phone = dto.phone === '' ? null : dto.phone;
+    if (dto.email !== undefined) customerData.email = dto.email === '' ? null : dto.email;
+
+    const dp = dto.person;
+    const personData: Prisma.PersonUpdateInput = {};
+    if (dp !== undefined) {
+      if (before.personId === null) {
+        throw new BadRequestException(
+          'Khách hàng tổ chức không có hồ sơ nhân thân để sửa — đổi loại khách hàng trước',
+        );
+      }
+      /* Chỉ gọi bên trong nhánh đã kiểm `!== undefined`, nên tham số là `string` chắc
+       * chắn. Nhận `string | undefined` ở đây thì kiểu trả về cũng mang `undefined`, và
+       * `exactOptionalPropertyTypes` sẽ từ chối gán vào ô không nhận undefined. */
+      const text = (v: string): string | null => (v === '' ? null : v);
+      const date = (v: string): Date | null => (v === '' ? null : new Date(v));
+
+      if (dp.fullName !== undefined) personData.fullName = dp.fullName;
+      if (dp.gender !== undefined) personData.gender = text(dp.gender);
+      if (dp.dateOfBirth !== undefined) personData.dateOfBirth = date(dp.dateOfBirth);
+      if (dp.nationalIdIssuedOn !== undefined)
+        personData.nationalIdIssuedOn = date(dp.nationalIdIssuedOn);
+      if (dp.nationalIdIssuedPlace !== undefined)
+        personData.nationalIdIssuedPlace = text(dp.nationalIdIssuedPlace);
+      if (dp.phone !== undefined) personData.phone = text(dp.phone);
+      if (dp.email !== undefined) personData.email = text(dp.email);
+      if (dp.permanentAddress !== undefined)
+        personData.permanentAddress = text(dp.permanentAddress);
+      if (dp.contactAddress !== undefined) personData.contactAddress = text(dp.contactAddress);
+      if (dp.placeOfBirth !== undefined) personData.placeOfBirth = text(dp.placeOfBirth);
+      if (dp.ethnicity !== undefined) personData.ethnicity = text(dp.ethnicity);
+      if (dp.religion !== undefined) personData.religion = text(dp.religion);
+      if (dp.nationalId !== undefined) {
+        const nid = dp.nationalId;
+        personData.nationalIdHash = nid === '' ? null : this.pii.hash(nid);
+        personData.nationalIdMasked = nid === '' ? null : this.pii.mask(nid);
+        personData.nationalIdCipher = nid === '' ? null : this.pii.encrypt(nid);
+      }
+    }
+
+    const personId = before.personId;
+    const updated = await this.prisma.$transaction(async (tx) => {
+      if (personId !== null && Object.keys(personData).length > 0) {
+        await tx.person.update({ where: { id: personId }, data: personData });
+      }
+      return Object.keys(customerData).length > 0
+        ? tx.customer.update({ where: { id: customerId }, data: customerData })
+        : before;
+    });
+
+    /* Audit ghi TÊN TRƯỜNG đã đổi, KHÔNG ghi giá trị của trường nhạy cảm. Nhật ký đọc
+     * được bằng một mã quyền KHÁC với mã mở khoá CCCD — chép giá trị vào đó là mở một cửa
+     * sau vòng qua lớp che. */
+    await this.audit.record({
+      actorType: 'USER',
+      actorId: actor,
+      action: 'CUSTOMER.UPDATED',
+      entityType: 'customer',
+      entityId: customerId,
+      afterData: {
+        changedCustomerFields: Object.keys(customerData),
+        changedPersonFields: Object.keys(personData),
+      },
+    });
+    return updated;
+  }
+
+  /* ---- Xoá hẳn hồ sơ khách hàng ----
+   *
+   * Chỉ xoá được khi CHƯA phát sinh nghiệp vụ nào. Sáu bảng dưới đây trỏ tới khách hàng
+   * bằng id LỎNG — không có khoá ngoại, chỉ `grave_holds` là có — nên CSDL sẽ vui vẻ để
+   * lại con trỏ treo nếu không tự kiểm. Đó là lý do hàm này đếm tay từng chỗ thay vì
+   * trông vào ràng buộc.
+   *
+   * Trả về danh sách CHẶN chứ không phải một câu "không xoá được": người dùng cần biết
+   * phải dọn cái gì trước, không phải biết là mình vừa thất bại.
+   */
+  async deleteCustomer(customerId: string, actor: string | null) {
+    const customer = await this.prisma.customer.findUnique({
+      where: { id: customerId },
+      include: { person: { select: { id: true, fullName: true } } },
+    });
+    if (customer === null) {
+      throw new NotFoundException('Không tìm thấy khách hàng');
+    }
+    const personId = customer.person?.id ?? null;
+
+    const [rights, holds, ownerBurials, cards, subscriptions, parties] = await Promise.all([
+      this.prisma.graveUsageRight.count({ where: { holderCustomerId: customerId } }),
+      this.prisma.graveHold.count({ where: { customerId } }),
+      this.prisma.burialRecord.count({ where: { ownerCustomerId: customerId } }),
+      this.prisma.cardPrintLog.count({ where: { customerId } }),
+      this.prisma.serviceSubscription.count({ where: { customerId } }),
+      this.prisma.contractParty.count({ where: { customerId } }),
+    ]);
+
+    /* Người này đã được an táng thì hồ sơ an táng trỏ vào hồ sơ người mất của họ — xoá đi
+     * là để lại một hồ sơ an táng không biết chôn ai. */
+    const deceased =
+      personId === null
+        ? null
+        : await this.prisma.deceasedPerson.findUnique({
+            where: { personId },
+            select: { id: true },
+          });
+    const burialsAsDeceased =
+      deceased === null
+        ? 0
+        : await this.prisma.burialRecord.count({ where: { deceasedPersonId: deceased.id } });
+
+    const blockers: string[] = [];
+    if (rights > 0) blockers.push(`đang đứng tên ${rights} phần mộ`);
+    if (holds > 0) blockers.push(`${holds} phiếu giữ chỗ`);
+    if (ownerBurials > 0) blockers.push(`là chủ mộ trong ${ownerBurials} hồ sơ an táng`);
+    if (burialsAsDeceased > 0) blockers.push(`đã được an táng (${burialsAsDeceased} hồ sơ)`);
+    if (cards > 0) blockers.push(`${cards} lần cấp thẻ mộ`);
+    if (subscriptions > 0) blockers.push(`${subscriptions} dịch vụ đã đăng ký`);
+    if (parties > 0) blockers.push(`là bên trong ${parties} hợp đồng`);
+
+    if (blockers.length > 0) {
+      throw new ConflictException(
+        `Không xoá được — khách hàng ${blockers.join(', ')}. Dọn các mục này trước, hoặc giữ hồ sơ lại.`,
+      );
+    }
+
+    /* Đếm quan hệ để BÁO, không để chặn: quan hệ nhân thân nằm ở cả hồ sơ người kia, nên
+     * xoá người này tất yếu rút họ khỏi cây gia đình của người kia. Nói ra con số thay vì
+     * lặng lẽ xoá. */
+    const relationships =
+      personId === null
+        ? 0
+        : await this.prisma.familyRelationship.count({
+            where: { OR: [{ sourcePersonId: personId }, { targetPersonId: personId }] },
+          });
+
+    await this.prisma.$transaction(async (tx) => {
+      if (personId !== null) {
+        await tx.familyRelationship.deleteMany({
+          where: { OR: [{ sourcePersonId: personId }, { targetPersonId: personId }] },
+        });
+        await tx.personPhone.deleteMany({ where: { personId } });
+        await tx.personAddress.deleteMany({ where: { personId } });
+        await tx.personEducation.deleteMany({ where: { personId } });
+        await tx.personBankAccount.deleteMany({ where: { personId } });
+        if (deceased !== null) {
+          await tx.deceasedPerson.delete({ where: { id: deceased.id } });
+        }
+      }
+      await tx.customer.delete({ where: { id: customerId } });
+      /* Xoá luôn Person: một hồ sơ nhân thân không gắn khách hàng nào chính là cái lệch
+       * vừa phải đi vá bằng migration hôm nay. Đừng tạo thêm cái mới. */
+      if (personId !== null) {
+        await tx.person.delete({ where: { id: personId } });
+      }
+    });
+
+    await this.audit.record({
+      actorType: 'USER',
+      actorId: actor,
+      action: 'CUSTOMER.DELETED',
+      entityType: 'customer',
+      entityId: customerId,
+      beforeData: {
+        customerCode: customer.customerCode,
+        fullName: customer.person?.fullName ?? customer.orgName,
+        deletedRelationships: relationships,
+        deletedDeceasedRecord: deceased !== null,
+      },
+    });
+    return { deleted: true, deletedRelationships: relationships };
   }
 
   /* Customer 360 search by code / name / phone / email / org name.

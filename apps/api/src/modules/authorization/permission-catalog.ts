@@ -177,6 +177,13 @@ export const PERMISSION_CATALOG: readonly PermissionDef[] = [
   p('crm.customer.view', 'S2', 'Xem khách hàng'),
   p('crm.customer.search', 'S2', 'Tra cứu khách hàng theo tiêu chí tự nhập'),
   p('crm.customer.create', 'S2', 'Tạo khách hàng'),
+  p('crm.customer.update', 'S2', 'Sửa hồ sơ khách hàng'),
+  /* XOÁ HẲN, không phải đóng hồ sơ. S3 vì không đảo ngược được.
+   *
+   * Vì sao vẫn có: dữ liệu nhập thử và dữ liệu nhập sai lúc đầu phải dọn được, nếu không
+   * người ta sẽ dọn bằng cách sửa đè lên một hồ sơ có thật — tệ hơn nhiều. Service chặn
+   * xoá khi còn bất kỳ thứ gì trỏ tới, nên mã này không phải cửa xoá lịch sử. */
+  p('crm.customer.delete', 'S3', 'Xoá hẳn hồ sơ khách hàng chưa phát sinh nghiệp vụ'),
   p('crm.customer.export', 'S3', 'Trích xuất khách hàng ra ngoài hệ'),
   p('crm.relationship.view', 'S3', 'Xem quan hệ nhân thân'),
   p('crm.relationship.create', 'S3', 'Tạo quan hệ nhân thân'),
@@ -419,6 +426,7 @@ export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
     'cemetery.hold.hold',
     'crm.customer.view',
     'crm.customer.create',
+    'crm.customer.update',
     'crm.customer.search',
     'crm.person.view',
     'crm.person.view_contact', // G0-Q1 sửa 2026-08-25: người bán cần gọi được cho khách

@@ -146,3 +146,36 @@ export class AddPersonBankAccountDto {
   @ApiPropertyOptional() @IsOptional() @IsString() accountHolder?: string;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() isPrimary?: boolean;
 }
+
+/* Sửa hồ sơ khách hàng.
+ *
+ * MỌI trường đều tuỳ chọn, và service phân biệt "không gửi" với "gửi chuỗi rỗng":
+ * không gửi = giữ nguyên, chuỗi rỗng = XOÁ giá trị. Không phân biệt được hai thứ đó thì
+ * không có cách nào xoá một giá trị đã nhập sai.
+ */
+export class UpdatePersonDto {
+  @ApiPropertyOptional() @IsOptional() @IsString() @MinLength(1) fullName?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() gender?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() dateOfBirth?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() nationalId?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() nationalIdIssuedOn?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() nationalIdIssuedPlace?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() phone?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() email?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() permanentAddress?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() contactAddress?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() placeOfBirth?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() ethnicity?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() religion?: string;
+}
+
+export class UpdateCustomerDto {
+  @ApiPropertyOptional({ enum: ['INDIVIDUAL', 'ORGANIZATION', 'AGENT', 'PROSPECT'] })
+  @IsOptional()
+  @IsIn(['INDIVIDUAL', 'ORGANIZATION', 'AGENT', 'PROSPECT'])
+  type?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() orgName?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() phone?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() email?: string;
+  @ApiPropertyOptional() @IsOptional() person?: UpdatePersonDto;
+}

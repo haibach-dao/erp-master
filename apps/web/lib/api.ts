@@ -936,3 +936,41 @@ export const assignUsageRight = (input: {
   effectiveFrom?: string;
   note?: string;
 }) => apiFetch('/api/v1/cemetery/usage-rights', { method: 'POST', body: JSON.stringify(input) });
+
+/* ---- Sửa / xoá hồ sơ khách hàng ---- */
+
+export interface UpdateCustomerInput {
+  type?: string;
+  orgName?: string;
+  phone?: string;
+  email?: string;
+  /* Trường của nhân thân. KHÁC payload tạo mới ở một điểm: chuỗi rỗng ở đây nghĩa là
+   * XOÁ giá trị cũ, không phải "bỏ qua". Không phân biệt được thì không có cách nào xoá
+   * một giá trị đã nhập sai. */
+  person?: {
+    fullName?: string;
+    gender?: string;
+    dateOfBirth?: string;
+    nationalId?: string;
+    nationalIdIssuedOn?: string;
+    nationalIdIssuedPlace?: string;
+    phone?: string;
+    email?: string;
+    permanentAddress?: string;
+    contactAddress?: string;
+    placeOfBirth?: string;
+    ethnicity?: string;
+    religion?: string;
+  };
+}
+
+export const updateCustomer = (customerId: string, input: UpdateCustomerInput) =>
+  apiFetch(`/api/v1/crm/customers/${encodeURIComponent(customerId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  });
+
+export const deleteCustomer = (
+  customerId: string,
+): Promise<{ deleted: boolean; deletedRelationships: number }> =>
+  apiFetch(`/api/v1/crm/customers/${encodeURIComponent(customerId)}`, { method: 'DELETE' });

@@ -6,16 +6,19 @@ import { ChevronRight, Plus, Search, Users } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { createCustomer, searchCustomers, type DedupWarning } from '@/lib/api';
 import { customerType } from '@/lib/status';
+import {
+  CustomerFormTabs,
+  EMPTY_CUSTOMER_FORM,
+  pickFilled as pick,
+  type CustomerFormValue,
+} from '@/components/customer-form';
 import { PageHeader } from '@/components/ui/page-header';
 import { Alert } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Dialog } from '@/components/ui/dialog';
 import { EmptyState } from '@/components/ui/empty-state';
-import { Field } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
-import { Select } from '@/components/ui/select';
-import { Separator } from '@/components/ui/separator';
 import { TableSkeleton } from '@/components/ui/skeleton';
 import {
   Table,
@@ -27,37 +30,14 @@ import {
   TableRow,
 } from '@/components/ui/table';
 
-const EMPTY_FORM = {
-  type: 'INDIVIDUAL',
-  fullName: '',
-  gender: '',
-  dateOfBirth: '',
-  nationalId: '',
-  nationalIdIssuedOn: '',
-  nationalIdIssuedPlace: '',
-  permanentAddress: '',
-  contactAddress: '',
-  ethnicity: '',
-  religion: '',
-  orgName: '',
-  phone: '',
-  email: '',
-};
-
-/* Bỏ hẳn ô để trống khỏi payload. Gửi chuỗi rỗng lên là GHI chuỗi rỗng vào CSDL — khác
- * hẳn `null`, và về sau "chưa nhập" với "nhập rỗng" không phân biệt được nữa. */
-function pick<K extends string>(key: K, value: string): Partial<Record<K, string>> {
-  const v = value.trim();
-  return v === '' ? {} : ({ [key]: v } as Partial<Record<K, string>>);
-}
-
 export default function CustomersPage() {
   const qc = useQueryClient();
   const router = useRouter();
   const [q, setQ] = useState('');
   const [open, setOpen] = useState(false);
   const [warnings, setWarnings] = useState<DedupWarning[]>([]);
-  const [form, setForm] = useState(EMPTY_FORM);
+  const [form, setForm] = useState(EMPTY_CUSTOMER_FORM);
+  const [formTab, setFormTab] = useState('chung');
 
   const list = useQuery({ queryKey: ['customers', q], queryFn: () => searchCustomers(q) });
 
@@ -90,13 +70,14 @@ export default function CustomersPage() {
       }),
     onSuccess: (res) => {
       setWarnings(res.warnings);
-      setForm(EMPTY_FORM);
+      setForm(EMPTY_CUSTOMER_FORM);
+      setFormTab('chung');
       setOpen(false);
       void qc.invalidateQueries({ queryKey: ['customers'] });
     },
   });
 
-  const set = (patch: Partial<typeof EMPTY_FORM>) => setForm((f) => ({ ...f, ...patch }));
+  const set = (patch: Partial<CustomerFormValue>) => setForm((f) => ({ ...f, ...patch }));
 
   return (
     <section className="space-y-6">
@@ -240,157 +221,18 @@ export default function CustomersPage() {
       >
         <form
           id="customer-form"
-          className="grid gap-4 sm:grid-cols-2"
           onSubmit={(e) => {
             e.preventDefault();
             create.mutate();
           }}
         >
           {create.error !== null ? (
-            <Alert variant="destructive" title="Không lưu được" className="sm:col-span-2">
+            <Alert variant="destructive" title="Không lưu được" className="mb-4">
               {(create.error as Error).message}
             </Alert>
           ) : null}
 
-          <Field label="Loại" htmlFor="type">
-            <Select id="type" value={form.type} onChange={(e) => set({ type: e.target.value })}>
-              <option value="INDIVIDUAL">Cá nhân</option>
-              <option value="ORGANIZATION">Tổ chức</option>
-              <option value="AGENT">Đại lý</option>
-              <option value="PROSPECT">Tiềm năng</option>
-            </Select>
-          </Field>
-
-          {individual ? (
-            <>
-              <Field label="Họ tên" htmlFor="fullName" required>
-                <Input
-                  id="fullName"
-                  value={form.fullName}
-                  onChange={(e) => set({ fullName: e.target.value })}
-                  required
-                />
-              </Field>
-              <Field label="Giới tính" htmlFor="gender">
-                <Select
-                  id="gender"
-                  value={form.gender}
-                  onChange={(e) => set({ gender: e.target.value })}
-                >
-                  <option value="">— Chưa rõ —</option>
-                  <option value="MALE">Nam</option>
-                  <option value="FEMALE">Nữ</option>
-                  <option value="UNKNOWN">Không xác định</option>
-                </Select>
-              </Field>
-              <Field label="Ngày sinh" htmlFor="dateOfBirth">
-                <Input
-                  id="dateOfBirth"
-                  type="date"
-                  value={form.dateOfBirth}
-                  onChange={(e) => set({ dateOfBirth: e.target.value })}
-                />
-              </Field>
-            </>
-          ) : (
-            <Field label="Tên tổ chức" htmlFor="orgName" required>
-              <Input
-                id="orgName"
-                value={form.orgName}
-                onChange={(e) => set({ orgName: e.target.value })}
-                required
-              />
-            </Field>
-          )}
-
-          <Field label="Điện thoại" htmlFor="phone">
-            <Input id="phone" value={form.phone} onChange={(e) => set({ phone: e.target.value })} />
-          </Field>
-          <Field label="Email" htmlFor="email">
-            <Input
-              id="email"
-              type="email"
-              value={form.email}
-              onChange={(e) => set({ email: e.target.value })}
-            />
-          </Field>
-
-          {individual ? (
-            <>
-              <div className="sm:col-span-2">
-                <Separator />
-                <p className="pt-3 text-xs text-muted-foreground">
-                  Giấy tờ tuỳ thân — hiện ra màn hình ở dạng che bớt. Xem bản đầy đủ cần quyền riêng
-                  và mỗi lần xem đều ghi nhật ký.
-                </p>
-              </div>
-
-              <Field label="CCCD" htmlFor="nationalId" hint="Lưu mã hoá, hiện dạng 079***123.">
-                <Input
-                  id="nationalId"
-                  value={form.nationalId}
-                  onChange={(e) => set({ nationalId: e.target.value })}
-                />
-              </Field>
-              <Field label="Ngày cấp" htmlFor="nationalIdIssuedOn">
-                <Input
-                  id="nationalIdIssuedOn"
-                  type="date"
-                  value={form.nationalIdIssuedOn}
-                  onChange={(e) => set({ nationalIdIssuedOn: e.target.value })}
-                />
-              </Field>
-              <Field label="Nơi cấp" htmlFor="nationalIdIssuedPlace" className="sm:col-span-2">
-                <Input
-                  id="nationalIdIssuedPlace"
-                  value={form.nationalIdIssuedPlace}
-                  onChange={(e) => set({ nationalIdIssuedPlace: e.target.value })}
-                />
-              </Field>
-
-              <Field
-                label="Địa chỉ thường trú"
-                htmlFor="permanentAddress"
-                className="sm:col-span-2"
-              >
-                <Input
-                  id="permanentAddress"
-                  value={form.permanentAddress}
-                  onChange={(e) => set({ permanentAddress: e.target.value })}
-                />
-              </Field>
-              <Field label="Địa chỉ liên hệ" htmlFor="contactAddress" className="sm:col-span-2">
-                <Input
-                  id="contactAddress"
-                  value={form.contactAddress}
-                  onChange={(e) => set({ contactAddress: e.target.value })}
-                />
-              </Field>
-
-              <Field
-                label="Dân tộc"
-                htmlFor="ethnicity"
-                hint="Dữ liệu nhạy cảm theo NĐ13 Điều 2.4."
-              >
-                <Input
-                  id="ethnicity"
-                  value={form.ethnicity}
-                  onChange={(e) => set({ ethnicity: e.target.value })}
-                />
-              </Field>
-              <Field
-                label="Tôn giáo"
-                htmlFor="religion"
-                hint="Cần cho nghi thức tang lễ; che ở mức cao nhất."
-              >
-                <Input
-                  id="religion"
-                  value={form.religion}
-                  onChange={(e) => set({ religion: e.target.value })}
-                />
-              </Field>
-            </>
-          ) : null}
+          <CustomerFormTabs value={form} onChange={set} tab={formTab} onTabChange={setFormTab} />
         </form>
       </Dialog>
     </section>
