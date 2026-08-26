@@ -45,6 +45,11 @@ export class CreatePersonDto {
   @IsString()
   contactAddress?: string;
 
+  @ApiPropertyOptional({ description: 'Nơi sinh — dữ liệu cá nhân cơ bản NĐ13 Điều 2.3' })
+  @IsOptional()
+  @IsString()
+  placeOfBirth?: string;
+
   /* Dân tộc / tôn giáo: để văn bản tự do, KHÔNG ép danh mục đóng. Danh mục 54 dân tộc là
    * chuyện nhà nước có thể sửa, và tôn giáo thì không có danh sách đóng nào đúng cho mọi
    * người — ép enum ở đây là buộc người nhập phải nói dối khi không khớp. */

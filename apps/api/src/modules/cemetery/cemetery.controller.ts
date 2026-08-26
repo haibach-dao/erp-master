@@ -13,6 +13,7 @@ import {
   CreateGravePlotDto,
   CreateGraveTypeDto,
   SetPlotPositionDto,
+  AssignUsageRightDto,
 } from './cemetery.dto';
 
 // M0 cemetery catalog. Every route carries a permission code; the record-level scope
@@ -114,5 +115,21 @@ export class CemeteryController {
   @RequirePermission('cemetery.plot.view')
   plotMap(@Param('id') id: string, @Req() req: Request) {
     return this.svc.plotMap(id, req.user?.userId ?? null);
+  }
+
+  /* ---- Quyền sử dụng phần mộ ---- */
+
+  /* Gán mộ cho chủ mộ KHÔNG qua hợp đồng. Mã S3 riêng vì nó vượt mặt chuỗi thẩm định —
+   * đường bình thường là `contract.record.activate`. Service chặn khách hàng đã mất. */
+  @Post('usage-rights')
+  @RequirePermission('cemetery.usage_right.assign')
+  assignUsageRight(@Body() dto: AssignUsageRightDto, @Req() req: Request) {
+    return this.svc.assignUsageRight(dto, req.user?.userId ?? null);
+  }
+
+  @Get('grave-plots/:id/ownership')
+  @RequirePermission('cemetery.usage_right.view')
+  plotOwnership(@Param('id') id: string, @Req() req: Request) {
+    return this.svc.plotOwnership(id, req.user?.userId ?? null);
   }
 }

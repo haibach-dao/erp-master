@@ -12,6 +12,11 @@ import type {
   CreateGraveTypeDto,
 } from './cemetery.dto';
 
+/* Hồ sơ an táng còn hiệu lực — huỷ rồi thì cốt được nhả ra. Trùng danh sách trong
+ * `burials.service.ts` VÀ trong partial unique index `burial_records_active_slot`; ba chỗ
+ * phải nói cùng một điều, nên đổi ở đây thì phải đổi cả migration. */
+const ACTIVE_BURIAL_STATUSES = ['Draft', 'Verified', 'Scheduled', 'Completed'];
+
 @Injectable()
 export class CemeteryService {
   constructor(
@@ -261,6 +266,193 @@ export class CemeteryService {
        * gì thì người xem tưởng nghĩa trang chỉ có bấy nhiêu. */
       totalPlots: total,
       missingPosition: total - plots.length,
+    };
+  }
+
+  /* ---- Quyền sử dụng phần mộ: ai đứng tên mộ ----
+   *
+   * Đường bình thường sinh ra quyền sử dụng là `contract.activate`. Hàm này là ĐƯỜNG TẮT
+   * cho các trường hợp có thật mà hợp đồng không phủ: chuyển dữ liệu từ hệ cũ, sửa sai,
+   * cấp lại sau tranh chấp. Vì nó vượt mặt chuỗi thẩm định nên nó có mã quyền S3 riêng và
+   * ghi nhật ký riêng — không nấp trong một mã sẵn có.
+   */
+  async assignUsageRight(
+    dto: { gravePlotId: string; holderCustomerId: string; effectiveFrom?: string; note?: string },
+    actor: string | null,
+  ) {
+    const plot = await this.prisma.gravePlot.findUnique({
+      where: { id: dto.gravePlotId },
+      select: { id: true, companyId: true, cemeteryId: true, plotCode: true, status: true },
+    });
+    if (plot === null) {
+      throw new NotFoundException('Không tìm thấy lô mộ');
+    }
+    await this.scope.assertCompany(actor, plot.companyId);
+    await this.scope.assertSite(actor, plot.cemeteryId);
+
+    const customer = await this.prisma.customer.findUnique({
+      where: { id: dto.holderCustomerId },
+      select: {
+        id: true,
+        customerCode: true,
+        companyId: true,
+        person: { select: { id: true, fullName: true, deceased: { select: { id: true } } } },
+      },
+    });
+    if (customer === null) {
+      throw new NotFoundException('Không tìm thấy khách hàng');
+    }
+
+    /* CHỦ MỘ PHẢI CÒN SỐNG (quyết định 26/08/2026).
+     *
+     * Người đã mất không đứng tên tài sản được: quyền sử dụng của họ phải đi qua thừa kế,
+     * và thừa kế là một hồ sơ có người duyệt chứ không phải một lần bấm nút. Chặn ở đây
+     * để đường tắt này không trở thành đường vòng qua thủ tục kế thừa. */
+    if (customer.person?.deceased != null) {
+      throw new ConflictException(
+        `${customer.person.fullName} đã mất — không đứng tên phần mộ được. Phần mộ của người đã mất phải qua thủ tục kế thừa.`,
+      );
+    }
+
+    const existing = await this.prisma.graveUsageRight.findFirst({
+      where: { gravePlotId: dto.gravePlotId, status: 'Active' },
+      select: { id: true, holderCustomerId: true },
+    });
+    if (existing !== null) {
+      throw new ConflictException(
+        existing.holderCustomerId === dto.holderCustomerId
+          ? `Phần mộ ${plot.plotCode} đã do chính khách hàng này đứng tên`
+          : `Phần mộ ${plot.plotCode} đã có chủ khác đứng tên — phải chấm dứt quyền cũ trước`,
+      );
+    }
+    if (plot.status === 'Occupied') {
+      throw new ConflictException(
+        `Phần mộ ${plot.plotCode} đang có người an táng nhưng không có chủ đứng tên — cần rà soát dữ liệu trước khi gán`,
+      );
+    }
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const right = await tx.graveUsageRight.create({
+        data: {
+          id: ulid(),
+          gravePlotId: dto.gravePlotId,
+          holderCustomerId: dto.holderCustomerId,
+          /* Cột này NOT NULL và bình thường trỏ tới hợp đồng sinh ra quyền. Đường tắt
+           * không có hợp đồng, nên ghi một nhãn nói rõ nguồn gốc thay vì bịa một id —
+           * đọc lại sau này phải biết ngay quyền này không đi qua hợp đồng nào. */
+          sourceContractId: 'MANUAL_ASSIGN',
+          status: 'Active',
+          effectiveFrom: dto.effectiveFrom !== undefined ? new Date(dto.effectiveFrom) : new Date(),
+        },
+      });
+      /* Mộ có chủ thì không còn trống. Không đụng tới mộ đã `Occupied` (đã chặn ở trên). */
+      if (plot.status !== 'Allocated') {
+        await tx.gravePlot.update({
+          where: { id: plot.id },
+          data: { status: 'Allocated', version: { increment: 1 } },
+        });
+        await tx.gravePlotStatusHistory.create({
+          data: {
+            id: ulid(),
+            gravePlotId: plot.id,
+            fromStatus: plot.status,
+            toStatus: 'Allocated',
+            reason: `gán chủ mộ ${customer.customerCode} (không qua hợp đồng)`,
+            changedBy: actor,
+          },
+        });
+      }
+      return right;
+    });
+
+    await this.audit.record({
+      actorType: 'USER',
+      actorId: actor,
+      action: 'GRAVE.USAGE_RIGHT_ASSIGNED',
+      entityType: 'grave_plot',
+      entityId: plot.id,
+      afterData: {
+        usageRightId: result.id,
+        holderCustomerId: dto.holderCustomerId,
+        plotCode: plot.plotCode,
+        note: dto.note ?? null,
+        viaContract: false,
+      },
+    });
+    return result;
+  }
+
+  /* Ai đang đứng tên một phần mộ, và các cốt đã dùng. Giao diện cần cả hai để dựng màn
+   * hình an táng: không có chủ thì chưa an táng được, và phải biết cốt nào còn trống. */
+  async plotOwnership(gravePlotId: string, actor: string | null) {
+    const plot = await this.prisma.gravePlot.findUnique({
+      where: { id: gravePlotId },
+      include: { graveType: { select: { defaultCapacity: true, name: true } } },
+    });
+    if (plot === null) {
+      throw new NotFoundException('Không tìm thấy lô mộ');
+    }
+    await this.scope.assertCompany(actor, plot.companyId);
+
+    const right = await this.prisma.graveUsageRight.findFirst({
+      where: { gravePlotId, status: 'Active' },
+      orderBy: { createdAt: 'desc' },
+    });
+    const holder =
+      right === null
+        ? null
+        : await this.prisma.customer.findUnique({
+            where: { id: right.holderCustomerId },
+            select: {
+              id: true,
+              customerCode: true,
+              orgName: true,
+              person: {
+                select: { id: true, fullName: true, deceased: { select: { id: true } } },
+              },
+            },
+          });
+
+    const burials = await this.prisma.burialRecord.findMany({
+      where: { gravePlotId, status: { in: ACTIVE_BURIAL_STATUSES } },
+      include: { deceased: { include: { person: { select: { id: true, fullName: true } } } } },
+      orderBy: [{ slotNumber: 'asc' }, { createdAt: 'asc' }],
+    });
+
+    const capacity = plot.capacityOverride ?? plot.graveType.defaultCapacity;
+    const takenSlots = burials.map((b) => b.slotNumber).filter((n): n is number => n !== null);
+
+    return {
+      gravePlotId: plot.id,
+      plotCode: plot.plotCode,
+      status: plot.status,
+      graveTypeName: plot.graveType.name,
+      capacity,
+      holder:
+        holder === null
+          ? null
+          : {
+              customerId: holder.id,
+              customerCode: holder.customerCode,
+              name: holder.person?.fullName ?? holder.orgName,
+              personId: holder.person?.id ?? null,
+              isDeceased: holder.person?.deceased != null,
+            },
+      occupants: burials.map((b) => ({
+        burialRecordId: b.id,
+        slotNumber: b.slotNumber,
+        personId: b.deceased.person.id,
+        fullName: b.deceased.person.fullName,
+        relationshipToOwner: b.relationshipToOwner,
+        status: b.status,
+        burialDate: b.burialDate,
+      })),
+      /* Cốt còn trống, tính sẵn ở API. Giao diện tự tính thì hai màn hình sẽ đưa ra hai
+       * đáp án khác nhau khi có hồ sơ cũ chưa mang số cốt. */
+      freeSlots: Array.from({ length: capacity }, (_, i) => i + 1).filter(
+        (n) => !takenSlots.includes(n),
+      ),
+      unnumberedBurials: burials.filter((b) => b.slotNumber === null).length,
     };
   }
 }

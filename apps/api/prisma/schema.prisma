@@ -391,6 +391,13 @@ model Person {
   contactAddress   String? @map("contact_address")
 
   /**
+   * Nơi sinh. NĐ 13/2023 Điều 2.3 xếp vào dữ liệu cá nhân CƠ BẢN (không phải nhóm nhạy
+   * cảm Điều 2.4), nên che cùng mức với địa chỉ và ngày sinh — `crm.person.view_contact`,
+   * không phải `view_sensitive`. Nghiệp vụ tang lễ cần nó để ghi bia và làm thủ tục.
+   */
+  placeOfBirth String? @map("place_of_birth")
+
+  /**
    * NĐ 13/2023 Điều 2.4 gọi ĐÍCH DANH nguồn gốc dân tộc và quan điểm tôn giáo là dữ liệu
    * cá nhân NHẠY CẢM — cùng nhóm với CCCD, không phải nhóm liên lạc. Nghiệp vụ tang lễ
    * cần chúng (nghi thức theo tôn giáo, phong tục theo dân tộc), nên lưu; nhưng che ở mức
@@ -687,6 +694,17 @@ model BurialRecord {
    */
   ownerCustomerId     String? @map("owner_customer_id")
   relationshipToOwner String? @map("relationship_to_owner") // relationship_types.code, hoặc 'SELF'
+
+  /**
+   * Cốt số mấy trong phần mộ. Một phần mộ chứa nhiều cốt (sức chứa theo loại mộ), và
+   * nghiệp vụ gọi tên từng vị trí — thẻ mộ in "cốt 1", "cốt 2". Đếm số hồ sơ là đủ để
+   * chặn vượt sức chứa, nhưng KHÔNG đủ để nói người này nằm ở cốt nào.
+   * Cho phép NULL: hồ sơ có trước khi có cột này không mang số cốt, và bịa một số cho
+   * chúng là ghi vào hệ một sự thật chưa ai xác nhận.
+   * Không trùng cốt trong cùng một mộ — ép bằng partial unique index ở migration, vì
+   * ràng buộc chỉ áp cho hồ sơ CÒN HIỆU LỰC (hồ sơ đã huỷ phải nhả cốt ra).
+   */
+  slotNumber Int? @map("slot_number")
 
   status         String    @default("Draft") // Draft | Verified | Scheduled | Completed | Cancelled
   burialDate     DateTime? @map("burial_date") @db.Date

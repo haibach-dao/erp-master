@@ -143,12 +143,26 @@ export const PERMISSION_CATALOG: readonly PermissionDef[] = [
    * qua thẻ đều thành một lần cấp — đúng lỗi hệ cũ mắc phải. */
   p('cemetery.card.view', 'S2', 'Xem trước thẻ quản lý mộ (không cấp số)'),
   p('cemetery.card.print', 'S3', 'Cấp/in thẻ quản lý mộ — tăng số lần cấp, ghi nhật ký'),
+  /* Quyền sử dụng phần mộ = ai đứng tên mộ HÔM NAY.
+   *
+   * `assign` là S3 vì nó tạo ra quyền sở hữu mà KHÔNG đi qua hợp đồng — bình thường
+   * `contract.record.activate` mới sinh ra quyền sử dụng. Đường tắt này có thật trong
+   * nghiệp vụ (chuyển từ hệ cũ, sửa sai, cấp lại), nhưng nó vượt mặt chuỗi thẩm định nên
+   * phải là một mã riêng, cấp riêng, và ghi nhật ký riêng — chứ không nấp trong
+   * `cemetery.plot.set_status`. */
+  p('cemetery.usage_right.view', 'S2', 'Xem quyền sử dụng phần mộ (ai đứng tên)'),
+  p('cemetery.usage_right.assign', 'S3', 'Gán phần mộ cho chủ mộ, không qua hợp đồng'),
   p('cemetery.hold.view', 'S1', 'Xem phiếu giữ chỗ'),
   p('cemetery.hold.hold', 'S2', 'Giữ chỗ lô mộ'),
   p('cemetery.hold.release', 'S3', 'Huỷ giữ chỗ lô mộ'),
 
   // --- crm ---
   p('crm.person.view', 'S2', 'Xem nhân thân (đã mask)'),
+  /* Tra cứu nhân thân theo tên/CCCD. Tách khỏi `crm.customer.search` vì hai tập khác
+   * nhau: người ĐƯỢC AN TÁNG thường không phải khách hàng, nên tìm trong danh sách khách
+   * sẽ không bao giờ ra họ. Cần mã riêng để chọn người mất khi khai quan hệ và khi an
+   * táng. */
+  p('crm.person.search', 'S2', 'Tra cứu nhân thân theo tiêu chí tự nhập'),
   p('crm.person.create', 'S2', 'Tạo nhân thân'),
   p('crm.person.update', 'S2', 'Sửa nhân thân'),
   /* Tách khỏi `view_sensitive` (2026-08-25). Điện thoại/email/địa chỉ/ngày sinh là dữ
@@ -387,6 +401,7 @@ export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
     'crm.customer.view',
     'crm.customer.create',
     'crm.person.view',
+    'crm.person.search',
     'contract.record.view',
     'contract.party.view',
     'service.catalog.view',
@@ -396,6 +411,7 @@ export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
      * KHÔNG có `crm.person.view_sensitive`, nên thẻ họ in ra hiện CCCD dạng `079***123`.
      * Đó là hành vi ĐÚNG theo thiết kế, không phải lỗi — nếu nghiệp vụ đòi thẻ phải có
      * CCCD đầy đủ thì đó là quyết định của chủ doanh nghiệp về việc cấp thêm mã S3. */
+    'cemetery.usage_right.view',
     'cemetery.card.view',
     'cemetery.card.print',
     ...FILE_BASIC,
@@ -411,6 +427,7 @@ export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
     'crm.customer.create',
     'crm.customer.search',
     'crm.person.view',
+    'crm.person.search',
     'crm.person.view_contact', // G0-Q1 sửa 2026-08-25: người bán cần gọi được cho khách
     'crm.person.create',
     'crm.relationship.view',
@@ -444,6 +461,7 @@ export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
       'crm.customer.create',
       'crm.customer.search',
       'crm.person.view',
+      'crm.person.search',
       'crm.person.create',
       'crm.person.update',
       'crm.person.view_contact', // giữ nguyên tầm nhìn cũ sau khi tách mã
@@ -466,6 +484,7 @@ export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
     ...CATALOG_READ,
     'crm.customer.view',
     'crm.person.view',
+    'crm.person.search',
     'crm.relationship.view',
     'contract.record.view',
     'contract.party.view',
@@ -496,6 +515,7 @@ export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
     'cemetery.price.view',
     'crm.customer.view',
     'crm.person.view',
+    'crm.person.search',
     'crm.person.view_contact', // G0-Q1 sửa 2026-08-25: người thu tiền cần liên hệ được khách
     'contract.record.view',
     'contract.record.search',
@@ -519,12 +539,18 @@ export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
     /* Toạ độ sơ đồ là dữ liệu MẶT BẰNG — người quản lý nghĩa trang là người biết thực địa,
      * và vai này có phạm vi SITE nên chỉ sửa được sơ đồ nghĩa trang mình phụ trách. */
     'cemetery.plot.update',
+    'cemetery.usage_right.view',
+    /* Ghế THẨM ĐỊNH tác nghiệp là nơi hợp lý nhất cho đường tắt này: họ đã là người
+     * duyệt hồ sơ an táng và đổi trạng thái mộ, và phạm vi SITE bó họ vào nghĩa trang
+     * mình phụ trách. */
+    'cemetery.usage_right.assign',
     'cemetery.card.view',
     'cemetery.card.print',
     'cemetery.hold.release',
     'crm.customer.search',
     'crm.customer.view', // đọc dẫn xuất cho search
     'crm.person.view',
+    'crm.person.search',
     'crm.relationship.view', // đọc dẫn xuất cho verify/cancel
     'crm.relationship.verify',
     'crm.relationship.cancel',
@@ -562,6 +588,7 @@ export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
     'crm.customer.search',
     'crm.customer.view', // đọc dẫn xuất cho search
     'crm.person.view',
+    'crm.person.search',
     'crm.relationship.view', // đọc dẫn xuất cho verify/cancel
     'crm.relationship.verify',
     'crm.relationship.cancel',
@@ -635,6 +662,7 @@ export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
     'crm.customer.search',
     'crm.customer.view', // đọc dẫn xuất cho search
     'crm.person.view',
+    'crm.person.search',
     'crm.consent.view',
     'contract.record.view', // đọc dẫn xuất cho export
     'contract.record.search',
@@ -664,6 +692,7 @@ export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
     'crm.customer.view',
     'crm.customer.search',
     'crm.person.view',
+    'crm.person.search',
     'crm.person.view_contact', // giữ nguyên tầm nhìn cũ sau khi tách mã
     'crm.person.view_sensitive',
     'crm.person.set_protected',

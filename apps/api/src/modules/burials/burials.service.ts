@@ -1,4 +1,5 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { ulid } from 'ulid';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
@@ -138,6 +139,33 @@ export class BurialsService {
     );
   }
 
+  /* Cốt phải nằm trong sức chứa và chưa ai chiếm.
+   *
+   * Kiểm ở đây là để BÁO LỖI ĐỌC ĐƯỢC — "cốt 3 đã có người" thay vì một lỗi ràng buộc
+   * CSDL khó hiểu. Nhưng nó KHÔNG phải chỗ bảo đảm: hai người bấm cùng lúc thì cả hai
+   * cùng thấy cốt trống rồi cùng ghi (TOCTOU). Chỗ bảo đảm thật là partial unique index
+   * `burial_records_active_slot`, và lỗi của nó được dịch lại ở `createBurial`.
+   */
+  private async assertSlotAvailable(
+    gravePlotId: string,
+    slotNumber: number | undefined,
+    capacity: number,
+  ): Promise<void> {
+    if (slotNumber === undefined) {
+      return;
+    }
+    if (slotNumber > capacity) {
+      throw new ConflictException(`Phần mộ chỉ có ${capacity} cốt — không có cốt số ${slotNumber}`);
+    }
+    const taken = await this.prisma.burialRecord.findFirst({
+      where: { gravePlotId, slotNumber, status: { in: ACTIVE_BURIAL_STATUSES } },
+      include: { deceased: { include: { person: { select: { fullName: true } } } } },
+    });
+    if (taken !== null) {
+      throw new ConflictException(`Cốt số ${slotNumber} đã có ${taken.deceased.person.fullName}`);
+    }
+  }
+
   async createBurial(dto: CreateBurialDto, actor: string | null) {
     const { plotStatus, cap } = await this.effectiveCapacity(dto.gravePlotId);
     if (plotStatus !== 'Allocated' && plotStatus !== 'Occupied') {
@@ -155,19 +183,34 @@ export class BurialsService {
       dto.gravePlotId,
       dto.deceasedPersonId,
     );
-    const burial = await this.prisma.burialRecord.create({
-      data: {
-        id: ulid(),
-        gravePlotId: dto.gravePlotId,
-        deceasedPersonId: dto.deceasedPersonId,
-        contractId: dto.contractId ?? null,
-        ownerCustomerId,
-        relationshipToOwner,
-        burialDate: dto.burialDate !== undefined ? new Date(dto.burialDate) : null,
-        legalDocFileId: dto.legalDocFileId ?? null,
-        notes: dto.notes ?? null,
-      },
-    });
+    await this.assertSlotAvailable(dto.gravePlotId, dto.slotNumber, cap);
+    /* Ràng buộc CSDL là chỗ bảo đảm thật cho "một cốt một người" — nhưng lỗi nó ném ra là
+     * `P2002 unique constraint`, đọc lên màn hình thì vô nghĩa với người dùng. Dịch lại
+     * đúng một mã lỗi đó; mọi lỗi khác để nguyên, nuốt hết là giấu mất lỗi thật. */
+    let burial;
+    try {
+      burial = await this.prisma.burialRecord.create({
+        data: {
+          id: ulid(),
+          gravePlotId: dto.gravePlotId,
+          deceasedPersonId: dto.deceasedPersonId,
+          contractId: dto.contractId ?? null,
+          slotNumber: dto.slotNumber ?? null,
+          ownerCustomerId,
+          relationshipToOwner,
+          burialDate: dto.burialDate !== undefined ? new Date(dto.burialDate) : null,
+          legalDocFileId: dto.legalDocFileId ?? null,
+          notes: dto.notes ?? null,
+        },
+      });
+    } catch (e) {
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        throw new ConflictException(
+          `Cốt số ${dto.slotNumber} vừa có người khác nhận — chọn cốt khác`,
+        );
+      }
+      throw e;
+    }
     await this.audit.record({
       actorType: 'USER',
       actorId: actor,
@@ -177,6 +220,7 @@ export class BurialsService {
       afterData: {
         gravePlotId: dto.gravePlotId,
         deceasedPersonId: dto.deceasedPersonId,
+        slotNumber: dto.slotNumber ?? null,
         ownerCustomerId,
         relationshipToOwner,
       },

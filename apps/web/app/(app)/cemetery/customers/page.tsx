@@ -8,6 +8,7 @@ import { createCustomer, searchCustomers, type DedupWarning } from '@/lib/api';
 import { customerType } from '@/lib/status';
 import { PageHeader } from '@/components/ui/page-header';
 import { Alert } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Dialog } from '@/components/ui/dialog';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -143,16 +144,18 @@ export default function CustomersPage() {
             <TableHead>Loại</TableHead>
             <TableHead>Tên</TableHead>
             <TableHead>CCCD</TableHead>
+            <TableHead>Nơi sinh</TableHead>
+            <TableHead>Phần mộ đứng tên</TableHead>
+            <TableHead>Tình trạng</TableHead>
             <TableHead>Điện thoại</TableHead>
-            <TableHead>Email</TableHead>
             <TableHead />
           </TableRow>
         </TableHeader>
         <TableBody>
-          {list.isPending ? <TableSkeleton rows={6} cols={7} /> : null}
+          {list.isPending ? <TableSkeleton rows={6} cols={8} /> : null}
 
           {list.data?.length === 0 ? (
-            <TableMessage colSpan={7}>
+            <TableMessage colSpan={8}>
               <EmptyState
                 icon={Users}
                 title={q === '' ? 'Chưa có khách hàng nào' : `Không tìm thấy khách khớp “${q}”`}
@@ -187,8 +190,30 @@ export default function CustomersPage() {
               <TableCell className="font-mono text-xs">
                 {c.person?.nationalIdMasked ?? '—'}
               </TableCell>
+              <TableCell>{c.person?.placeOfBirth ?? '—'}</TableCell>
+              <TableCell>
+                {/* Mã mộ, không phải số đếm: người dùng tra theo mã chứ không hỏi
+                    "khách này có mấy mộ". Nhiều mộ thì rút gọn để không phá cột. */}
+                {c.gravePlotCodes.length === 0 ? (
+                  <span className="text-muted-foreground">—</span>
+                ) : (
+                  <span className="font-mono text-xs" title={c.gravePlotCodes.join(', ')}>
+                    {c.gravePlotCodes.slice(0, 2).join(', ')}
+                    {c.gravePlotCodes.length > 2 ? ` +${c.gravePlotCodes.length - 2}` : ''}
+                  </span>
+                )}
+              </TableCell>
+              <TableCell>
+                {/* Tổ chức không có "sống/mất" — để trống thay vì gán bừa "còn sống". */}
+                {c.person === null ? (
+                  <span className="text-muted-foreground">—</span>
+                ) : (
+                  <Badge variant={c.isDeceased ? 'neutral' : 'success'}>
+                    {c.isDeceased ? 'Đã mất' : 'Còn sống'}
+                  </Badge>
+                )}
+              </TableCell>
               <TableCell>{c.phone ?? '—'}</TableCell>
-              <TableCell>{c.email ?? '—'}</TableCell>
               <TableCell className="w-8 text-muted-foreground">
                 <ChevronRight className="size-4" aria-hidden />
               </TableCell>

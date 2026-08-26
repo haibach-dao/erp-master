@@ -7,7 +7,6 @@ import {
   Banknote,
   GraduationCap,
   IdCard,
-  Landmark,
   MapPin,
   Phone,
   Plus,
@@ -19,12 +18,16 @@ import {
   addPersonBankAccount,
   addPersonEducation,
   addPersonPhone,
+  createRelationship,
   deactivatePersonSubRecord,
   getCustomerDetail,
+  listRelationshipTypes,
+  searchPersons,
   type CustomerDetail,
 } from '@/lib/api';
-import { customerType, statusOf } from '@/lib/status';
+import { customerType } from '@/lib/status';
 import { cn } from '@/lib/utils';
+import { CustomerGraveActions } from '@/components/customer-grave-actions';
 import { PageHeader } from '@/components/ui/page-header';
 import { Alert } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -105,6 +108,8 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
   const { id } = use(params);
   const qc = useQueryClient();
   const [adding, setAdding] = useState<SubKind | null>(null);
+  const [relOpen, setRelOpen] = useState(false);
+  const [rel, setRel] = useState({ targetPersonId: '', relationshipType: '', q: '' });
   const [sub, setSub] = useState(EMPTY_SUB);
 
   const detail = useQuery({
@@ -113,6 +118,35 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
   });
 
   const refresh = () => void qc.invalidateQueries({ queryKey: ['customerDetail', id] });
+
+  const relTypes = useQuery({ queryKey: ['relationshipTypes'], queryFn: listRelationshipTypes });
+  const relPersons = useQuery({
+    queryKey: ['persons', rel.q],
+    queryFn: () => searchPersons(rel.q),
+    enabled: relOpen,
+  });
+
+  /* Quan hệ khai từ CHỦ MỘ tới người kia: `relationshipType` là "người kia LÀ GÌ của chủ
+   * mộ". Server tự tạo dòng đối ứng chiều ngược trong cùng giao dịch, nên ở đây chỉ khai
+   * một chiều. */
+  const addRel = useMutation({
+    mutationFn: () => {
+      const personId = detail.data?.personId;
+      if (personId === null || personId === undefined) {
+        throw new Error('Khách hàng tổ chức không có hồ sơ nhân thân');
+      }
+      return createRelationship({
+        sourcePersonId: personId,
+        targetPersonId: rel.targetPersonId,
+        relationshipType: rel.relationshipType,
+      });
+    },
+    onSuccess: () => {
+      setRel({ targetPersonId: '', relationshipType: '', q: '' });
+      setRelOpen(false);
+      refresh();
+    },
+  });
 
   const addSub = useMutation({
     mutationFn: async () => {
@@ -180,9 +214,20 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
 
   return (
     <section className="space-y-6">
+      {/* Sống hay đã mất là thứ quyết định người này còn đứng tên mộ được không, nên nó
+          phải nằm ở chỗ nhìn đầu tiên chứ không lẫn trong bảng thuộc tính. */}
+      {p !== null && p.deceased !== null ? (
+        <Alert variant="warning" title="Khách hàng đã mất">
+          {p.deceased.dateOfDeath === null
+            ? 'Chưa ghi ngày mất.'
+            : `Ngày mất: ${fmtDate(p.deceased.dateOfDeath) ?? '—'}.`}{' '}
+          Không gán thêm phần mộ cho người đã mất — chuyển quyền phải qua thủ tục kế thừa.
+        </Alert>
+      ) : null}
+
       <PageHeader
         title={name}
-        description={`${customerType(c.type)} · ${c.customerCode}`}
+        description={`${customerType(c.type)} · ${c.customerCode}${p === null ? '' : p.deceased === null ? ' · Còn sống' : ' · Đã mất'}`}
         actions={
           /* `Link` mang class của nút, KHÔNG bọc `Link` trong `Button`: `<a>` lồng trong
            * `<button>` là HTML không hợp lệ và trình duyệt tự gỡ ra, làm hỏng điều hướng. */
@@ -235,60 +280,13 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
                 <Row label="Địa chỉ liên hệ" value={p.contactAddress} />
                 <Row label="Dân tộc" value={p.ethnicity} />
                 <Row label="Tôn giáo" value={p.religion} />
+                <Row label="Nơi sinh" value={p.placeOfBirth} />
               </div>
             )}
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Landmark className="size-4" aria-hidden />
-              Phần mộ đang đứng tên
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {c.gravePlots.length === 0 ? (
-              <EmptyState
-                icon={Landmark}
-                title="Chưa đứng tên phần mộ nào"
-                description="Quyền sử dụng phát sinh khi hợp đồng có hiệu lực."
-              />
-            ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Mã mộ</TableHead>
-                    <TableHead>Vị trí</TableHead>
-                    <TableHead>Trạng thái</TableHead>
-                    <TableHead>Sức chứa</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {c.gravePlots.map((g) => (
-                    <TableRow key={g.gravePlotId}>
-                      <TableCell className="font-mono text-xs">{g.plotCode ?? '—'}</TableCell>
-                      <TableCell className="text-xs text-muted-foreground">
-                        {[g.cemeteryName, g.zone, g.block, g.row].filter(Boolean).join(' / ') ||
-                          '—'}
-                      </TableCell>
-                      <TableCell>
-                        {g.status === null ? (
-                          '—'
-                        ) : (
-                          <Badge variant={statusOf(g.status).variant}>
-                            {statusOf(g.status).label}
-                          </Badge>
-                        )}
-                      </TableCell>
-                      <TableCell className="num">{g.capacity ?? '—'}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            )}
-          </CardContent>
-        </Card>
+        <CustomerGraveActions customer={c} onChanged={refresh} />
       </div>
 
       {p !== null ? (
@@ -372,11 +370,27 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
       ) : null}
 
       <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Users className="size-4" aria-hidden />
-            Quan hệ nhân thân
-          </CardTitle>
+        <CardHeader className="flex-row items-start justify-between">
+          <div className="space-y-1">
+            <CardTitle className="flex items-center gap-2">
+              <Users className="size-4" aria-hidden />
+              Quan hệ nhân thân
+            </CardTitle>
+            {/* Nói rõ vì sao khối này quan trọng: không có quan hệ thì không đặt cốt được. */}
+            <p className="text-xs text-muted-foreground">
+              An táng vào mộ của khách này đòi người mất có quan hệ đã xác nhận với họ.
+            </p>
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={p === null}
+            onClick={() => setRelOpen(true)}
+            title={p === null ? 'Khách hàng tổ chức không có hồ sơ nhân thân' : undefined}
+          >
+            <Plus className="size-4" aria-hidden />
+            Khai quan hệ
+          </Button>
         </CardHeader>
         <CardContent>
           <Table>
@@ -413,6 +427,79 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
           </Table>
         </CardContent>
       </Card>
+
+      <Dialog
+        open={relOpen}
+        onClose={() => setRelOpen(false)}
+        title="Khai quan hệ nhân thân"
+        description="Quan hệ khai từ khách hàng này tới người kia. Hệ tự tạo chiều ngược."
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setRelOpen(false)}>
+              Huỷ
+            </Button>
+            <Button
+              disabled={
+                rel.targetPersonId === '' || rel.relationshipType === '' || addRel.isPending
+              }
+              loading={addRel.isPending}
+              onClick={() => addRel.mutate()}
+            >
+              Lưu quan hệ
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          {addRel.error !== null ? (
+            <Alert variant="destructive">{(addRel.error as Error).message}</Alert>
+          ) : null}
+
+          <Field label="Tìm người" hint="Gõ tên để tìm trong hồ sơ nhân thân.">
+            <Input
+              value={rel.q}
+              onChange={(e) => setRel({ ...rel, q: e.target.value })}
+              placeholder="Họ tên…"
+            />
+          </Field>
+
+          <Field label="Người có quan hệ">
+            <Select
+              value={rel.targetPersonId}
+              onChange={(e) => setRel({ ...rel, targetPersonId: e.target.value })}
+            >
+              <option value="">— Chọn người —</option>
+              {(relPersons.data ?? [])
+                /* Bỏ chính chủ mộ khỏi danh sách: server chặn quan hệ với chính mình,
+                   nên đừng mời người dùng chọn một lựa chọn chắc chắn lỗi. */
+                .filter((x) => x.id !== c.personId)
+                .map((x) => (
+                  <option key={x.id} value={x.id}>
+                    {x.fullName}
+                    {x.isDeceased ? ' (đã mất)' : ''}
+                  </option>
+                ))}
+            </Select>
+          </Field>
+
+          <Field
+            label="Là gì của khách hàng này"
+            hint={`Ví dụ: chọn "Con" nghĩa là người kia là con của ${name}.`}
+          >
+            <Select
+              value={rel.relationshipType}
+              onChange={(e) => setRel({ ...rel, relationshipType: e.target.value })}
+            >
+              <option value="">— Chọn quan hệ —</option>
+              {(relTypes.data ?? []).map((t) => (
+                <option key={t.code} value={t.code}>
+                  {RELATIONSHIP[t.code] ?? t.name}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        </div>
+      </Dialog>
 
       <Dialog
         open={adding !== null}

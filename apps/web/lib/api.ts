@@ -107,6 +107,9 @@ export interface CustomerPerson {
   fullName: string;
   gender: string | null;
   nationalIdMasked: string | null;
+  placeOfBirth: string | null;
+  /** Có bản ghi = đã mất. Không có = còn sống. Không phải cờ boolean riêng. */
+  deceased: { dateOfDeath: string | null } | null;
 }
 
 export interface Customer360 {
@@ -117,6 +120,9 @@ export interface Customer360 {
   phone: string | null;
   email: string | null;
   person: CustomerPerson | null;
+  /** Mã các phần mộ đang đứng tên. API gom sẵn để bảng không phải gọi thêm mỗi dòng. */
+  gravePlotCodes: string[];
+  isDeceased: boolean;
 }
 
 export interface DedupWarning {
@@ -397,6 +403,8 @@ export const createDeceased = (input: {
 export const createBurial = (input: {
   gravePlotId: string;
   deceasedPersonId: string;
+  /** Cốt số mấy trong phần mộ (1..sức chứa). Bỏ trống = chưa xác định vị trí. */
+  slotNumber?: number;
   contractId?: string;
   burialDate?: string;
   legalDocFileId?: string;
@@ -690,8 +698,11 @@ export interface PersonProfile {
   email: string | null;
   permanentAddress: string | null;
   contactAddress: string | null;
+  placeOfBirth: string | null;
   ethnicity: string | null;
   religion: string | null;
+  /** Có bản ghi = đã mất. Suy từ hồ sơ người mất, không phải từ một cờ riêng. */
+  deceased: { id: string; dateOfDeath: string | null; deathCertFileId: string | null } | null;
   phones: (PersonSubRecord & { phone: string })[];
   addresses: (PersonSubRecord & { address: string })[];
   education: (PersonSubRecord & {
@@ -855,3 +866,74 @@ export function listAuditEvents(filters: AuditFilters): Promise<AuditEventPage> 
 }
 
 export const getAuditFacets = (): Promise<AuditFacets> => apiFetch('/api/v1/audit-events/facets');
+
+/* ---- Tra cứu nhân thân ----
+ *
+ * Khác tra cứu khách hàng: người ĐƯỢC AN TÁNG thường không phải khách hàng, nên tìm họ
+ * trong danh sách khách sẽ không bao giờ ra.
+ */
+export interface PersonSearchResult {
+  id: string;
+  fullName: string;
+  gender: string | null;
+  dateOfBirth: string | null;
+  nationalIdMasked: string | null;
+  isDeceased: boolean;
+  deceasedPersonId: string | null;
+}
+
+export const searchPersons = (q: string, deceasedOnly = false): Promise<PersonSearchResult[]> =>
+  apiFetch(
+    `/api/v1/crm/persons/search?q=${encodeURIComponent(q)}${deceasedOnly ? '&deceasedOnly=true' : ''}`,
+  );
+
+export const createRelationship = (input: {
+  sourcePersonId: string;
+  targetPersonId: string;
+  relationshipType: string;
+  effectiveFrom?: string;
+  verificationSource?: string;
+}) => apiFetch('/api/v1/crm/relationships', { method: 'POST', body: JSON.stringify(input) });
+
+export const listRelationshipTypes = (): Promise<
+  { code: string; name: string; reciprocalCode: string }[]
+> => apiFetch('/api/v1/cemetery/relationship-types');
+
+/* ---- Quyền sử dụng phần mộ: ai đứng tên ---- */
+
+export interface PlotOwnership {
+  gravePlotId: string;
+  plotCode: string;
+  status: string;
+  graveTypeName: string;
+  capacity: number;
+  holder: {
+    customerId: string;
+    customerCode: string;
+    name: string | null;
+    personId: string | null;
+    isDeceased: boolean;
+  } | null;
+  occupants: {
+    burialRecordId: string;
+    slotNumber: number | null;
+    personId: string;
+    fullName: string;
+    relationshipToOwner: string | null;
+    status: string;
+    burialDate: string | null;
+  }[];
+  /** Cốt còn trống, API tính sẵn để hai màn hình không đưa ra hai đáp án. */
+  freeSlots: number[];
+  unnumberedBurials: number;
+}
+
+export const getPlotOwnership = (gravePlotId: string): Promise<PlotOwnership> =>
+  apiFetch(`/api/v1/cemetery/grave-plots/${encodeURIComponent(gravePlotId)}/ownership`);
+
+export const assignUsageRight = (input: {
+  gravePlotId: string;
+  holderCustomerId: string;
+  effectiveFrom?: string;
+  note?: string;
+}) => apiFetch('/api/v1/cemetery/usage-rights', { method: 'POST', body: JSON.stringify(input) });

@@ -61,6 +61,7 @@ function build(
     ownerPersonId?: string | null;
     reciprocalOf?: Record<string, string>;
     deceasedMissing?: boolean;
+    takenSlot?: number | null;
   } = {},
 ) {
   const {
@@ -72,6 +73,7 @@ function build(
     ownerPersonId = OWNER_PERSON,
     reciprocalOf = { PARENT: 'CHILD', CHILD: 'PARENT', SPOUSE: 'SPOUSE' },
     deceasedMissing = false,
+    takenSlot = null,
   } = opts;
 
   const record = vi.fn().mockResolvedValue(undefined);
@@ -88,7 +90,20 @@ function build(
         graveType: { defaultCapacity: capacity },
       }),
     },
-    burialRecord: { count: vi.fn().mockResolvedValue(activeBurials), create },
+    burialRecord: {
+      count: vi.fn().mockResolvedValue(activeBurials),
+      create,
+      /* Cốt đã có người hay chưa. Trả `null` = còn trống, trừ khi test khai `takenSlot`. */
+      findFirst: vi
+        .fn()
+        .mockImplementation((args: { where: { slotNumber?: number } }) =>
+          Promise.resolve(
+            takenSlot !== null && args.where.slotNumber === takenSlot
+              ? { id: 'br-cu', deceased: { person: { fullName: 'Người Đã Nằm' } } }
+              : null,
+          ),
+        ),
+    },
     graveUsageRight: { findFirst: vi.fn().mockResolvedValue(usageRight) },
     customer: {
       findUnique: vi
@@ -237,6 +252,69 @@ describe('an táng — dấu vết kiểm toán', () => {
           ownerCustomerId: OWNER_CUSTOMER,
           relationshipToOwner: 'SPOUSE',
         }),
+      }),
+    );
+  });
+});
+
+/* "Số lượng người mất không được nhiều hơn phần cốt" — luật chủ doanh nghiệp nêu
+ * 26/08/2026. Sức chứa đã chặn TỔNG số; nhóm dưới đây chặn VỊ TRÍ: đúng một người trong
+ * một cốt, và không có cốt nằm ngoài sức chứa.
+ */
+describe('an táng — chọn cốt trong phần mộ', () => {
+  it('ghi đúng số cốt vào hồ sơ', async () => {
+    const { svc, create } = build({ capacity: 4 });
+
+    const burial = (await svc.createBurial({ ...dto, slotNumber: 3 }, 'u1')) as Record<
+      string,
+      unknown
+    >;
+
+    expect(burial.slotNumber).toBe(3);
+    expect(create).toHaveBeenCalledOnce();
+  });
+
+  it('không chọn cốt vẫn tạo được — hồ sơ chưa xác định vị trí là chuyện có thật', async () => {
+    const { svc, create } = build();
+
+    const burial = (await svc.createBurial(dto, 'u1')) as Record<string, unknown>;
+
+    expect(burial.slotNumber).toBeNull();
+    expect(create).toHaveBeenCalledOnce();
+  });
+
+  it('cốt vượt sức chứa thì chặn, câu lỗi nói rõ mộ có mấy cốt', async () => {
+    const { svc, create } = build({ capacity: 2 });
+
+    await expect(svc.createBurial({ ...dto, slotNumber: 3 }, 'u1')).rejects.toThrow(/chỉ có 2 cốt/);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('cốt đã có người thì chặn, và nói tên người đang nằm ở đó', async () => {
+    const { svc, create } = build({ capacity: 4, takenSlot: 2 });
+
+    await expect(svc.createBurial({ ...dto, slotNumber: 2 }, 'u1')).rejects.toThrow(
+      /Cốt số 2 đã có Người Đã Nằm/,
+    );
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('cốt khác trong cùng mộ vẫn nhận được', async () => {
+    const { svc, create } = build({ capacity: 4, takenSlot: 2 });
+
+    await svc.createBurial({ ...dto, slotNumber: 3 }, 'u1');
+
+    expect(create).toHaveBeenCalledOnce();
+  });
+
+  it('audit ghi cả số cốt — hồ sơ phải kể được người này nằm ở đâu', async () => {
+    const { svc, record } = build({ capacity: 4 });
+
+    await svc.createBurial({ ...dto, slotNumber: 1 }, 'u1');
+
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        afterData: expect.objectContaining({ slotNumber: 1 }),
       }),
     );
   });

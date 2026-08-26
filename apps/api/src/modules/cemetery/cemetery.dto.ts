@@ -1,5 +1,14 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsIn, IsInt, IsNumber, IsOptional, IsString, Min, MinLength } from 'class-validator';
+import {
+  IsIn,
+  IsInt,
+  IsISO8601,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Min,
+  MinLength,
+} from 'class-validator';
 import { GRAVE_PLOT_STATUSES } from './cemetery.constants';
 
 export class CreateCompanyDto {
@@ -63,4 +72,17 @@ export class SetPlotPositionDto {
   @IsOptional()
   @IsNumber()
   mapY?: number | null;
+}
+
+export class AssignUsageRightDto {
+  @ApiProperty() @IsString() @MinLength(1) gravePlotId!: string;
+  @ApiProperty() @IsString() @MinLength(1) holderCustomerId!: string;
+  @ApiPropertyOptional({ description: 'Ngày bắt đầu đứng tên; mặc định hôm nay' })
+  @IsOptional()
+  @IsISO8601()
+  effectiveFrom?: string;
+  @ApiPropertyOptional({ description: 'Vì sao gán tay, không qua hợp đồng' })
+  @IsOptional()
+  @IsString()
+  note?: string;
 }

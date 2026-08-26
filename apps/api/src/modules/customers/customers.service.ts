@@ -49,6 +49,7 @@ export class CustomersService {
       email: dto.email ?? null,
       permanentAddress: dto.permanentAddress ?? null,
       contactAddress: dto.contactAddress ?? null,
+      placeOfBirth: dto.placeOfBirth ?? null,
       ethnicity: dto.ethnicity ?? null,
       religion: dto.religion ?? null,
     };
@@ -281,6 +282,9 @@ export class CustomersService {
             addresses: activeSub,
             education: activeSub,
             bankAccounts: activeSub,
+            /* Còn sống hay đã mất. Suy từ sự tồn tại của hồ sơ người mất chứ không từ
+             * một cờ riêng — cờ riêng là thứ lệch được với hồ sơ an táng. */
+            deceased: { select: { id: true, dateOfDeath: true, deathCertFileId: true } },
           },
         },
       },
@@ -334,9 +338,49 @@ export class CustomersService {
     };
   }
 
-  // Customer 360 search by code / name / phone / email / org name.
-  search(q: string) {
-    return this.prisma.customer.findMany({
+  /* Tra cứu NHÂN THÂN, khác hẳn tra cứu khách hàng.
+   *
+   * Người được an táng thường KHÔNG phải khách hàng — họ chỉ là một `Person` có hồ sơ
+   * người mất. Tìm họ trong danh sách khách hàng thì không bao giờ ra. Đây là đường để
+   * chọn người mất khi khai quan hệ và khi đặt cốt.
+   *
+   * `deceasedOnly` để màn hình an táng chỉ thấy người đã có hồ sơ người mất — chọn nhầm
+   * người còn sống vào một phần cốt là loại lỗi không nên dựa vào sự cẩn thận để tránh.
+   */
+  async searchPersons(q: string, deceasedOnly: boolean) {
+    const persons = await this.prisma.person.findMany({
+      where: {
+        ...(q === '' ? {} : { fullName: { contains: q, mode: 'insensitive' } }),
+        ...(deceasedOnly ? { deceased: { isNot: null } } : {}),
+      },
+      select: {
+        id: true,
+        fullName: true,
+        gender: true,
+        dateOfBirth: true,
+        nationalIdMasked: true,
+        deceased: { select: { id: true, dateOfDeath: true } },
+      },
+      orderBy: { fullName: 'asc' },
+      take: 50,
+    });
+    return persons.map((p) => ({
+      ...p,
+      /* Cờ tiện dụng cho giao diện. `deceased` vẫn giữ nguyên bên cạnh vì màn hình an
+       * táng cần `deceasedPersonId` chứ không chỉ cần biết có hay không. */
+      isDeceased: p.deceased !== null,
+      deceasedPersonId: p.deceased?.id ?? null,
+    }));
+  }
+
+  /* Customer 360 search by code / name / phone / email / org name.
+   *
+   * Trả kèm ba thứ bảng tổng hợp cần mà bản ghi Customer không tự có: nơi sinh, phần mộ
+   * đang đứng tên, và người này còn sống hay đã mất. Gộp ở đây thay vì để giao diện gọi
+   * thêm — 50 dòng mà mỗi dòng một lời gọi là 50 lượt cho một lần mở trang.
+   */
+  async search(q: string) {
+    const customers = await this.prisma.customer.findMany({
       where: {
         OR: [
           { customerCode: { contains: q, mode: 'insensitive' } },
@@ -347,10 +391,53 @@ export class CustomersService {
         ],
       },
       include: {
-        person: { select: { id: true, fullName: true, gender: true, nationalIdMasked: true } },
+        person: {
+          select: {
+            id: true,
+            fullName: true,
+            gender: true,
+            nationalIdMasked: true,
+            placeOfBirth: true,
+            /* Sống hay đã mất suy từ SỰ TỒN TẠI của hồ sơ người mất, không phải từ một
+             * cờ boolean riêng. Một cờ riêng là thứ có thể lệch với hồ sơ an táng; ở đây
+             * hai câu trả lời không thể mâu thuẫn vì chúng là cùng một sự thật. */
+            deceased: { select: { dateOfDeath: true } },
+          },
+        },
       },
       take: 50,
     });
+    if (customers.length === 0) {
+      return [];
+    }
+
+    // Một lượt cho cả trang, không phải mỗi khách một lượt.
+    const rights = await this.prisma.graveUsageRight.findMany({
+      where: { holderCustomerId: { in: customers.map((c) => c.id) }, status: 'Active' },
+      select: { holderCustomerId: true, gravePlotId: true },
+    });
+    const plots =
+      rights.length === 0
+        ? []
+        : await this.prisma.gravePlot.findMany({
+            where: { id: { in: rights.map((r) => r.gravePlotId) } },
+            select: { id: true, plotCode: true },
+          });
+    const codeById = new Map(plots.map((pl) => [pl.id, pl.plotCode]));
+
+    const byCustomer = new Map<string, string[]>();
+    for (const r of rights) {
+      const list = byCustomer.get(r.holderCustomerId) ?? [];
+      const code = codeById.get(r.gravePlotId);
+      if (code !== undefined) list.push(code);
+      byCustomer.set(r.holderCustomerId, list);
+    }
+
+    return customers.map((c) => ({
+      ...c,
+      gravePlotCodes: (byCustomer.get(c.id) ?? []).sort(),
+      isDeceased: c.person?.deceased != null,
+    }));
   }
 
   // Decrypt CCCD — every full view is audited (G0-A6). Fine-grained permission is a follow-up.
