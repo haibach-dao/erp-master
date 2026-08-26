@@ -19,6 +19,7 @@ import {
   addPersonEducation,
   addPersonPhone,
   createRelationship,
+  endRelationship,
   deactivatePersonSubRecord,
   getCustomerDetail,
   listRelationshipTypes,
@@ -26,6 +27,7 @@ import {
   type CustomerDetail,
 } from '@/lib/api';
 import { customerType } from '@/lib/status';
+import { birthOrder, bothDirections, relationshipLabel } from '@/lib/relationship';
 import { cn } from '@/lib/utils';
 import { CustomerGraveActions } from '@/components/customer-grave-actions';
 import { PageHeader } from '@/components/ui/page-header';
@@ -81,13 +83,6 @@ function fmtDate(v: string | null): string | null {
 }
 
 const GENDER: Record<string, string> = { MALE: 'Nam', FEMALE: 'Nữ', UNKNOWN: 'Không xác định' };
-const RELATIONSHIP: Record<string, string> = {
-  SPOUSE: 'Vợ/Chồng',
-  PARENT: 'Cha/Mẹ',
-  CHILD: 'Con',
-  SIBLING: 'Anh/Chị/Em',
-};
-
 type SubKind = 'phones' | 'addresses' | 'education' | 'bank-accounts';
 
 const EMPTY_SUB = {
@@ -129,9 +124,14 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
     enabled: relOpen,
   });
 
-  /* Quan hệ khai từ CHỦ MỘ tới người kia: `relationshipType` là "người kia LÀ GÌ của chủ
-   * mộ". Server tự tạo dòng đối ứng chiều ngược trong cùng giao dịch, nên ở đây chỉ khai
-   * một chiều. */
+  /* CHIỀU LƯU TRỮ: `source --CODE--> target` nghĩa là "source LÀ code của target".
+   *
+   * Bản trước gửi ngược: nó đặt khách hàng làm `source` trong khi nhãn trên màn hình nói
+   * "người kia là gì của khách hàng". Kết quả là dòng ghi vào CSDL mang nghĩa trái với
+   * điều người nhập vừa đọc — và `resolveOwnerRelationship` bên an táng đọc theo đúng quy
+   * ước, nên nó sẽ suy ra quan hệ ngược khi đặt cốt.
+   *
+   * Đúng phải là: người vừa chọn làm `source`, khách hàng làm `target`. */
   const addRel = useMutation({
     mutationFn: () => {
       const personId = detail.data?.personId;
@@ -139,8 +139,8 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
         throw new Error('Khách hàng tổ chức không có hồ sơ nhân thân');
       }
       return createRelationship({
-        sourcePersonId: personId,
-        targetPersonId: rel.targetPersonId,
+        sourcePersonId: rel.targetPersonId,
+        targetPersonId: personId,
         relationshipType: rel.relationshipType,
       });
     },
@@ -193,6 +193,14 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
     },
   });
 
+  /* Chọn nhầm thì sửa được: chấm dứt quan hệ cũ rồi khai lại. KHÔNG sửa tại chỗ — quan
+   * hệ có hiệu lực theo thời gian, và ghi đè là xoá mất việc "trước đây đã từng khai
+   * khác". Server đóng cả dòng đối ứng trong cùng giao dịch. */
+  const endRel = useMutation({
+    mutationFn: (relationshipId: string) => endRelationship(relationshipId),
+    onSuccess: refresh,
+  });
+
   const deactivate = useMutation({
     mutationFn: ({ kind, recordId }: { kind: SubKind; recordId: string }) => {
       const personId = detail.data?.personId;
@@ -204,6 +212,13 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
     onSuccess: refresh,
   });
 
+  /* Bỏ khách tổ chức (không có nhân thân) và bỏ chính khách hàng này: server chặn quan hệ
+   * với chính mình, nên đừng mời người dùng chọn một lựa chọn chắc chắn lỗi. */
+  const relCandidates = (relCustomers.data ?? []).filter(
+    (x) => x.person !== null && x.person.id !== detail.data?.personId,
+  );
+  const chosenPerson = relCandidates.find((x) => x.person?.id === rel.targetPersonId);
+
   if (detail.isPending) {
     return <p className="text-sm text-muted-foreground">Đang tải hồ sơ…</p>;
   }
@@ -214,6 +229,22 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
   const c: CustomerDetail = detail.data;
   const p = c.person;
   const name = p?.fullName ?? c.orgName ?? c.customerCode;
+
+  /* Hai câu xác nhận trước khi lưu. `source` là NGƯỜI VỪA CHỌN, `target` là khách hàng
+   * này — đúng chiều sẽ ghi xuống CSDL, nên câu hiện ra chính là điều sắp được lưu, không
+   * phải một bản diễn giải gần đúng. */
+  const relPreview =
+    chosenPerson?.person != null && p !== null && rel.relationshipType !== ''
+      ? bothDirections(
+          {
+            fullName: chosenPerson.person.fullName,
+            gender: chosenPerson.person.gender,
+            dateOfBirth: chosenPerson.person.dateOfBirth,
+          },
+          { fullName: p.fullName, gender: p.gender, dateOfBirth: p.dateOfBirth },
+          rel.relationshipType,
+        )
+      : null;
 
   return (
     <section className="space-y-6">
@@ -399,9 +430,9 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Người liên quan</TableHead>
                 <TableHead>Quan hệ</TableHead>
                 <TableHead>Trạng thái</TableHead>
+                <TableHead />
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -414,17 +445,51 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
                   />
                 </TableMessage>
               ) : (
-                c.relationships.map((r) => (
-                  <TableRow key={r.id}>
-                    <TableCell className="font-medium">{r.target.fullName}</TableCell>
-                    <TableCell>{RELATIONSHIP[r.relationshipType] ?? r.relationshipType}</TableCell>
-                    <TableCell>
-                      <Badge variant={r.status === 'Confirmed' ? 'success' : 'warning'}>
-                        {r.status === 'Confirmed' ? 'Đã xác nhận' : r.status}
-                      </Badge>
-                    </TableCell>
-                  </TableRow>
-                ))
+                c.relationships.map((r) => {
+                  /* Dòng lưu là "khách hàng này LÀ relationshipType của target". Hiện
+                     thành CÂU đủ hai chiều thay vì hai cột rời — hai cột rời là chỗ người
+                     đọc phải tự đoán ai là gì của ai, và đoán sai thì không ai biết. */
+                  const both =
+                    p === null
+                      ? null
+                      : bothDirections(
+                          { fullName: p.fullName, gender: p.gender, dateOfBirth: p.dateOfBirth },
+                          {
+                            fullName: r.target.fullName,
+                            gender: r.target.gender,
+                            dateOfBirth: r.target.dateOfBirth,
+                          },
+                          r.relationshipType,
+                        );
+                  return (
+                    <TableRow key={r.id}>
+                      <TableCell>
+                        <span className="block font-medium">
+                          {both?.forward ?? r.relationshipType}
+                        </span>
+                        <span className="block text-xs text-muted-foreground">
+                          {both?.backward ?? ''}
+                        </span>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={r.status === 'Confirmed' ? 'success' : 'warning'}>
+                          {r.status === 'Confirmed' ? 'Đã xác nhận' : r.status}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          disabled={endRel.isPending}
+                          onClick={() => endRel.mutate(r.id)}
+                          title="Chấm dứt quan hệ này rồi khai lại cho đúng"
+                        >
+                          Chấm dứt
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })
               )}
             </TableBody>
           </Table>
@@ -435,7 +500,7 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
         open={relOpen}
         onClose={() => setRelOpen(false)}
         title="Khai quan hệ nhân thân"
-        description="Quan hệ khai từ khách hàng này tới người kia. Hệ tự tạo chiều ngược."
+        description="Chọn người, rồi chọn NGƯỜI ĐÓ là gì của khách hàng này."
         footer={
           <>
             <Button variant="secondary" onClick={() => setRelOpen(false)}>
@@ -458,50 +523,91 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
             <Alert variant="destructive">{(addRel.error as Error).message}</Alert>
           ) : null}
 
-          <Field label="Tìm người" hint="Gõ tên để tìm trong hồ sơ nhân thân.">
+          {/* Ô tìm và danh sách kết quả gộp làm một. Trước đây tách thành ô nhập rời với
+              ô chọn rời: gõ xong vẫn phải mở ô thứ hai, và ô thứ hai không cho thấy giới
+              tính hay tuổi — hai thứ quyết định nhãn quan hệ. */}
+          <Field label="Tìm người" hint="Gõ tên hoặc mã KH. Người mất cũng là khách hàng.">
             <Input
               value={rel.q}
               onChange={(e) => setRel({ ...rel, q: e.target.value })}
-              placeholder="Họ tên…"
+              placeholder="Họ tên, mã KH…"
+              autoFocus
             />
           </Field>
 
-          <Field label="Người có quan hệ">
-            <Select
-              value={rel.targetPersonId}
-              onChange={(e) => setRel({ ...rel, targetPersonId: e.target.value })}
-            >
-              <option value="">— Chọn người —</option>
-              {(relCustomers.data ?? [])
-                /* Bỏ khách tổ chức (không có nhân thân) và bỏ chính chủ mộ: server chặn
-                   quan hệ với chính mình, nên đừng mời người dùng chọn một lựa chọn chắc
-                   chắn lỗi. */
-                .filter((x) => x.person !== null && x.person.id !== c.personId)
-                .map((x) => (
-                  <option key={x.id} value={x.person?.id ?? x.id}>
-                    {x.person?.fullName} · {x.customerCode}
-                    {x.isDeceased ? ' (đã mất)' : ''}
-                  </option>
+          <div className="max-h-48 overflow-y-auto rounded-md border">
+            {relCandidates.length === 0 ? (
+              <p className="px-3 py-4 text-center text-sm text-muted-foreground">
+                {rel.q === '' ? 'Gõ để tìm khách hàng.' : 'Không tìm thấy ai khớp.'}
+              </p>
+            ) : (
+              <ul className="divide-y divide-border">
+                {relCandidates.map((x) => (
+                  <li key={x.id}>
+                    <button
+                      type="button"
+                      onClick={() => setRel({ ...rel, targetPersonId: x.person?.id ?? '' })}
+                      className={cn(
+                        'flex w-full items-center justify-between px-3 py-2 text-left text-sm transition-colors hover:bg-accent/50',
+                        rel.targetPersonId === x.person?.id ? 'bg-accent' : '',
+                      )}
+                    >
+                      <span>
+                        <span className="font-medium">{x.person?.fullName}</span>
+                        <span className="block text-xs text-muted-foreground">
+                          {x.customerCode} · {GENDER[x.person?.gender ?? ''] ?? 'Chưa rõ giới tính'}
+                          {x.isDeceased ? ' · đã mất' : ''}
+                        </span>
+                      </span>
+                      {rel.targetPersonId === x.person?.id ? (
+                        <Badge variant="default">Đã chọn</Badge>
+                      ) : null}
+                    </button>
+                  </li>
                 ))}
-            </Select>
-          </Field>
+              </ul>
+            )}
+          </div>
 
           <Field
-            label="Là gì của khách hàng này"
-            hint={`Ví dụ: chọn "Con" nghĩa là người kia là con của ${name}.`}
+            label={`Người đó là gì của ${name}`}
+            hint={
+              chosenPerson === undefined
+                ? 'Chọn người trước để hệ đặt đúng nhãn theo giới tính.'
+                : chosenPerson.person?.gender == null
+                  ? 'Người này chưa khai giới tính nên nhãn để dạng chung.'
+                  : undefined
+            }
           >
             <Select
               value={rel.relationshipType}
+              disabled={chosenPerson === undefined}
               onChange={(e) => setRel({ ...rel, relationshipType: e.target.value })}
             >
               <option value="">— Chọn quan hệ —</option>
               {(relTypes.data ?? []).map((t) => (
                 <option key={t.code} value={t.code}>
-                  {RELATIONSHIP[t.code] ?? t.name}
+                  {/* Nhãn theo GIỚI TÍNH của người vừa chọn: "Bố đẻ" hay "Mẹ đẻ", không
+                      phải "Cha/Mẹ" chung chung. */}
+                  {relationshipLabel(
+                    t.code,
+                    chosenPerson?.person?.gender ?? null,
+                    birthOrder(chosenPerson?.person?.dateOfBirth ?? null, p?.dateOfBirth ?? null),
+                  )}
                 </option>
               ))}
             </Select>
           </Field>
+
+          {/* Xác nhận CẢ HAI CHIỀU trước khi lưu. Quan hệ vốn hai chiều nhưng người nhập
+              chỉ khai một chiều — hiện đủ hai câu thì không còn chỗ hiểu ngược, và người
+              nhập tự thấy mình chọn sai trước khi bấm. */}
+          {relPreview !== null ? (
+            <Alert variant="info" title="Sẽ ghi nhận">
+              <p>{relPreview.forward}</p>
+              <p>{relPreview.backward}</p>
+            </Alert>
+          ) : null}
         </div>
       </Dialog>
 

@@ -107,6 +107,7 @@ export interface CustomerPerson {
   fullName: string;
   gender: string | null;
   nationalIdMasked: string | null;
+  dateOfBirth: string | null;
   placeOfBirth: string | null;
   /** Có bản ghi = đã mất. Không có = còn sống. Không phải cờ boolean riêng. */
   deceased: { dateOfDeath: string | null } | null;
@@ -794,8 +795,22 @@ export interface CustomerRelationship {
   id: string;
   relationshipType: string;
   status: string;
-  target: { id: string; fullName: string; gender: string | null };
+  /* Quy ước lưu trữ: khách hàng này LÀ `relationshipType` của `target`.
+   * Cần giới tính + ngày sinh của target để đặt nhãn chiều ngược cho cụ thể. */
+  target: {
+    id: string;
+    fullName: string;
+    gender: string | null;
+    dateOfBirth: string | null;
+  };
 }
+
+/* Chấm dứt một quan hệ. Server đóng cả dòng đối ứng trong cùng giao dịch và ghi audit.
+ * KHÔNG phải xoá: quan hệ đã từng đúng vẫn phải đọc lại được khi đối chiếu hồ sơ cũ. */
+export const endRelationship = (relationshipId: string) =>
+  apiFetch(`/api/v1/crm/relationships/${encodeURIComponent(relationshipId)}/end`, {
+    method: 'POST',
+  });
 
 export interface CustomerDetail {
   id: string;

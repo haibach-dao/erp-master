@@ -258,7 +258,13 @@ export class CustomersService {
   getPersonRelationships(personId: string) {
     return this.prisma.familyRelationship.findMany({
       where: { sourcePersonId: personId },
-      include: { target: { select: { id: true, fullName: true, gender: true } } },
+      /* Cần cả giới tính VÀ ngày sinh để đặt được nhãn cụ thể: "bố đẻ" hay "mẹ đẻ" suy từ
+       * giới tính; "anh trai" hay "em trai" còn cần so tuổi. */
+      include: {
+        target: {
+          select: { id: true, fullName: true, gender: true, dateOfBirth: true },
+        },
+      },
       orderBy: { createdAt: 'desc' },
     });
   }
@@ -313,7 +319,13 @@ export class CustomersService {
         ? []
         : await this.prisma.familyRelationship.findMany({
             where: { sourcePersonId: customer.personId, status: { not: 'Ended' } },
-            include: { target: { select: { id: true, fullName: true, gender: true } } },
+            /* Cần cả giới tính VÀ ngày sinh để đặt được nhãn cụ thể: "bố đẻ" hay "mẹ đẻ" suy từ
+             * giới tính; "anh trai" hay "em trai" còn cần so tuổi. */
+            include: {
+              target: {
+                select: { id: true, fullName: true, gender: true, dateOfBirth: true },
+              },
+            },
             orderBy: { createdAt: 'desc' },
           });
 
@@ -366,6 +378,7 @@ export class CustomersService {
             fullName: true,
             gender: true,
             nationalIdMasked: true,
+            dateOfBirth: true,
             placeOfBirth: true,
             /* Sống hay đã mất suy từ SỰ TỒN TẠI của hồ sơ người mất, không phải từ một
              * cờ boolean riêng. Một cờ riêng là thứ có thể lệch với hồ sơ an táng; ở đây
