@@ -62,6 +62,7 @@ function build(
     reciprocalOf?: Record<string, string>;
     deceasedMissing?: boolean;
     takenSlot?: number | null;
+    alreadyBuriedAt?: string | null;
   } = {},
 ) {
   const {
@@ -74,6 +75,7 @@ function build(
     reciprocalOf = { PARENT: 'CHILD', CHILD: 'PARENT', SPOUSE: 'SPOUSE' },
     deceasedMissing = false,
     takenSlot = null,
+    alreadyBuriedAt = null,
   } = opts;
 
   const record = vi.fn().mockResolvedValue(undefined);
@@ -93,15 +95,28 @@ function build(
     burialRecord: {
       count: vi.fn().mockResolvedValue(activeBurials),
       create,
-      /* Cốt đã có người hay chưa. Trả `null` = còn trống, trừ khi test khai `takenSlot`. */
+      /* Hai câu hỏi khác nhau đi qua CÙNG một `findFirst`:
+       *   - "cốt này có ai chưa"        -> `where` có `slotNumber`
+       *   - "người này đã nằm đâu chưa" -> `where` có `deceasedPersonId`, không có slot
+       * Phân biệt bằng hình dạng `where`; trả cứng một giá trị thì một trong hai câu hỏi
+       * sẽ được trả lời sai mà test vẫn xanh. */
       findFirst: vi
         .fn()
-        .mockImplementation((args: { where: { slotNumber?: number } }) =>
-          Promise.resolve(
-            takenSlot !== null && args.where.slotNumber === takenSlot
-              ? { id: 'br-cu', deceased: { person: { fullName: 'Người Đã Nằm' } } }
-              : null,
-          ),
+        .mockImplementation(
+          (args: { where: { slotNumber?: number; deceasedPersonId?: string } }) => {
+            if (args.where.deceasedPersonId !== undefined && args.where.slotNumber === undefined) {
+              return Promise.resolve(
+                alreadyBuriedAt === null
+                  ? null
+                  : { id: 'br-cu', slotNumber: 2, gravePlotId: alreadyBuriedAt },
+              );
+            }
+            return Promise.resolve(
+              takenSlot !== null && args.where.slotNumber === takenSlot
+                ? { id: 'br-cu', deceased: { person: { fullName: 'Người Đã Nằm' } } }
+                : null,
+            );
+          },
         ),
     },
     graveUsageRight: { findFirst: vi.fn().mockResolvedValue(usageRight) },
@@ -390,5 +405,218 @@ describe('hồ sơ người mất — phải là khách hàng trước', () => {
 
     expect(create).not.toHaveBeenCalled();
     expect(update).toHaveBeenCalledOnce();
+  });
+});
+
+/* MỘT NGƯỜI CHỈ NẰM Ở MỘT CHỖ.
+ *
+ * Trước đây không có kiểm này: cùng một hồ sơ người mất gán được vào hai phần mộ khác
+ * nhau và không gì báo. Sức chứa chặn theo TỪNG mộ nên nó không thấy người này đã nằm ở
+ * mộ bên cạnh — đúng loại lỗi chỉ lộ ra khi dữ liệu đã nhiều.
+ */
+describe('an táng — không an táng một người hai lần', () => {
+  it('người đã nằm ở mộ khác thì chặn, và NÓI RÕ đang nằm ở đâu', async () => {
+    const { svc, create } = build({ alreadyBuriedAt: 'plot-khac' });
+
+    await expect(svc.createBurial(dto, 'u1')).rejects.toThrow(
+      /đã được an táng ở phần mộ.*cốt 2.*Huỷ hồ sơ an táng cũ/s,
+    );
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('người chưa nằm ở đâu thì an táng được', async () => {
+    const { svc, create } = build({ alreadyBuriedAt: null });
+
+    await svc.createBurial(dto, 'u1');
+
+    expect(create).toHaveBeenCalledOnce();
+  });
+});
+
+/* ===================== DANH SÁCH ỨNG VIÊN AN TÁNG =====================
+ *
+ * Ba điều kiện: đã mất · có quan hệ với chủ mộ (hoặc chính là chủ mộ) · chưa nằm ở cốt nào.
+ *
+ * Mock ở đây TỰ LỌC theo `where` mà service truyền xuống, không trả cứng. Trả cứng thì test
+ * vẫn xanh khi service bỏ quên một điều kiện — mà bỏ quên điều kiện chính là cái hỏng đang
+ * cần chặn: trước đây hộp thoại liệt kê MỌI khách hàng rồi để server từ chối.
+ */
+const BURIED_PERSON = 'person-buried';
+const STRANGER_PERSON = 'person-stranger';
+
+type Dec = { id: string; personId: string; fullName: string; buried: boolean; code: string };
+
+const DEC_POOL: Dec[] = [
+  { id: 'dec-1', personId: DECEASED_PERSON, fullName: 'Con Đã Mất', buried: false, code: 'KH-002' },
+  { id: 'dec-2', personId: BURIED_PERSON, fullName: 'Đã Nằm Cốt', buried: true, code: 'KH-003' },
+  { id: 'dec-3', personId: STRANGER_PERSON, fullName: 'Người Lạ', buried: false, code: 'KH-004' },
+];
+
+function buildCandidates(
+  opts: {
+    rels?: Rel[];
+    usageRight?: unknown;
+    ownerPerson?: { id: string; fullName: string } | null;
+    ownerDeceased?: boolean;
+  } = {},
+) {
+  const {
+    rels = [rel()],
+    usageRight = { id: 'ur-1', holderCustomerId: OWNER_CUSTOMER, status: 'Active' },
+    ownerPerson = { id: OWNER_PERSON, fullName: 'Chủ Mộ' },
+    ownerDeceased = false,
+  } = opts;
+
+  const pool = ownerDeceased
+    ? [
+        ...DEC_POOL,
+        {
+          id: 'dec-own',
+          personId: OWNER_PERSON,
+          fullName: 'Chủ Mộ',
+          buried: false,
+          code: 'KH-001',
+        },
+      ]
+    : DEC_POOL;
+
+  const prisma = {
+    graveUsageRight: { findFirst: vi.fn().mockResolvedValue(usageRight) },
+    customer: {
+      findUnique: vi.fn().mockResolvedValue({
+        id: OWNER_CUSTOMER,
+        customerCode: 'KH-001',
+        orgName: null,
+        person: ownerPerson,
+      }),
+    },
+    familyRelationship: {
+      findMany: vi.fn().mockImplementation((args: { where: Record<string, unknown> }) => {
+        const w = args.where;
+        const now = new Date();
+        const ownerIds = Array.isArray(w.OR)
+          ? (w.OR as Record<string, string>[]).flatMap((o) => Object.values(o))
+          : [];
+        return Promise.resolve(
+          rels.filter((r) => {
+            // Quên `status` -> quan hệ chưa xác nhận lọt vào danh sách.
+            if (typeof w.status === 'string' && r.status !== w.status) return false;
+            // Quên khoảng hiệu lực -> quan hệ đã huỷ vẫn lọt vào.
+            if (w.AND !== undefined) {
+              if (r.effectiveFrom !== null && r.effectiveFrom > now) return false;
+              if (r.effectiveTo !== null && r.effectiveTo < now) return false;
+            }
+            // Chỉ lấy MỘT chiều -> mất nửa số người có quan hệ thật.
+            if (
+              ownerIds.length > 0 &&
+              !ownerIds.includes(r.sourcePersonId) &&
+              !ownerIds.includes(r.targetPersonId)
+            ) {
+              return false;
+            }
+            return true;
+          }),
+        );
+      }),
+    },
+    deceasedPerson: {
+      findMany: vi
+        .fn()
+        .mockImplementation(
+          (args: { where: { personId: { in: string[] }; burialRecords?: unknown } }) => {
+            const ids = new Set(args.where.personId.in);
+            // Quên `burialRecords: none` -> người đã nằm ở cốt vẫn được mời chọn lại.
+            const excludeBuried = args.where.burialRecords !== undefined;
+            return Promise.resolve(
+              pool
+                .filter((d) => ids.has(d.personId) && (!excludeBuried || !d.buried))
+                .map((d) => ({
+                  id: d.id,
+                  dateOfDeath: new Date('2026-02-14'),
+                  person: {
+                    id: d.personId,
+                    fullName: d.fullName,
+                    gender: 'FEMALE',
+                    dateOfBirth: null,
+                    customer: { id: `cus-${d.id}`, customerCode: d.code },
+                  },
+                })),
+            );
+          },
+        ),
+    },
+  } as unknown as PrismaService;
+
+  return new BurialsService(prisma, { record: vi.fn() } as unknown as AuditService);
+}
+
+const names = (r: { candidates: { fullName: string }[] }) => r.candidates.map((c) => c.fullName);
+
+describe('danh sách ứng viên an táng', () => {
+  it('người đã mất có quan hệ với chủ mộ thì được chọn', async () => {
+    const r = await buildCandidates().burialCandidates(PLOT);
+    expect(r.blocked).toBeNull();
+    expect(names(r)).toEqual(['Con Đã Mất']);
+    expect(r.candidates[0]?.relationshipType).toBe('CHILD');
+  });
+
+  it('người KHÔNG có quan hệ với chủ mộ thì không được chọn, dù đã mất', async () => {
+    // `Người Lạ` đã mất và chưa nằm ở đâu — chỉ thiếu mỗi quan hệ.
+    const r = await buildCandidates().burialCandidates(PLOT);
+    expect(names(r)).not.toContain('Người Lạ');
+  });
+
+  it('người có quan hệ nhưng CÒN SỐNG thì không được chọn', async () => {
+    const r = await buildCandidates({
+      rels: [rel({ sourcePersonId: 'person-alive' })],
+    }).burialCandidates(PLOT);
+    expect(r.candidates).toHaveLength(0);
+  });
+
+  it('người ĐÃ nằm ở cốt khác thì không được chọn lại', async () => {
+    const r = await buildCandidates({
+      rels: [rel({ sourcePersonId: BURIED_PERSON })],
+    }).burialCandidates(PLOT);
+    expect(names(r)).not.toContain('Đã Nằm Cốt');
+    expect(r.candidates).toHaveLength(0);
+  });
+
+  it('quan hệ CHƯA xác nhận thì không tính', async () => {
+    const r = await buildCandidates({
+      rels: [rel({ status: 'Pending' })],
+    }).burialCandidates(PLOT);
+    expect(r.candidates).toHaveLength(0);
+  });
+
+  it('quan hệ đã HẾT hiệu lực thì không tính', async () => {
+    const r = await buildCandidates({
+      rels: [rel({ effectiveTo: new Date('2020-01-01') })],
+    }).burialCandidates(PLOT);
+    expect(r.candidates).toHaveLength(0);
+  });
+
+  it('lấy quan hệ theo CẢ HAI chiều — chủ mộ đứng ở vế nào cũng được', async () => {
+    const nguoc = await buildCandidates({
+      rels: [rel({ sourcePersonId: OWNER_PERSON, targetPersonId: DECEASED_PERSON })],
+    }).burialCandidates(PLOT);
+    expect(names(nguoc)).toEqual(['Con Đã Mất']);
+  });
+
+  it('chính chủ mộ đã mất thì tự an táng được, đánh dấu SELF', async () => {
+    const r = await buildCandidates({ ownerDeceased: true }).burialCandidates(PLOT);
+    const self = r.candidates.find((c) => c.isOwner);
+    expect(self?.fullName).toBe('Chủ Mộ');
+    expect(self?.relationshipType).toBe('SELF');
+  });
+
+  it('mộ chưa có chủ thì trả LÝ DO, không phải danh sách rỗng suông', async () => {
+    const r = await buildCandidates({ usageRight: null }).burialCandidates(PLOT);
+    expect(r.blocked).toMatch(/chưa có chủ/);
+    expect(r.candidates).toHaveLength(0);
+  });
+
+  it('mộ do tổ chức đứng tên thì trả lý do — chưa có quy tắc nhân thân', async () => {
+    const r = await buildCandidates({ ownerPerson: null }).burialCandidates(PLOT);
+    expect(r.blocked).toMatch(/tổ chức/);
   });
 });

@@ -1021,3 +1021,32 @@ export const getUsageRightHistory = (
   gravePlotId: string,
 ): Promise<{ gravePlotId: string; plotCode: string; history: UsageRightHistoryEntry[] }> =>
   apiFetch(`/api/v1/cemetery/grave-plots/${encodeURIComponent(gravePlotId)}/usage-right-history`);
+
+/* ---- Ai đủ điều kiện an táng vào một phần mộ ----
+ *
+ * Ba điều kiện do SERVER quyết: đã mất, có quan hệ đã xác nhận với chủ mộ (hoặc chính là
+ * chủ mộ), và chưa nằm ở cốt nào. Giao diện không tự lọc — luật sống ở hai chỗ là luật sẽ
+ * lệch, và người dùng sẽ thấy một danh sách khác với thứ server chấp nhận.
+ */
+export interface BurialCandidate {
+  deceasedPersonId: string;
+  personId: string;
+  fullName: string;
+  gender: string | null;
+  dateOfBirth: string | null;
+  dateOfDeath: string | null;
+  customerId: string | null;
+  customerCode: string | null;
+  isOwner: boolean;
+  relationshipType: string | null;
+}
+
+export interface BurialCandidates {
+  /** Có giá trị = không ai đủ điều kiện VÌ LÝ DO này (chưa có chủ mộ, chủ là tổ chức…). */
+  blocked: string | null;
+  owner: { customerId: string; customerCode: string; personId: string; fullName: string } | null;
+  candidates: BurialCandidate[];
+}
+
+export const getBurialCandidates = (gravePlotId: string): Promise<BurialCandidates> =>
+  apiFetch(`/api/v1/burials/candidates?gravePlotId=${encodeURIComponent(gravePlotId)}`);

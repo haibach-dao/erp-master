@@ -6,7 +6,6 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   assignUsageRight,
   createBurial,
-  createDeceased,
   getPlotOwnership,
   getUsageRightHistory,
   releaseUsageRight,
@@ -14,6 +13,7 @@ import {
   type CustomerPlot,
   listCompanies,
   listGravePlots,
+  getBurialCandidates,
   searchCustomers,
   type CustomerDetail,
 } from '@/lib/api';
@@ -344,7 +344,6 @@ function BuryDialog({
   const [q, setQ] = useState('');
   const [personId, setPersonId] = useState('');
   const [slot, setSlot] = useState('');
-  const [dateOfDeath, setDateOfDeath] = useState('');
   const [burialDate, setBurialDate] = useState('');
 
   const ownership = useQuery({
@@ -352,41 +351,38 @@ function BuryDialog({
     queryFn: () => getPlotOwnership(gravePlotId),
   });
 
-  /* Chọn từ danh sách KHÁCH HÀNG, không phải nhân thân lẻ.
+  /* Danh sách ứng viên do SERVER quyết, không phải giao diện tự lọc.
    *
-   * Người mất cũng là khách hàng (quyết định 26/08/2026). Trước đây màn hình này tìm
-   * trong nhân thân, nên nó tạo ra được những người đã an táng mà màn hình khách hàng
-   * không bao giờ thấy — đúng cái lệch vừa phải đi vá bằng migration.
+   * Ba điều kiện — đã mất, có quan hệ đã xác nhận với chủ mộ (hoặc chính là chủ mộ), chưa
+   * nằm ở cốt nào — đều là luật nghiệp vụ mà `createBurial` ép. Trước đây màn hình này
+   * liệt kê MỌI khách hàng rồi để server từ chối: mời người dùng chọn một lựa chọn chắc
+   * chắn hỏng là bắt họ học luật bằng cách va vào nó.
    *
-   * KHÔNG lọc `deceasedOnly` ở đây: hồ sơ người mất thường được lập NGAY lúc làm thủ tục
-   * an táng, nên người cần chọn có thể chưa được đánh dấu đã mất. Hộp thoại hỏi ngày mất
-   * và tự lập hồ sơ khi lưu. */
-  const customers = useQuery({
-    queryKey: ['customers', q],
-    queryFn: () => searchCustomers(q),
+   * Đặt luật ở một chỗ cũng là để hai bên không lệch: danh sách hiện ra và thứ server
+   * chấp nhận luôn là cùng một tập. */
+  const eligible = useQuery({
+    queryKey: ['burialCandidates', gravePlotId],
+    queryFn: () => getBurialCandidates(gravePlotId),
   });
 
-  const selected = (customers.data ?? []).find((c) => c.id === personId);
+  const matches = (eligible.data?.candidates ?? []).filter((c) =>
+    q.trim() === ''
+      ? true
+      : `${c.fullName} ${c.customerCode ?? ''}`.toLowerCase().includes(q.trim().toLowerCase()),
+  );
+  const selected = matches.find((c) => c.deceasedPersonId === personId);
 
   const bury = useMutation({
     mutationFn: async () => {
       if (selected === undefined) {
         throw new Error('Chưa chọn người an táng');
       }
-      if (selected.person === null) {
-        throw new Error('Khách hàng tổ chức không an táng được — chọn khách hàng cá nhân');
-      }
-      /* Lập/cập nhật hồ sơ người mất ngay tại đây. Bắt người dùng sang màn hình khác lập
-       * rồi quay lại là chỗ quy trình hay đứt. Server chấp nhận gọi lại khi hồ sơ đã có —
-       * một người có thể được an táng vào mộ thứ hai. */
-      const { id: deceasedPersonId } = await createDeceased({
-        personId: selected.person.id,
-        ...(dateOfDeath !== '' ? { dateOfDeath } : {}),
-      });
-
+      /* KHÔNG lập hồ sơ người mất ở đây nữa: ứng viên đã PHẢI có hồ sơ người mất mới lọt
+       * vào danh sách, nên `deceasedPersonId` luôn có sẵn. Người chưa mất thì đánh dấu ở
+       * hồ sơ của họ trước — đó là một việc khác, không phải một bước phụ của an táng. */
       return createBurial({
         gravePlotId,
-        deceasedPersonId,
+        deceasedPersonId: selected.deceasedPersonId,
         ...(slot !== '' ? { slotNumber: Number(slot) } : {}),
         ...(burialDate !== '' ? { burialDate } : {}),
       });
@@ -402,7 +398,7 @@ function BuryDialog({
         ? 'Phần mộ chưa có chủ đứng tên. Gán chủ mộ trước khi an táng.'
         : o.freeSlots.length === 0
           ? `Phần mộ đã kín ${o.capacity}/${o.capacity} cốt.`
-          : null;
+          : (eligible.data?.blocked ?? null);
 
   return (
     <Dialog
@@ -462,41 +458,63 @@ function BuryDialog({
         ) : null}
 
         <Field
-          label="Tìm người an táng"
-          hint="Gõ tên hoặc mã KH. Người mất cũng là khách hàng — chưa có thì lập hồ sơ khách hàng trước."
+          label="Người an táng"
+          hint={
+            eligible.isPending
+              ? 'Đang tìm người đủ điều kiện…'
+              : `Chỉ hiện người ĐÃ MẤT, CÓ QUAN HỆ đã xác nhận với ${eligible.data?.owner?.fullName ?? 'chủ mộ'}, và CHƯA nằm ở cốt nào.`
+          }
         >
-          <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Họ tên, mã KH…" />
+          <Input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Lọc theo họ tên hoặc mã KH…"
+          />
         </Field>
 
-        <Field label="Người an táng">
-          <Select value={personId} onChange={(e) => setPersonId(e.target.value)}>
-            <option value="">— Chọn khách hàng —</option>
-            {(customers.data ?? [])
-              /* Khách hàng tổ chức không an táng được — bỏ khỏi danh sách thay vì để
-                 người dùng chọn rồi nhận lỗi. */
-              .filter((x) => x.person !== null)
-              .map((x) => (
-                <option key={x.id} value={x.id}>
-                  {x.person?.fullName} · {x.customerCode}
-                  {x.isDeceased ? ' (đã mất)' : ' (đang ghi nhận là còn sống)'}
-                </option>
+        <div className="max-h-44 overflow-y-auto rounded-md border">
+          {matches.length === 0 ? (
+            /* Ba lý do rỗng khác nhau, ba câu khác nhau: chưa tải xong / bộ lọc không
+               khớp / thực sự không ai đủ điều kiện. Gộp làm một là để người dùng đoán. */
+            <p className="px-3 py-4 text-center text-sm text-muted-foreground">
+              {eligible.isPending
+                ? 'Đang tải…'
+                : q.trim() !== ''
+                  ? 'Không ai khớp bộ lọc.'
+                  : 'Không ai đủ điều kiện. Khai quan hệ với chủ mộ, và đánh dấu người đó đã mất, trước khi an táng.'}
+            </p>
+          ) : (
+            <ul className="divide-y divide-border">
+              {matches.map((c) => (
+                <li key={c.deceasedPersonId}>
+                  <button
+                    type="button"
+                    onClick={() => setPersonId(c.deceasedPersonId)}
+                    className={cn(
+                      'flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-accent/50',
+                      personId === c.deceasedPersonId ? 'bg-accent' : '',
+                    )}
+                  >
+                    <span>
+                      <span className="font-medium">{c.fullName}</span>
+                      <span className="block text-xs text-muted-foreground">
+                        {c.customerCode ?? '(chưa có mã KH)'}
+                        {c.dateOfDeath !== null
+                          ? ` · mất ${new Date(c.dateOfDeath).toLocaleDateString('vi-VN')}`
+                          : ' · chưa ghi ngày mất'}
+                      </span>
+                    </span>
+                    <Badge variant={c.isOwner ? 'default' : 'neutral'}>
+                      {RELATIONSHIP_LABEL[c.relationshipType ?? ''] ??
+                        c.relationshipType ??
+                        'Có quan hệ'}
+                    </Badge>
+                  </button>
+                </li>
               ))}
-          </Select>
-        </Field>
-
-        {/* Chưa đánh dấu đã mất thì hỏi ngày mất — hệ lập hồ sơ người mất khi lưu. */}
-        {selected !== undefined && !selected.isDeceased ? (
-          <Field
-            label="Ngày mất"
-            hint="Khách này đang ghi nhận là còn sống; hệ sẽ lập hồ sơ người mất khi bấm An táng."
-          >
-            <Input
-              type="date"
-              value={dateOfDeath}
-              onChange={(e) => setDateOfDeath(e.target.value)}
-            />
-          </Field>
-        ) : null}
+            </ul>
+          )}
+        </div>
 
         <div className="grid gap-4 sm:grid-cols-2">
           <Field
