@@ -452,12 +452,32 @@ const DEC_POOL: Dec[] = [
   { id: 'dec-3', personId: STRANGER_PERSON, fullName: 'Người Lạ', buried: false, code: 'KH-004' },
 ];
 
+/* `findFirst` CÓ HƯỚNG — đúng ngữ nghĩa `resolveRelationTo` cần: một chiều cụ thể, đã
+ * `Confirmed`, còn hiệu lực. Tự lọc chứ không trả cứng, để test đỏ nếu service bỏ điều kiện. */
+function directionalFindFirst(rows: Rel[]) {
+  return vi.fn().mockImplementation((args: { where: Record<string, unknown> }) => {
+    const w = args.where;
+    const now = new Date();
+    const hit = rows.find(
+      (r) =>
+        r.sourcePersonId === w.sourcePersonId &&
+        r.targetPersonId === w.targetPersonId &&
+        (typeof w.status !== 'string' || r.status === w.status) &&
+        (w.AND === undefined ||
+          ((r.effectiveFrom === null || r.effectiveFrom <= now) &&
+            (r.effectiveTo === null || r.effectiveTo >= now))),
+    );
+    return Promise.resolve(hit === undefined ? null : { relationshipType: hit.relationshipType });
+  });
+}
+
 function buildCandidates(
   opts: {
     rels?: Rel[];
     usageRight?: unknown;
     ownerPerson?: { id: string; fullName: string } | null;
     ownerDeceased?: boolean;
+    reciprocalOf?: Record<string, string>;
   } = {},
 ) {
   const {
@@ -465,6 +485,7 @@ function buildCandidates(
     usageRight = { id: 'ur-1', holderCustomerId: OWNER_CUSTOMER, status: 'Active' },
     ownerPerson = { id: OWNER_PERSON, fullName: 'Chủ Mộ' },
     ownerDeceased = false,
+    reciprocalOf = { PARENT: 'CHILD', CHILD: 'PARENT', SPOUSE: 'SPOUSE' },
   } = opts;
 
   const pool = ownerDeceased
@@ -490,7 +511,14 @@ function buildCandidates(
         person: ownerPerson,
       }),
     },
+    relationshipType: {
+      findUnique: vi.fn().mockImplementation((args: { where: { code: string } }) => {
+        const reciprocalCode = reciprocalOf[args.where.code];
+        return Promise.resolve(reciprocalCode === undefined ? null : { reciprocalCode });
+      }),
+    },
     familyRelationship: {
+      findFirst: directionalFindFirst(rels),
       findMany: vi.fn().mockImplementation((args: { where: Record<string, unknown> }) => {
         const w = args.where;
         const now = new Date();
@@ -607,6 +635,42 @@ describe('danh sách ứng viên an táng', () => {
     const self = r.candidates.find((c) => c.isOwner);
     expect(self?.fullName).toBe('Chủ Mộ');
     expect(self?.relationshipType).toBe('SELF');
+  });
+
+  /* HỒI QUY: danh sách và `createBurial` phải nói cùng một điều.
+   *
+   * Trước khi sửa, chỗ này tự dò `relations.find(...)` nên KHÔNG quy chiều — người chỉ có
+   * quan hệ chiều ngược mà mã quan hệ đó thiếu `reciprocalCode` trong danh mục vẫn được
+   * liệt kê, rồi `createBurial` từ chối. Đúng cái "mời chọn rồi từ chối" mà tính năng này
+   * sinh ra để dẹp. Nay cả hai đường gọi chung `resolveRelationTo`.
+   */
+  it('quan hệ chiều ngược được quy về chiều thuận, không trả mã đã lưu', async () => {
+    const r = await buildCandidates({
+      // Chủ mộ LÀ CHILD của người mất => người mất LÀ PARENT của chủ mộ.
+      rels: [
+        rel({
+          sourcePersonId: OWNER_PERSON,
+          targetPersonId: DECEASED_PERSON,
+          relationshipType: 'CHILD',
+        }),
+      ],
+    }).burialCandidates(PLOT);
+    expect(names(r)).toEqual(['Con Đã Mất']);
+    expect(r.candidates[0]?.relationshipType).toBe('PARENT');
+  });
+
+  it('KHÔNG liệt kê người mà createBurial chắc chắn từ chối (thiếu mã đối ứng)', async () => {
+    const r = await buildCandidates({
+      rels: [
+        rel({
+          sourcePersonId: OWNER_PERSON,
+          targetPersonId: DECEASED_PERSON,
+          relationshipType: 'CHILD',
+        }),
+      ],
+      reciprocalOf: {}, // danh mục KHÔNG có mã đối ứng cho CHILD
+    }).burialCandidates(PLOT);
+    expect(r.candidates).toHaveLength(0);
   });
 
   it('mộ chưa có chủ thì trả LÝ DO, không phải danh sách rỗng suông', async () => {

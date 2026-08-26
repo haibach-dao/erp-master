@@ -618,14 +618,26 @@ export class CemeteryService {
               customerCode: true,
               orgName: true,
               person: {
-                select: { id: true, fullName: true, deceased: { select: { id: true } } },
+                select: {
+                  id: true,
+                  fullName: true,
+                  // Ngày sinh chủ mộ: để giao diện so tuổi, chọn "anh trai" hay "em trai".
+                  dateOfBirth: true,
+                  deceased: { select: { id: true } },
+                },
               },
             },
           });
 
     const burials = await this.prisma.burialRecord.findMany({
       where: { gravePlotId, ...activeBurial() },
-      include: { deceased: { include: { person: { select: { id: true, fullName: true } } } } },
+      include: {
+        deceased: {
+          include: {
+            person: { select: { id: true, fullName: true, gender: true, dateOfBirth: true } },
+          },
+        },
+      },
       orderBy: [{ slotNumber: 'asc' }, { createdAt: 'asc' }],
     });
 
@@ -646,6 +658,7 @@ export class CemeteryService {
               customerCode: holder.customerCode,
               name: holder.person?.fullName ?? holder.orgName,
               personId: holder.person?.id ?? null,
+              dateOfBirth: holder.person?.dateOfBirth ?? null,
               isDeceased: holder.person?.deceased != null,
             },
       occupants: burials.map((b) => ({
@@ -653,6 +666,11 @@ export class CemeteryService {
         slotNumber: b.slotNumber,
         personId: b.deceased.person.id,
         fullName: b.deceased.person.fullName,
+        /* Giới tính + ngày sinh để giao diện dựng nhãn quan hệ ĐÚNG VAI ("Con gái" chứ
+         * không "Con"). Anh/chị/em còn phải so tuổi với chủ mộ, nên chủ mộ cũng trả về
+         * ngày sinh. Cả hai đi qua lớp che như mọi chỗ khác. */
+        gender: b.deceased.person.gender,
+        dateOfBirth: b.deceased.person.dateOfBirth,
         relationshipToOwner: b.relationshipToOwner,
         status: b.status,
         burialDate: b.burialDate,

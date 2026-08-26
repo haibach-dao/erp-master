@@ -96,6 +96,47 @@ async function main(): Promise<void> {
     `  3. trong đó chưa nằm ở cốt nào        : ${result.candidates.length}  <- hộp thoại hiện`,
   );
 
+  /* Ai bị loại và VÌ SAO. Không có phần này thì "0 ứng viên" trông giống hệt nhau ở ba
+   * nguyên nhân hoàn toàn khác: chưa ai chết · chưa khai quan hệ · đã nằm ở cốt rồi. Tôi
+   * đã mất một lượt đi tìm lỗi chỉ vì con số 0 không tự nói nó là loại 0 nào. */
+  const shown = new Set(result.candidates.map((c) => c.deceasedPersonId));
+  const allDeceased = await prisma.deceasedPerson.findMany({
+    where: { personId: { in: [...relatedIds] } },
+    select: {
+      id: true,
+      person: { select: { fullName: true } },
+      /* `BurialRecord` chỉ có CỘT `gravePlotId`, không có quan hệ `gravePlot` — nên phải
+       * tra mã mộ ở một lượt riêng bên dưới. */
+      burialRecords: {
+        where: { status: { in: ['Draft', 'Verified', 'Scheduled', 'Completed'] } },
+        select: { slotNumber: true, gravePlotId: true },
+      },
+    },
+  });
+  const excluded = allDeceased.filter((d) => !shown.has(d.id));
+  const plotIds = excluded.flatMap((d) => d.burialRecords.map((b) => b.gravePlotId));
+  const plotCodeById = new Map(
+    (
+      await prisma.gravePlot.findMany({
+        where: { id: { in: plotIds } },
+        select: { id: true, plotCode: true },
+      })
+    ).map((p) => [p.id, p.plotCode]),
+  );
+  if (excluded.length > 0) {
+    console.log('\n  BỊ LOẠI:');
+    for (const d of excluded) {
+      const at = d.burialRecords[0];
+      console.log(
+        `    ${d.person.fullName.padEnd(22)} ${
+          at === undefined
+            ? 'không quy được chiều quan hệ (createBurial cũng sẽ từ chối)'
+            : `đã nằm ở ${plotCodeById.get(at.gravePlotId) ?? at.gravePlotId}${at.slotNumber === null ? '' : ` cốt ${at.slotNumber}`}`
+        }`,
+      );
+    }
+  }
+
   if (result.candidates.length === 0) {
     console.log('\n  (không ai đủ điều kiện)');
     return;

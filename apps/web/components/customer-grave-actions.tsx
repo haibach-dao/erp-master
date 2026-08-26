@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { ArrowLeftRight, Landmark, Plus, Undo2, UserPlus } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { birthOrder, relationshipLabel } from '@/lib/relationship';
 import {
   assignUsageRight,
   createBurial,
@@ -37,13 +38,21 @@ import {
   TableRow,
 } from '@/components/ui/table';
 
-const RELATIONSHIP_LABEL: Record<string, string> = {
-  SELF: 'Chính chủ mộ',
-  SPOUSE: 'Vợ/Chồng',
-  PARENT: 'Cha/Mẹ',
-  CHILD: 'Con',
-  SIBLING: 'Anh/Chị/Em',
-};
+/* Nhãn quan hệ lấy từ `lib/relationship`, KHÔNG dựng bảng tĩnh riêng ở đây.
+ *
+ * File này từng giữ một bảng nhãn riêng in ra "Cha/Mẹ"/"Con" trong khi trang khách hàng
+ * in "Bố đẻ"/"Con gái" — cùng một quan hệ, hai cách gọi, tuỳ màn hình. Nhãn là một luật
+ * hiển thị; luật sống ở hai chỗ thì hai chỗ sẽ lệch. */
+function relLabel(
+  code: string | null,
+  gender: string | null | undefined,
+  dateOfBirth: string | null,
+  ownerDateOfBirth: string | null,
+): string {
+  if (code === null || code === '') return '';
+  // Anh hay em phải so tuổi với CHỦ MỘ; thiếu ngày sinh thì nhãn lùi về trung tính.
+  return relationshipLabel(code, gender, birthOrder(dateOfBirth, ownerDateOfBirth));
+}
 
 function errText(e: unknown): string {
   return e instanceof Error ? e.message : 'Có lỗi xảy ra';
@@ -447,9 +456,12 @@ function BuryDialog({
                     <strong>{oc.fullName}</strong>
                   </span>
                   <span className="text-muted-foreground">
-                    {oc.relationshipToOwner === null
-                      ? ''
-                      : (RELATIONSHIP_LABEL[oc.relationshipToOwner] ?? oc.relationshipToOwner)}
+                    {relLabel(
+                      oc.relationshipToOwner,
+                      oc.gender,
+                      oc.dateOfBirth,
+                      o.holder?.dateOfBirth ?? null,
+                    )}
                   </span>
                 </li>
               ))}
@@ -505,9 +517,12 @@ function BuryDialog({
                       </span>
                     </span>
                     <Badge variant={c.isOwner ? 'default' : 'neutral'}>
-                      {RELATIONSHIP_LABEL[c.relationshipType ?? ''] ??
-                        c.relationshipType ??
-                        'Có quan hệ'}
+                      {relLabel(
+                        c.relationshipType,
+                        c.gender,
+                        c.dateOfBirth,
+                        eligible.data?.owner?.dateOfBirth ?? null,
+                      ) || 'Có quan hệ'}
                     </Badge>
                   </button>
                 </li>
