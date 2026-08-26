@@ -3,9 +3,13 @@ import { Prisma } from '@prisma/client';
 import { ulid } from 'ulid';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import {
+  activeBurial,
+  completedBurial,
+  activeUsageRight,
+  confirmedRelationship,
+} from '../../common/lifecycle/active';
 import type { CreateBurialDto, CreateDeceasedDto } from './burials.dto';
-
-const ACTIVE_BURIAL_STATUSES = ['Draft', 'Verified', 'Scheduled', 'Completed'];
 
 /* Chủ mộ tự an táng vào chính phần mộ mình đứng tên. Không phải một mã trong
  * `relationship_types` — ở đó không có "quan hệ với chính mình" — nên dùng một hằng
@@ -95,7 +99,7 @@ export class BurialsService {
     deceasedPersonId: string,
   ): Promise<{ ownerCustomerId: string; relationshipToOwner: string }> {
     const right = await this.prisma.graveUsageRight.findFirst({
-      where: { gravePlotId, status: 'Active' },
+      where: { gravePlotId, ...activeUsageRight },
       orderBy: { createdAt: 'desc' },
     });
     if (right === null) {
@@ -139,7 +143,7 @@ export class BurialsService {
       where: {
         sourcePersonId: deceased.personId,
         targetPersonId: owner.personId,
-        status: 'Confirmed',
+        ...confirmedRelationship,
         AND: inEffect,
       },
     });
@@ -152,7 +156,7 @@ export class BurialsService {
       where: {
         sourcePersonId: owner.personId,
         targetPersonId: deceased.personId,
-        status: 'Confirmed',
+        ...confirmedRelationship,
         AND: inEffect,
       },
     });
@@ -192,7 +196,7 @@ export class BurialsService {
       throw new ConflictException(`Phần mộ chỉ có ${capacity} cốt — không có cốt số ${slotNumber}`);
     }
     const taken = await this.prisma.burialRecord.findFirst({
-      where: { gravePlotId, slotNumber, status: { in: ACTIVE_BURIAL_STATUSES } },
+      where: { gravePlotId, slotNumber, ...activeBurial() },
       include: { deceased: { include: { person: { select: { fullName: true } } } } },
     });
     if (taken !== null) {
@@ -208,7 +212,7 @@ export class BurialsService {
       );
     }
     const activeCount = await this.prisma.burialRecord.count({
-      where: { gravePlotId: dto.gravePlotId, status: { in: ACTIVE_BURIAL_STATUSES } },
+      where: { gravePlotId: dto.gravePlotId, ...activeBurial() },
     });
     if (activeCount >= cap) {
       throw new ConflictException(`Vượt sức chứa mộ (${activeCount}/${cap})`);
@@ -305,7 +309,7 @@ export class BurialsService {
       }
       const cap = plot.capacityOverride ?? plot.graveType.defaultCapacity;
       const completedCount = await tx.burialRecord.count({
-        where: { gravePlotId: burial.gravePlotId, status: 'Completed' },
+        where: { gravePlotId: burial.gravePlotId, ...completedBurial },
       });
       if (completedCount >= cap) {
         throw new ConflictException(`Vượt sức chứa mộ (${completedCount}/${cap})`);

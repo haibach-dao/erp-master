@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { ulid } from 'ulid';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { holdStale } from '../../common/lifecycle/active';
 import type { CreateHoldDto } from './holds.dto';
 
 const DEFAULT_HOLD_MINUTES = 60;
@@ -128,7 +129,7 @@ export class HoldsService {
   async expireStaleHolds(actor: string | null) {
     const now = new Date();
     const stale = await this.prisma.graveHold.findMany({
-      where: { status: 'Active', expiresAt: { lt: now } },
+      where: holdStale(now),
       select: { id: true, gravePlotId: true, expiresAt: true },
     });
     if (stale.length === 0) {

@@ -9,6 +9,12 @@ import { ulid } from 'ulid';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PiiService } from '../../common/pii/pii.service';
 import { AuditService } from '../audit/audit.service';
+import {
+  activeBurial,
+  activeSubRecord,
+  activeUsageRight,
+  holdStillHolding,
+} from '../../common/lifecycle/active';
 import type {
   AddPersonAddressDto,
   AddPersonBankAccountDto,
@@ -19,10 +25,6 @@ import type {
   CreateRelationshipDto,
   UpdateCustomerDto,
 } from './customers.dto';
-
-/* Hồ sơ an táng còn hiệu lực. Trùng danh sách ở `burials.service.ts` và ở partial unique
- * index `burial_records_active_slot` — ba chỗ phải nói cùng một điều. */
-const ACTIVE_BURIAL_STATUSES = ['Draft', 'Verified', 'Scheduled', 'Completed'];
 
 interface DedupWarning {
   reason: string;
@@ -283,7 +285,7 @@ export class CustomersService {
    * Chỉ trả mục còn hiệu lực ở các bảng phụ; mục đã ngừng dùng thuộc màn hình lịch sử.
    */
   async getCustomerDetail(customerId: string) {
-    const activeSub = { where: { status: 'active' }, orderBy: { createdAt: 'asc' } } as const;
+    const activeSub = { where: activeSubRecord, orderBy: { createdAt: 'asc' } } as const;
     const customer = await this.prisma.customer.findUnique({
       where: { id: customerId },
       include: {
@@ -307,7 +309,7 @@ export class CustomersService {
     /* Phần mộ đang đứng tên. Đi qua `GraveUsageRight` chứ không qua hợp đồng: quyền sử
      * dụng mới là thứ nói ai đang là chủ mộ HÔM NAY, hợp đồng chỉ là căn cứ sinh ra nó. */
     const rights = await this.prisma.graveUsageRight.findMany({
-      where: { holderCustomerId: customerId, status: 'Active' },
+      where: { holderCustomerId: customerId, ...activeUsageRight },
       orderBy: { createdAt: 'asc' },
     });
     const plots =
@@ -480,13 +482,13 @@ export class CustomersService {
     const now = new Date();
     const [rights, holds, ownerBurials, cards, subscriptions, parties] = await Promise.all([
       this.prisma.graveUsageRight.count({
-        where: { holderCustomerId: customerId, status: 'Active' },
+        where: { holderCustomerId: customerId, ...activeUsageRight },
       }),
       this.prisma.graveHold.count({
-        where: { customerId, status: 'Active', expiresAt: { gt: now } },
+        where: { customerId, ...holdStillHolding(now) },
       }),
       this.prisma.burialRecord.count({
-        where: { ownerCustomerId: customerId, status: { in: ACTIVE_BURIAL_STATUSES } },
+        where: { ownerCustomerId: customerId, ...activeBurial() },
       }),
       this.prisma.cardPrintLog.count({ where: { customerId } }),
       this.prisma.serviceSubscription.count({ where: { customerId } }),
@@ -506,7 +508,7 @@ export class CustomersService {
       deceased === null
         ? 0
         : await this.prisma.burialRecord.count({
-            where: { deceasedPersonId: deceased.id, status: { in: ACTIVE_BURIAL_STATUSES } },
+            where: { deceasedPersonId: deceased.id, ...activeBurial() },
           });
 
     const blockers: string[] = [];
@@ -633,7 +635,7 @@ export class CustomersService {
 
     // Một lượt cho cả trang, không phải mỗi khách một lượt.
     const rights = await this.prisma.graveUsageRight.findMany({
-      where: { holderCustomerId: { in: customers.map((c) => c.id) }, status: 'Active' },
+      where: { holderCustomerId: { in: customers.map((c) => c.id) }, ...activeUsageRight },
       select: { holderCustomerId: true, gravePlotId: true },
     });
     const plots =
@@ -850,7 +852,7 @@ export class CustomersService {
    * cả mục đã ngừng thì đó là màn hình lịch sử, không phải màn hình tác nghiệp.
    */
   async getPersonProfile(personId: string) {
-    const active = { where: { status: 'active' }, orderBy: { createdAt: 'asc' } } as const;
+    const active = { where: activeSubRecord, orderBy: { createdAt: 'asc' } } as const;
     const person = await this.prisma.person.findUnique({
       where: { id: personId },
       include: {

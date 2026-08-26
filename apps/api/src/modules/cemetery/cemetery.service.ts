@@ -4,6 +4,7 @@ import { ulid } from 'ulid';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ScopeService } from '../authorization/scope.service';
 import { AuditService } from '../audit/audit.service';
+import { activeBurial, activeUsageRight } from '../../common/lifecycle/active';
 import type {
   ChangeStatusDto,
   CreateCemeteryDto,
@@ -11,11 +12,6 @@ import type {
   CreateGravePlotDto,
   CreateGraveTypeDto,
 } from './cemetery.dto';
-
-/* Hồ sơ an táng còn hiệu lực — huỷ rồi thì cốt được nhả ra. Trùng danh sách trong
- * `burials.service.ts` VÀ trong partial unique index `burial_records_active_slot`; ba chỗ
- * phải nói cùng một điều, nên đổi ở đây thì phải đổi cả migration. */
-const ACTIVE_BURIAL_STATUSES = ['Draft', 'Verified', 'Scheduled', 'Completed'];
 
 @Injectable()
 export class CemeteryService {
@@ -315,7 +311,7 @@ export class CemeteryService {
     }
 
     const existing = await this.prisma.graveUsageRight.findFirst({
-      where: { gravePlotId: dto.gravePlotId, status: 'Active' },
+      where: { gravePlotId: dto.gravePlotId, ...activeUsageRight },
       select: { id: true, holderCustomerId: true },
     });
     if (existing !== null) {
@@ -416,7 +412,7 @@ export class CemeteryService {
     const { right, plot } = await this.activeRightOrThrow(usageRightId, actor);
 
     const burials = await this.prisma.burialRecord.count({
-      where: { gravePlotId: plot.id, status: { in: ACTIVE_BURIAL_STATUSES } },
+      where: { gravePlotId: plot.id, ...activeBurial() },
     });
     if (burials > 0) {
       throw new ConflictException(
@@ -609,7 +605,7 @@ export class CemeteryService {
     await this.scope.assertCompany(actor, plot.companyId);
 
     const right = await this.prisma.graveUsageRight.findFirst({
-      where: { gravePlotId, status: 'Active' },
+      where: { gravePlotId, ...activeUsageRight },
       orderBy: { createdAt: 'desc' },
     });
     const holder =
@@ -628,7 +624,7 @@ export class CemeteryService {
           });
 
     const burials = await this.prisma.burialRecord.findMany({
-      where: { gravePlotId, status: { in: ACTIVE_BURIAL_STATUSES } },
+      where: { gravePlotId, ...activeBurial() },
       include: { deceased: { include: { person: { select: { id: true, fullName: true } } } } },
       orderBy: [{ slotNumber: 'asc' }, { createdAt: 'asc' }],
     });

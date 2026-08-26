@@ -129,7 +129,7 @@ pnpm --filter @erp/api exec tsx scripts/authz-report.ts
 DATABASE_URL=... pnpm --filter @erp/api exec tsx scripts/authz-rules.ts
 ```
 
-**Mốc đo 2026-08-26 (sau khi thêm ràng buộc quan hệ chủ mộ khi an táng):** lệnh 1 = **61** · lệnh 2 = **2 dòng** (`health`, `iam/auth` — cả hai CỐ Ý) · 66 route tổng = 61 gate + 3 `@Public` + 2 tự thân (`logout`, `me`) · **385 test API** (+13 ở `burials.service.spec.ts`) + 9 worker + 16 package.
+**Mốc đo 2026-08-26 (sau khi gom định nghĩa "còn hiệu lực"):** lệnh 1 = **83** · lệnh 2 = **2 dòng** (`health`, `iam/auth` — cả hai CỐ Ý) · **530 test API** · 137 mã quyền · **hai ratchet**: che dữ liệu cá nhân (`test/masking-invariants.spec.ts`) và lọc trạng thái (`test/status-filter-invariants.spec.ts`).
 
 **Khi số đo lệch mốc trên: repo luôn đúng, skill luôn sai.** Cập nhật ngay số + ngày đo trong file này, rồi báo người dùng đã sửa gì.
 
