@@ -22,3 +22,16 @@ export class AddPartyDto {
   @IsIn(['OWNER', 'SIGNER', 'CONTACT'])
   role!: string;
 }
+
+/* Huỷ hợp đồng BẮT BUỘC có lý do.
+ *
+ * Huỷ kéo theo chấm dứt quyền sử dụng và nhả phần mộ về trống — ba hệ quả cho một lần
+ * bấm. Sáu tháng sau nhìn lại mà không có lý do thì không ai nói được vì sao mộ này từng
+ * có chủ rồi lại trống.
+ */
+export class CancelContractDto {
+  @ApiProperty({ description: 'Vì sao huỷ hợp đồng' })
+  @IsString()
+  @MinLength(3)
+  reason!: string;
+}

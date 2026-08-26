@@ -5,6 +5,7 @@ import { Check, Download, FileText, Loader2 } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   activateContract,
+  cancelContract,
   addContractParty,
   createContract,
   fileDownloadUrl,
@@ -84,6 +85,17 @@ export default function ContractsPage() {
     mutationFn: () => addContractParty(selectedId, party.customerId, party.role),
     onSuccess: refetch,
   });
+  /* Huỷ hợp đồng: hỏi lý do rồi mới gọi. Lý do là bắt buộc ở server, nên hỏi ở đây thay
+   * vì để người dùng bấm rồi nhận lỗi 400. */
+  const mCancel = useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason: string }) => cancelContract(id, reason),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['contracts'] });
+      void qc.invalidateQueries({ queryKey: ['gravePlots'] });
+      void qc.invalidateQueries({ queryKey: ['customers'] });
+    },
+  });
+
   const mVerify = useMutation({
     mutationFn: (id: string) => verifyContract(id),
     onSuccess: refetch,
@@ -297,6 +309,28 @@ export default function ContractsPage() {
                             }}
                           >
                             Xác minh
+                          </Button>
+                        ) : null}
+                        {/* Huỷ được ở MỌI trạng thái trừ đã huỷ. Server mới là chỗ chặn
+                            thật (mộ đã có người an táng thì từ chối) — ẩn nút theo trạng
+                            thái ở đây chỉ làm người dùng không hiểu vì sao không có nút. */}
+                        {c.status !== 'Cancelled' ? (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            disabled={mCancel.isPending}
+                            loading={mCancel.isPending && mCancel.variables?.id === c.id}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const reason = window.prompt(
+                                `Huỷ hợp đồng ${c.contractNo}? Nhập lý do (ít nhất 3 ký tự):`,
+                              );
+                              if (reason !== null && reason.trim().length >= 3) {
+                                mCancel.mutate({ id: c.id, reason: reason.trim() });
+                              }
+                            }}
+                          >
+                            Huỷ
                           </Button>
                         ) : null}
                         {c.status === 'Verified' ? (

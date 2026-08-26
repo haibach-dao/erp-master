@@ -328,6 +328,14 @@ export const addContractParty = (
   });
 export const verifyContract = (id: string): Promise<ExternalContract> =>
   apiFetch(`/api/v1/contracts/${id}/verify`, { method: 'POST' });
+/* Huỷ hợp đồng. Server đảo TOÀN BỘ hệ quả của `activate`: chấm dứt quyền sử dụng do hợp
+ * đồng này sinh ra và nhả phần mộ về trống. Lý do bắt buộc — ba hệ quả cho một lần bấm. */
+export const cancelContract = (id: string, reason: string): Promise<unknown> =>
+  apiFetch(`/api/v1/contracts/${encodeURIComponent(id)}/cancel`, {
+    method: 'POST',
+    body: JSON.stringify({ reason }),
+  });
+
 export const activateContract = (id: string): Promise<unknown> =>
   apiFetch(`/api/v1/contracts/${id}/activate`, { method: 'POST' });
 

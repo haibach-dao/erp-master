@@ -33,6 +33,18 @@ export interface BlockingReference {
   activeWhere: (now: Date) => Record<string, unknown>;
   /** Câu tiếng Việt điền vào lời từ chối, nhận số lượng. */
   message: (n: number) => string;
+  /* Lấy NHÃN của vài dòng đang chặn, để lời từ chối chỉ đích danh thay vì chỉ đếm.
+   *
+   * "còn 2 hợp đồng đang hiệu lực" bảo người dùng có việc phải làm; "còn 2 hợp đồng đang
+   * hiệu lực (HD1, HD2)" bảo họ làm ở ĐÂU. Không có nhãn thì họ phải đi dò từng hợp đồng
+   * để tìm hai cái đang chặn.
+   *
+   * Tuỳ chọn: bảng nào không có gì đáng gọi tên thì bỏ qua, đếm suông vẫn đúng. */
+  identify?: (
+    client: Record<string, { findMany: (a: unknown) => Promise<unknown[]> }>,
+    customerId: string,
+    now: Date,
+  ) => Promise<string[]>;
 }
 
 /* Tham chiếu CHẶN xoá.
@@ -46,6 +58,14 @@ export const CUSTOMER_BLOCKING_REFERENCES: readonly BlockingReference[] = [
     column: 'holderCustomerId',
     activeWhere: () => ({ ...activeUsageRight }),
     message: (n) => `đang đứng tên ${n} phần mộ`,
+    identify: async (client, customerId) => {
+      const rows = (await client.graveUsageRight!.findMany({
+        where: { holderCustomerId: customerId, ...activeUsageRight },
+        select: { gravePlot: { select: { plotCode: true } } },
+        take: 3,
+      })) as { gravePlot: { plotCode: string } | null }[];
+      return rows.map((r) => r.gravePlot?.plotCode ?? '?');
+    },
   },
   {
     model: 'GraveHold',
@@ -67,6 +87,17 @@ export const CUSTOMER_BLOCKING_REFERENCES: readonly BlockingReference[] = [
      * chặn vì một bản nháp bỏ đi là bắt người dùng đi dọn thứ vốn đã không còn nghĩa. */
     activeWhere: () => ({ contract: { status: { in: [...BINDING_CONTRACT_STATUSES] } } }),
     message: (n) => `là bên trong ${n} hợp đồng đang hiệu lực`,
+    identify: async (client, customerId) => {
+      const rows = (await client.contractParty!.findMany({
+        where: {
+          customerId,
+          contract: { status: { in: [...BINDING_CONTRACT_STATUSES] } },
+        },
+        select: { contract: { select: { contractNo: true } } },
+        take: 3,
+      })) as { contract: { contractNo: string } | null }[];
+      return rows.map((r) => r.contract?.contractNo ?? '?');
+    },
   },
   {
     model: 'ServiceSubscription',

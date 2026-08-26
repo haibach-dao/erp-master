@@ -504,7 +504,24 @@ export class CustomersService {
             where: { deceasedPersonId: deceased.id, ...activeBurial() },
           });
 
-    const blockers = counted.filter((c) => c.n > 0).map((c) => c.ref.message(c.n));
+    /* Lời từ chối phải chỉ ĐÍCH DANH thứ đang chặn, không chỉ đếm. "còn 2 hợp đồng" bảo
+     * có việc phải làm; "còn 2 hợp đồng (HD1, HD2)" bảo làm ở đâu. */
+    const blockers = await Promise.all(
+      counted
+        .filter((c) => c.n > 0)
+        .map(async (c) => {
+          const base = c.ref.message(c.n);
+          if (c.ref.identify === undefined) return base;
+          const labels = await c.ref.identify(
+            client as unknown as Record<string, { findMany: (a: unknown) => Promise<unknown[]> }>,
+            customerId,
+            now,
+          );
+          const shown = labels.slice(0, 3).join(', ');
+          const more = c.n > labels.length ? `, +${c.n - labels.length}` : '';
+          return shown === '' ? base : `${base} (${shown}${more})`;
+        }),
+    );
     if (burialsAsDeceased > 0) {
       blockers.push(`đã được an táng (${burialsAsDeceased} hồ sơ)`);
     }

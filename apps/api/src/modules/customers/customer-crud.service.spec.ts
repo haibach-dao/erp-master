@@ -64,7 +64,16 @@ function build(
     /* Rào chắn đi theo SỔ ĐĂNG KÝ, nên mock phải phủ mọi model trong sổ. Thiếu một model
      * là `undefined.count` — và đó chính là cách test này bắt được việc ai đó thêm mục
      * vào sổ mà quên nghĩ tới hậu quả. */
-    graveUsageRight: { count: vi.fn().mockResolvedValue(n('rights')) },
+    graveUsageRight: {
+      count: vi.fn().mockResolvedValue(n('rights')),
+      /* `identify` gọi `findMany` để chỉ đích danh thứ đang chặn. Mock trả nhãn thật để
+       * test kiểm được rằng lời từ chối có nêu MÃ MỘ, không chỉ nêu số lượng. */
+      findMany: vi.fn().mockResolvedValue(
+        Array.from({ length: Math.min(n('rights'), 3) }, (_, i) => ({
+          gravePlot: { plotCode: `A-0${i + 1}` },
+        })),
+      ),
+    },
     graveHold: { count: vi.fn().mockResolvedValue(n('holds')) },
     burialRecord: {
       count: vi
@@ -78,7 +87,14 @@ function build(
     cardPrintLog: { count: vi.fn().mockResolvedValue(n('cards')) },
     serviceSubscription: { count: vi.fn().mockResolvedValue(n('subscriptions')) },
     serviceTransaction: { count: vi.fn().mockResolvedValue(n('transactions')) },
-    contractParty: { count: vi.fn().mockResolvedValue(n('parties')) },
+    contractParty: {
+      count: vi.fn().mockResolvedValue(n('parties')),
+      findMany: vi.fn().mockResolvedValue(
+        Array.from({ length: Math.min(n('parties'), 3) }, (_, i) => ({
+          contract: { contractNo: `HD${i + 1}` },
+        })),
+      ),
+    },
     deceasedPerson: {
       findUnique: vi.fn().mockResolvedValue(deceased ? { id: 'dec-1' } : null),
     },
@@ -105,14 +121,14 @@ function build(
  */
 describe('xoá khách hàng — chặn khi đã phát sinh nghiệp vụ', () => {
   it.each([
-    ['đang đứng tên phần mộ', { rights: 1 }, /đang đứng tên 1 phần mộ/],
+    ['đang đứng tên phần mộ', { rights: 1 }, /đang đứng tên 1 phần mộ \(A-01\)/],
     ['có phiếu giữ chỗ', { holds: 2 }, /2 phiếu giữ chỗ còn hiệu lực/],
     ['là chủ mộ trong hồ sơ an táng', { ownerBurials: 1 }, /chủ mộ trong 1 hồ sơ an táng/],
     ['đã được an táng', { burialsAsDeceased: 1 }, /đã được an táng/],
     ['đã cấp thẻ mộ', { cards: 3 }, /được cấp 3 thẻ quản lý mộ/],
     ['đang dùng dịch vụ', { subscriptions: 1 }, /1 dịch vụ đang dùng/],
     ['có giao dịch thu tiền', { transactions: 2 }, /2 giao dịch thu tiền/],
-    ['là bên trong hợp đồng', { parties: 1 }, /bên trong 1 hợp đồng đang hiệu lực/],
+    ['là bên trong hợp đồng', { parties: 1 }, /bên trong 1 hợp đồng đang hiệu lực \(HD1\)/],
   ])('%s thì chặn', async (_label, counts, pattern) => {
     const { svc, deleted } = build({ counts, deceased: (counts as Counts).burialsAsDeceased! > 0 });
 
@@ -126,7 +142,7 @@ describe('xoá khách hàng — chặn khi đã phát sinh nghiệp vụ', () =>
     const { svc } = build({ counts: { rights: 1, cards: 2, parties: 1 } });
 
     await expect(svc.deleteCustomer(CUSTOMER, 'u1')).rejects.toThrow(
-      /đang đứng tên 1 phần mộ.*bên trong 1 hợp đồng.*được cấp 2 thẻ quản lý mộ/s,
+      /đang đứng tên 1 phần mộ \(A-01\).*bên trong 1 hợp đồng đang hiệu lực \(HD1\).*được cấp 2 thẻ quản lý mộ/s,
     );
   });
 

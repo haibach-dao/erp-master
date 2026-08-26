@@ -4,7 +4,8 @@ import { ulid } from 'ulid';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ScopeService } from '../authorization/scope.service';
 import { AuditService } from '../audit/audit.service';
-import type { AddPartyDto, CreateContractDto } from './contracts.dto';
+import { activeBurial, activeUsageRight } from '../../common/lifecycle/active';
+import type { AddPartyDto, CreateContractDto, CancelContractDto } from './contracts.dto';
 
 /* Trạng thái hợp đồng có thể cho hiệu lực từ đó.
  *
@@ -111,6 +112,100 @@ export class ContractsService {
       entityId: id,
     });
     return updated;
+  }
+
+  /* HUỶ hợp đồng — và ĐẢO đúng những gì `activate` đã sinh ra.
+   *
+   * Mã quyền `contract.record.cancel` có trong danh mục từ đầu, nhưng KHÔNG có endpoint
+   * nào. Hậu quả thật: rào chắn xoá khách hàng nói "còn 2 hợp đồng đang hiệu lực, dọn
+   * trước" mà hệ không có chỗ nào để dọn — người dùng bị dồn vào ngõ cụt. Một quyền không
+   * có đường đi kèm là một quyền chỉ tồn tại trên giấy.
+   *
+   * Huỷ phải đảo TOÀN BỘ hệ quả của `activate`, không chỉ đổi trạng thái hợp đồng:
+   *   - quyền sử dụng do hợp đồng này sinh ra phải chấm dứt
+   *   - phần mộ phải trở về trống
+   * Bỏ sót một trong hai là để lại một chủ mộ không có hợp đồng, hoặc một phần mộ mang
+   * trạng thái `Allocated` mà không ai đứng tên.
+   */
+  async cancel(id: string, dto: CancelContractDto, actor: string | null) {
+    const contract = await this.prisma.externalContract.findUnique({ where: { id } });
+    if (contract === null) {
+      throw new NotFoundException('Không tìm thấy hợp đồng');
+    }
+    if (contract.status === 'Cancelled') {
+      throw new ConflictException('Hợp đồng đã huỷ rồi');
+    }
+    await this.scope.assertCompany(actor, contract.companyId);
+
+    /* CHẶN khi phần mộ đã có người an táng. Huỷ hợp đồng lúc đó là rút căn cứ pháp lý của
+     * một việc đã không đảo ngược được — người đã nằm dưới đất rồi. Muốn đổi người chịu
+     * trách nhiệm thì đó là SANG TÊN quyền sử dụng, không phải huỷ hợp đồng. */
+    const burials = await this.prisma.burialRecord.count({
+      where: { gravePlotId: contract.gravePlotId, ...activeBurial() },
+    });
+    if (burials > 0) {
+      throw new ConflictException(
+        `Phần mộ của hợp đồng ${contract.contractNo} đã có ${burials} hồ sơ an táng — không huỷ được. Dùng SANG TÊN nếu muốn đổi chủ mộ.`,
+      );
+    }
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const cancelled = await tx.externalContract.update({
+        where: { id },
+        data: { status: 'Cancelled', version: { increment: 1 } },
+      });
+
+      /* Quyền sử dụng do CHÍNH hợp đồng này sinh ra. Lọc theo `sourceContractId` chứ
+       * không theo phần mộ: một phần mộ có thể đã qua nhiều đời hợp đồng, và huỷ hợp đồng
+       * này không được đụng vào quyền do hợp đồng khác sinh. */
+      const rights = await tx.graveUsageRight.findMany({
+        where: { sourceContractId: id, ...activeUsageRight },
+        select: { id: true },
+      });
+      for (const r of rights) {
+        await tx.graveUsageRight.update({
+          where: { id: r.id },
+          data: {
+            status: 'Ended',
+            effectiveTo: new Date(),
+            endedReason: `huỷ hợp đồng ${contract.contractNo}: ${dto.reason}`,
+          },
+        });
+      }
+
+      const plot = await tx.gravePlot.findUnique({ where: { id: contract.gravePlotId } });
+      /* Chỉ nhả mộ đang `Allocated`. Mộ đã `Occupied` đã bị chặn ở trên; mộ `Available`
+       * thì không có gì để nhả. */
+      if (plot !== null && plot.status === 'Allocated') {
+        await tx.gravePlot.update({
+          where: { id: plot.id },
+          data: { status: 'Available', version: { increment: 1 } },
+        });
+        await tx.gravePlotStatusHistory.create({
+          data: {
+            id: ulid(),
+            gravePlotId: plot.id,
+            fromStatus: plot.status,
+            toStatus: 'Available',
+            reason: `huỷ hợp đồng ${contract.contractNo}`,
+            changedBy: actor,
+          },
+        });
+      }
+      return { cancelled, endedRights: rights.length };
+    });
+
+    await this.audit.record({
+      companyId: contract.companyId,
+      actorType: 'USER',
+      actorId: actor,
+      action: 'CONTRACT.CANCELLED',
+      entityType: 'external_contract',
+      entityId: id,
+      beforeData: { status: contract.status, contractNo: contract.contractNo },
+      afterData: { reason: dto.reason, endedUsageRights: result.endedRights },
+    });
+    return result.cancelled;
   }
 
   // Activate → allocate the plot (G0-G3.1). Blocks if required data missing or another
