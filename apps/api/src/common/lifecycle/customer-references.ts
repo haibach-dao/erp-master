@@ -130,7 +130,7 @@ export const CUSTOMER_BLOCKING_REFERENCES: readonly BlockingReference[] = [
 
 /* Tham chiếu KHÔNG chặn, nhưng phải XOÁ THEO.
  *
- * Sáu bảng ở trên trỏ tới khách hàng bằng id LỎNG — chỉ `grave_holds` có khoá ngoại. Nên
+ * Các bảng ở trên trỏ tới khách hàng bằng id LỎNG — chỉ `grave_holds` có khoá ngoại. Nên
  * dòng lịch sử (quyền đã thu hồi, phiếu đã hết hạn) không chặn được xoá nhưng nếu để lại
  * thì thành con trỏ treo, và màn hình lịch sử sẽ hiện một cái tên trống.
  */

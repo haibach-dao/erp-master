@@ -611,6 +611,8 @@ export const setPlotPosition = (
 export interface CardOccupant {
   burialRecordId: string;
   fullName: string;
+  /* Giới tính để in nhãn quan hệ đúng vai ("Bố đẻ" chứ không "Cha/Mẹ") trên thẻ mộ. */
+  gender: string | null;
   dateOfBirth: string | null;
   dateOfDeath: string | null;
   burialDate: string | null;
@@ -921,6 +923,7 @@ export interface PlotOwnership {
     customerCode: string;
     name: string | null;
     personId: string | null;
+    dateOfBirth: string | null;
     isDeceased: boolean;
   } | null;
   occupants: {
@@ -928,6 +931,8 @@ export interface PlotOwnership {
     slotNumber: number | null;
     personId: string;
     fullName: string;
+    gender: string | null;
+    dateOfBirth: string | null;
     relationshipToOwner: string | null;
     status: string;
     burialDate: string | null;
@@ -1044,7 +1049,15 @@ export interface BurialCandidate {
 export interface BurialCandidates {
   /** Có giá trị = không ai đủ điều kiện VÌ LÝ DO này (chưa có chủ mộ, chủ là tổ chức…). */
   blocked: string | null;
-  owner: { customerId: string; customerCode: string; personId: string; fullName: string } | null;
+  owner: {
+    customerId: string;
+    customerCode: string;
+    personId: string;
+    fullName: string;
+    gender: string | null;
+    /** Ngày sinh chủ mộ — cần để chọn "anh trai" hay "em trai" cho ứng viên. */
+    dateOfBirth: string | null;
+  } | null;
   candidates: BurialCandidate[];
 }
 

@@ -115,7 +115,7 @@ function build(
   return { svc, record, deleted, tx, prisma };
 }
 
-/* Sáu bảng trỏ tới khách hàng bằng id LỎNG — chỉ `grave_holds` có khoá ngoại. Nghĩa là
+/* Các bảng trỏ tới khách hàng bằng id LỎNG — chỉ `grave_holds` có khoá ngoại. Nghĩa là
  * CSDL sẽ vui vẻ để lại con trỏ treo nếu service không tự đếm. Nhóm test này neo từng chỗ
  * đếm đó lại; thiếu một chỗ là xoá xong mới phát hiện, mà lúc đó dữ liệu đã đi rồi.
  */
@@ -338,5 +338,57 @@ describe('xoá khách hàng — chỉ đếm thứ CÒN HIỆU LỰC', () => {
 
     expect(res).toHaveProperty('deletedUsageRights');
     expect(res).toHaveProperty('deletedHolds');
+  });
+});
+
+/* ===================== CHẤM DỨT QUAN HỆ NHÂN THÂN =====================
+ *
+ * Chấm dứt hai lần từng ghi đè `effectiveTo` sang ngày HÔM NAY — tức là sửa lại quá khứ.
+ * Quan hệ chấm dứt từ tháng trước bỗng thành chấm dứt hôm nay, và câu hỏi "lúc an táng thì
+ * quan hệ còn hiệu lực không" bị trả lời sai. Hồ sơ an táng dựa vào đúng câu trả lời đó.
+ */
+function buildRel(status: string, reciprocalId: string | null = 'rel-b') {
+  const updates: { id: string; effectiveTo: Date | null }[] = [];
+  const prisma = {
+    familyRelationship: {
+      findUnique: vi.fn().mockResolvedValue({
+        id: 'rel-a',
+        status,
+        reciprocalRelationshipId: reciprocalId,
+        effectiveTo: status === 'Ended' ? new Date('2026-01-15') : null,
+      }),
+      update: vi
+        .fn()
+        .mockImplementation((args: { where: { id: string }; data: { effectiveTo: Date } }) => {
+          updates.push({ id: args.where.id, effectiveTo: args.data.effectiveTo });
+          return Promise.resolve({ id: args.where.id });
+        }),
+    },
+    $transaction: vi.fn().mockImplementation((ops: Promise<unknown>[]) => Promise.all(ops)),
+  } as unknown as PrismaService;
+
+  const svc = new CustomersService(
+    prisma,
+    {} as unknown as PiiService,
+    { record: vi.fn().mockResolvedValue(undefined) } as unknown as AuditService,
+  );
+  return { svc, updates };
+}
+
+describe('chấm dứt quan hệ nhân thân', () => {
+  it('chấm dứt quan hệ đang hiệu lực thì đóng cả hai chiều', async () => {
+    const { svc, updates } = buildRel('Confirmed');
+
+    await svc.endRelationship('rel-a', 'u1');
+
+    expect(updates.map((u) => u.id).sort()).toEqual(['rel-a', 'rel-b']);
+  });
+
+  it('quan hệ ĐÃ chấm dứt thì từ chối, KHÔNG ghi đè ngày chấm dứt cũ', async () => {
+    const { svc, updates } = buildRel('Ended');
+
+    await expect(svc.endRelationship('rel-a', 'u1')).rejects.toThrow(ConflictException);
+    // Không có lệnh ghi nào chạy — ngày chấm dứt tháng trước vẫn nguyên.
+    expect(updates).toHaveLength(0);
   });
 });

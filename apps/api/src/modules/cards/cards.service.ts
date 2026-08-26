@@ -66,6 +66,10 @@ export class CardsService {
         .map((b) => ({
           burialRecordId: b.id,
           fullName: b.deceased.person.fullName,
+          /* Giới tính để in nhãn quan hệ ĐÚNG VAI: "Bố đẻ"/"Mẹ đẻ", không phải "Cha/Mẹ".
+           * Thẻ mộ được in ra trao tận tay gia đình, nên nhãn chung chung ở đây đọc rất
+           * vô cảm — anh Bách đã yêu cầu rõ "con trai - bố đẻ chứ không chung chung". */
+          gender: b.deceased.person.gender,
           dateOfBirth: b.deceased.person.dateOfBirth,
           dateOfDeath: b.deceased.dateOfDeath,
           burialDate: b.burialDate,

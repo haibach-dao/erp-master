@@ -10,7 +10,10 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { PiiService } from '../../common/pii/pii.service';
 import { AuditService } from '../audit/audit.service';
 import { activeBurial, activeSubRecord, activeUsageRight } from '../../common/lifecycle/active';
-import { CUSTOMER_BLOCKING_REFERENCES } from '../../common/lifecycle/customer-references';
+import {
+  CUSTOMER_BLOCKING_REFERENCES,
+  CUSTOMER_CASCADE_REFERENCES,
+} from '../../common/lifecycle/customer-references';
 import type {
   AddPersonAddressDto,
   AddPersonBankAccountDto,
@@ -175,7 +178,10 @@ export class CustomersService {
       },
     });
     if (existing !== null) {
-      throw new ConflictException('Quan hệ đối ứng đã tồn tại trong khoảng hiệu lực');
+      /* Truy vấn ở trên kiểm dòng CÙNG CHIỀU (source -> target), không phải dòng đối ứng —
+       * thông báo cũ ghi "quan hệ đối ứng" nên người đọc đi tìm nhầm dòng. Thông báo tả
+       * sai việc mã vừa làm thì người dùng sẽ sửa nhầm chỗ. */
+      throw new ConflictException('Quan hệ này đã được khai và còn hiệu lực');
     }
 
     const idA = ulid();
@@ -232,6 +238,14 @@ export class CustomersService {
     const rel = await this.prisma.familyRelationship.findUnique({ where: { id } });
     if (rel === null) {
       throw new NotFoundException('Không tìm thấy quan hệ');
+    }
+    /* Đã chấm dứt rồi thì thôi.
+     *
+     * Trước đây không kiểm: gọi lại lần hai sẽ ghi đè `effectiveTo` sang ngày HÔM NAY, tức
+     * là sửa lại quá khứ — quan hệ chấm dứt từ tháng trước bỗng thành chấm dứt hôm nay, và
+     * mọi câu hỏi "lúc an táng thì quan hệ còn hiệu lực không" sẽ được trả lời sai. */
+    if (rel.status === 'Ended') {
+      throw new ConflictException('Quan hệ này đã chấm dứt rồi');
     }
     const endedAt = new Date();
     const ids = [
@@ -447,10 +461,13 @@ export class CustomersService {
 
   /* ---- Xoá hẳn hồ sơ khách hàng ----
    *
-   * Chỉ xoá được khi CHƯA phát sinh nghiệp vụ nào. Sáu bảng dưới đây trỏ tới khách hàng
-   * bằng id LỎNG — không có khoá ngoại, chỉ `grave_holds` là có — nên CSDL sẽ vui vẻ để
-   * lại con trỏ treo nếu không tự kiểm. Đó là lý do hàm này đếm tay từng chỗ thay vì
-   * trông vào ràng buộc.
+   * Chỉ xoá được khi CHƯA phát sinh nghiệp vụ nào. Các bảng trỏ tới khách hàng bằng id
+   * LỎNG — không có khoá ngoại, chỉ `grave_holds` là có — nên CSDL sẽ vui vẻ để lại con
+   * trỏ treo nếu không tự kiểm.
+   *
+   * Cả hai nhánh (CHẶN và XOÁ THEO) đều SINH RA từ `common/lifecycle/customer-references`,
+   * không viết tay từng lời gọi. Chú thích cũ ở đây từng tả cách làm bằng tay và tả sai
+   * cả số bảng — chú thích tả sai việc mã đang làm còn nguy hơn không có chú thích.
    *
    * Trả về danh sách CHẶN chứ không phải một câu "không xoá được": người dùng cần biết
    * phải dọn cái gì trước, không phải biết là mình vừa thất bại.
@@ -551,8 +568,20 @@ export class CustomersService {
     ]);
 
     await this.prisma.$transaction(async (tx) => {
-      await tx.graveUsageRight.deleteMany({ where: { holderCustomerId: customerId } });
-      await tx.graveHold.deleteMany({ where: { customerId } });
+      /* Xoá theo cũng SINH RA từ sổ đăng ký, cùng nguồn với nhánh chặn. Trước đây chỗ này
+       * gọi tay từng bảng, nên `CUSTOMER_CASCADE_REFERENCES` khai ra mà chỉ có test dùng —
+       * một sổ đăng ký không ai đọc thì không phải sổ đăng ký, chỉ là tài liệu. */
+      const txc = tx as unknown as Record<
+        string,
+        { deleteMany: (a: { where: Record<string, unknown> }) => Promise<{ count: number }> }
+      >;
+      for (const ref of CUSTOMER_CASCADE_REFERENCES) {
+        const model = ref.model.charAt(0).toLowerCase() + ref.model.slice(1);
+        await txc[model]!.deleteMany({ where: { [ref.column]: customerId } });
+      }
+      /* Các bảng dưới đây khoá theo NHÂN THÂN, không theo khách hàng — nên chúng không nằm
+       * trong sổ đăng ký theo cột khách hàng. Sổ đăng ký cho `Person` vẫn CHƯA có; đây
+       * chính là chỗ sẽ hỏng lần sau nếu thêm bảng trỏ vào `persons`. */
       if (personId !== null) {
         await tx.familyRelationship.deleteMany({
           where: { OR: [{ sourcePersonId: personId }, { targetPersonId: personId }] },

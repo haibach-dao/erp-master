@@ -1,4 +1,5 @@
 import type { CardPlot, GraveCard } from '@/lib/api';
+import { birthOrder, relationshipLabel } from '@/lib/relationship';
 
 /* Thẻ Quản Lý Mộ — bản in.
  *
@@ -18,19 +19,22 @@ function fmtDate(value: string | null | undefined): string {
   return Number.isNaN(d.getTime()) ? String(value) : d.toLocaleDateString('vi-VN');
 }
 
-/* Nhãn tiếng Việt cho quan hệ với chủ mộ. `SELF` không phải mã trong danh mục quan hệ —
- * nó là trường hợp chủ mộ tự an táng, nên phải có nhánh riêng chứ không tra bảng. */
-const RELATIONSHIP_LABEL: Record<string, string> = {
-  SELF: 'Chính chủ mộ',
-  SPOUSE: 'Vợ/Chồng',
-  PARENT: 'Cha/Mẹ',
-  CHILD: 'Con',
-  SIBLING: 'Anh/Chị/Em',
-};
-
-function relationshipLabel(code: string | null): string {
+/* Nhãn quan hệ trên thẻ dùng CHUNG `lib/relationship` với các màn hình khác.
+ *
+ * Trước đây file này giữ một bảng nhãn tĩnh riêng, in ra "Cha/Mẹ" và "Con" — trong khi
+ * trang khách hàng đã in "Bố đẻ"/"Con gái". Cùng một quan hệ, hai cách gọi, và cách vô cảm
+ * hơn lại rơi đúng vào tờ giấy trao tận tay gia đình. Nhãn là một luật hiển thị; luật sống
+ * ở hai chỗ thì hai chỗ sẽ lệch.
+ */
+function occupantRelationship(
+  code: string | null,
+  gender: string | null | undefined,
+  dateOfBirth: string | null,
+  ownerDateOfBirth: string | null,
+): string {
   if (code === null) return '';
-  return RELATIONSHIP_LABEL[code] ?? code;
+  // Anh hay em phải so tuổi với CHỦ MỘ mới biết; thiếu ngày sinh thì nhãn lùi về trung tính.
+  return relationshipLabel(code, gender, birthOrder(dateOfBirth, ownerDateOfBirth));
 }
 
 const NOTICES = [
@@ -238,7 +242,13 @@ function MapFace({ plots }: { plots: CardPlot[] }) {
   );
 }
 
-function OccupantsFace({ plots }: { plots: CardPlot[] }) {
+function OccupantsFace({
+  plots,
+  ownerDateOfBirth,
+}: {
+  plots: CardPlot[];
+  ownerDateOfBirth: string | null;
+}) {
   const multi = plots.length > 1;
   /* Dòng trống in sẵn theo `emptySlots` do SERVER tính. Giao diện không tự trừ sức chứa —
    * hai màn hình tự tính sẽ in ra hai loại thẻ khác nhau cho cùng một phần mộ. */
@@ -288,7 +298,12 @@ function OccupantsFace({ plots }: { plots: CardPlot[] }) {
               </td>
               {multi && <td className="px-1.5 py-1 text-[9px]">{row.plot.plotCode}</td>}
               <td className="px-1.5 py-1">
-                {relationshipLabel(row.occupant?.relationshipToOwner ?? null)}
+                {occupantRelationship(
+                  row.occupant?.relationshipToOwner ?? null,
+                  row.occupant?.gender,
+                  row.occupant?.dateOfBirth ?? null,
+                  ownerDateOfBirth,
+                )}
               </td>
               <td className="px-1.5 py-1">
                 {row.occupant === null ? '' : fmtDate(row.occupant.dateOfBirth)}
@@ -321,7 +336,7 @@ export function GraveCardSheets({ card }: { card: GraveCard }) {
       </Sheet>
       <Sheet>
         <MapFace plots={card.plots} />
-        <OccupantsFace plots={card.plots} />
+        <OccupantsFace plots={card.plots} ownerDateOfBirth={card.owner.dateOfBirth} />
       </Sheet>
     </div>
   );

@@ -8,6 +8,7 @@ import {
   activeUsageRight,
   completedBurial,
   confirmedRelationship,
+  inEffect,
 } from '../../common/lifecycle/active';
 import type { CreateBurialDto, CreateDeceasedDto } from './burials.dto';
 
@@ -129,52 +130,67 @@ export class BurialsService {
     if (deceased === null) {
       throw new NotFoundException('Không tìm thấy hồ sơ người mất');
     }
-    if (deceased.personId === owner.personId) {
-      return { ownerCustomerId: owner.id, relationshipToOwner: SELF_RELATIONSHIP };
+    const rel = await this.resolveRelationTo(owner.personId, deceased.personId, new Date());
+    if (rel.code === null) {
+      throw new ConflictException(rel.blocked);
     }
+    return { ownerCustomerId: owner.id, relationshipToOwner: rel.code };
+  }
 
-    const today = new Date();
-    const inEffect = [
-      { OR: [{ effectiveFrom: null }, { effectiveFrom: { lte: today } }] },
-      { OR: [{ effectiveTo: null }, { effectiveTo: { gte: today } }] },
-    ];
-    // Hướng thuận: người mất LÀ GÌ của chủ mộ — đúng chiều cần in ra thẻ.
+  /* Quan hệ của MỘT NGƯỜI với chủ mộ, đã quy về CHIỀU THUẬN — người đó LÀ GÌ của chủ mộ.
+   *
+   * Trả lý do thay vì ném, vì hai chỗ gọi cần hai cách xử khác nhau: `createBurial` phải
+   * TỪ CHỐI kèm lý do, còn danh sách ứng viên chỉ cần LOẠI người đó ra. Nhưng cả hai phải
+   * quy chiều bằng CÙNG một luật — nên luật nằm ở đây, đúng một bản.
+   *
+   * Vì sao phải tách ra: trước đây chú thích ở dưới bảo hai đường "dùng chung
+   * `eligibleRelationWhere`", nhưng thực tế `createBurial` tự dựng lại khoảng hiệu lực và
+   * tự quy chiều qua `reciprocalCode`, còn danh sách ứng viên KHÔNG quy chiều gì cả. Hậu
+   * quả đo được: người chỉ có quan hệ CHIỀU NGƯỢC mà mã quan hệ đó thiếu `reciprocalCode`
+   * trong danh mục VẪN được liệt kê, rồi `createBurial` từ chối — đúng cái "mời chọn rồi
+   * từ chối" mà tính năng này sinh ra để dẹp. Chú thích nói dùng chung không làm cho mã
+   * dùng chung.
+   */
+  private async resolveRelationTo(
+    ownerPersonId: string,
+    personId: string,
+    now: Date,
+  ): Promise<{ code: string; blocked: null } | { code: null; blocked: string }> {
+    if (personId === ownerPersonId) {
+      return { code: SELF_RELATIONSHIP, blocked: null };
+    }
+    const base = { ...confirmedRelationship, AND: inEffect(now) };
+    // Chiều thuận: người này LÀ GÌ của chủ mộ — đúng chiều cần in ra thẻ mộ.
     const direct = await this.prisma.familyRelationship.findFirst({
-      where: {
-        sourcePersonId: deceased.personId,
-        targetPersonId: owner.personId,
-        ...confirmedRelationship,
-        AND: inEffect,
-      },
+      where: { sourcePersonId: personId, targetPersonId: ownerPersonId, ...base },
+      select: { relationshipType: true },
     });
     if (direct !== null) {
-      return { ownerCustomerId: owner.id, relationshipToOwner: direct.relationshipType };
+      return { code: direct.relationshipType, blocked: null };
     }
     /* Dự phòng cho dữ liệu nhập từ hệ cũ chưa có dòng đối ứng: đọc chiều ngược rồi quy
      * về chiều thuận qua `reciprocalCode`. Suy ra bằng danh mục, không tự đặt tên. */
     const reverse = await this.prisma.familyRelationship.findFirst({
-      where: {
-        sourcePersonId: owner.personId,
-        targetPersonId: deceased.personId,
-        ...confirmedRelationship,
-        AND: inEffect,
-      },
+      where: { sourcePersonId: ownerPersonId, targetPersonId: personId, ...base },
+      select: { relationshipType: true },
     });
-    if (reverse !== null) {
-      const rtype = await this.prisma.relationshipType.findUnique({
-        where: { code: reverse.relationshipType },
-        select: { reciprocalCode: true },
-      });
-      if (rtype === null) {
-        throw new ConflictException(
-          `Quan hệ "${reverse.relationshipType}" không có trong danh mục — không quy được chiều`,
-        );
-      }
-      return { ownerCustomerId: owner.id, relationshipToOwner: rtype.reciprocalCode };
+    if (reverse === null) {
+      return {
+        code: null,
+        blocked: 'Người được an táng chưa có quan hệ nhân thân đã xác nhận với chủ mộ',
+      };
     }
-    throw new ConflictException(
-      'Người được an táng chưa có quan hệ nhân thân đã xác nhận với chủ mộ',
-    );
+    const rtype = await this.prisma.relationshipType.findUnique({
+      where: { code: reverse.relationshipType },
+      select: { reciprocalCode: true },
+    });
+    if (rtype === null) {
+      return {
+        code: null,
+        blocked: `Quan hệ "${reverse.relationshipType}" không có trong danh mục — không quy được chiều`,
+      };
+    }
+    return { code: rtype.reciprocalCode, blocked: null };
   }
 
   /* Cốt phải nằm trong sức chứa và chưa ai chiếm.
@@ -214,17 +230,15 @@ export class BurialsService {
    *   2. CÓ QUAN HỆ với chủ mộ, đã xác nhận và còn hiệu lực (hoặc CHÍNH LÀ chủ mộ)
    *   3. CHƯA được gán vào cốt nào — một người chỉ nằm ở một chỗ
    *
-   * Danh sách này và `createBurial` phải nói CÙNG một điều. Chúng dùng chung
-   * `eligibleRelationWhere` để định nghĩa "quan hệ hợp lệ" — hai bản sao của cùng một luật
-   * là hai câu trả lời sẽ lệch nhau, đúng bệnh đã trả giá nhiều lần.
+   * Danh sách này và `createBurial` phải nói CÙNG một điều, và cách duy nhất bảo đảm được
+   * là GỌI CHUNG một hàm: `resolveRelationTo`. Ai không quy được chiều thì bị loại ở đây,
+   * đúng vì `createBurial` sẽ từ chối họ.
    */
   private eligibleRelationWhere(ownerPersonId: string, now: Date) {
     return {
       ...confirmedRelationship,
-      AND: [
-        { OR: [{ effectiveFrom: null }, { effectiveFrom: { lte: now } }] },
-        { OR: [{ effectiveTo: null }, { effectiveTo: { gte: now } }] },
-      ],
+      // Khoảng hiệu lực lấy từ `common/lifecycle` — định nghĩa "còn hiệu lực" chỉ một bản.
+      AND: inEffect(now),
       OR: [{ sourcePersonId: ownerPersonId }, { targetPersonId: ownerPersonId }],
     };
   }
@@ -246,7 +260,11 @@ export class BurialsService {
         id: true,
         customerCode: true,
         orgName: true,
-        person: { select: { id: true, fullName: true } },
+        /* `gender` + `dateOfBirth` của chủ mộ: không phải để hiển thị chủ mộ, mà để giao
+         * diện chọn được nhãn ĐÚNG VAI cho ứng viên — riêng anh/chị/em còn phải so tuổi
+         * với chủ mộ mới biết là "anh trai" hay "em trai". Ngày sinh đi qua lớp che như
+         * mọi chỗ khác, ai không đủ quyền chỉ thấy năm. */
+        person: { select: { id: true, fullName: true, gender: true, dateOfBirth: true } },
       },
     });
     if (owner?.person == null) {
@@ -262,19 +280,18 @@ export class BurialsService {
     // Người có quan hệ hợp lệ với chủ mộ, LẤY CẢ HAI CHIỀU rồi bỏ chính chủ ra.
     const relations = await this.prisma.familyRelationship.findMany({
       where: this.eligibleRelationWhere(ownerPersonId, now),
-      select: { sourcePersonId: true, targetPersonId: true, relationshipType: true },
+      select: { sourcePersonId: true, targetPersonId: true },
     });
     const relatedIds = new Set<string>();
     for (const r of relations) {
       relatedIds.add(r.sourcePersonId === ownerPersonId ? r.targetPersonId : r.sourcePersonId);
     }
     /* Chủ mộ tự an táng vào mộ mình đứng tên là hợp lệ (`SELF`) — nên chính họ cũng là
-     * ứng viên, dù không có quan hệ nào với chính mình. */
+     * ứng viên, dù không có quan hệ nào với chính mình.
+     *
+     * (Không kiểm `relatedIds.size === 0` sau dòng này: vừa thêm chủ mộ vào nên nó không
+     * bao giờ rỗng. Nhánh đó từng tồn tại và là mã chết.) */
     relatedIds.add(ownerPersonId);
-
-    if (relatedIds.size === 0) {
-      return { blocked: null, owner, candidates: [] };
-    }
 
     /* Đã mất VÀ chưa nằm ở đâu. Lọc "chưa nằm ở đâu" bằng truy vấn con thay vì lấy về rồi
      * lọc trong bộ nhớ: danh sách quan hệ có thể dài, và lọc ở CSDL thì luật nằm một chỗ. */
@@ -299,15 +316,32 @@ export class BurialsService {
       orderBy: { person: { fullName: 'asc' } },
     });
 
-    return {
-      blocked: null,
-      owner: {
-        customerId: owner.id,
-        customerCode: owner.customerCode,
-        personId: ownerPersonId,
-        fullName: owner.person.fullName,
-      },
-      candidates: deceased.map((d) => ({
+    /* Quy chiều quan hệ cho TỪNG ứng viên bằng ĐÚNG hàm `createBurial` dùng, rồi loại ai
+     * không quy được. Trước đây chỗ này tự dò `relations.find(...)` và lấy đại mã quan hệ
+     * theo chiều nào cũng được — nên nó trả lời khác `createBurial`, và người dùng chọn
+     * xong mới bị từ chối.
+     *
+     * Có N+1 truy vấn ở đây và đó là đánh đổi CỐ Ý: danh sách này là thân nhân của MỘT chủ
+     * mộ nên rất ngắn, còn việc hai đường trả lời lệch nhau thì đã hỏng thật một lần rồi.
+     */
+    const candidates: {
+      deceasedPersonId: string;
+      personId: string;
+      fullName: string;
+      gender: string | null;
+      dateOfBirth: Date | null;
+      dateOfDeath: Date | null;
+      customerId: string | null;
+      customerCode: string | null;
+      isOwner: boolean;
+      relationshipType: string;
+    }[] = [];
+    for (const d of deceased) {
+      const rel = await this.resolveRelationTo(ownerPersonId, d.person.id, now);
+      if (rel.code === null) {
+        continue;
+      }
+      candidates.push({
         deceasedPersonId: d.id,
         personId: d.person.id,
         fullName: d.person.fullName,
@@ -317,13 +351,21 @@ export class BurialsService {
         customerId: d.person.customer?.id ?? null,
         customerCode: d.person.customer?.customerCode ?? null,
         isOwner: d.person.id === ownerPersonId,
-        relationshipType:
-          d.person.id === ownerPersonId
-            ? SELF_RELATIONSHIP
-            : (relations.find(
-                (r) => r.sourcePersonId === d.person.id || r.targetPersonId === d.person.id,
-              )?.relationshipType ?? null),
-      })),
+        relationshipType: rel.code,
+      });
+    }
+
+    return {
+      blocked: null,
+      owner: {
+        customerId: owner.id,
+        customerCode: owner.customerCode,
+        personId: ownerPersonId,
+        fullName: owner.person.fullName,
+        gender: owner.person.gender,
+        dateOfBirth: owner.person.dateOfBirth,
+      },
+      candidates,
     };
   }
 
