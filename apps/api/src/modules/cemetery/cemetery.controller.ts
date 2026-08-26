@@ -12,6 +12,7 @@ import {
   CreateCompanyDto,
   CreateGravePlotDto,
   CreateGraveTypeDto,
+  SetPlotPositionDto,
 } from './cemetery.dto';
 
 // M0 cemetery catalog. Every route carries a permission code; the record-level scope
@@ -98,5 +99,20 @@ export class CemeteryController {
   @RequirePermission('cemetery.plot.view_history')
   statusHistory(@Param('id') id: string) {
     return this.svc.getStatusHistory(id);
+  }
+
+  /* Toạ độ sơ đồ mặt bằng — tách khỏi `set_status` vì là hai việc khác nhau: đổi trạng
+   * thái là nghiệp vụ bán/an táng, đặt toạ độ là số hoá bản vẽ. Người làm bản vẽ không
+   * vì thế mà được đổi trạng thái mộ. */
+  @Post('grave-plots/:id/position')
+  @RequirePermission('cemetery.plot.update')
+  setPosition(@Param('id') id: string, @Body() dto: SetPlotPositionDto, @Req() req: Request) {
+    return this.svc.setPlotPosition(id, dto, req.user?.userId ?? null);
+  }
+
+  @Get('cemeteries/:id/plot-map')
+  @RequirePermission('cemetery.plot.view')
+  plotMap(@Param('id') id: string, @Req() req: Request) {
+    return this.svc.plotMap(id, req.user?.userId ?? null);
   }
 }

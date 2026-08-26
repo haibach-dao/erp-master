@@ -17,6 +17,13 @@ const STATUS: Record<string, { label: string; variant: Variant }> = {
   Held: { label: 'Đang giữ chỗ', variant: 'warning' },
   Allocated: { label: 'Đã phân bổ', variant: 'info' },
   Occupied: { label: 'Đã an táng', variant: 'neutral' },
+  /* Ba mã dưới đây có trong GRAVE_PLOT_STATUSES của server nhưng trước đây
+   * thiếu nhãn ở đây, nên chúng rơi xuống nhánh "hiện nguyên mã" và người dùng
+   * đọc chữ tiếng Anh giữa trang tiếng Việt. Chưa nghiệp vụ nào đặt ba trạng
+   * thái này, nhưng thiếu nhãn thì lúc có sẽ hiện sai chứ không báo lỗi. */
+  Reserved: { label: 'Đã đặt chỗ', variant: 'warning' },
+  Maintenance: { label: 'Đang bảo trì', variant: 'warning' },
+  Locked: { label: 'Đang khoá', variant: 'destructive' },
 
   // Hồ sơ hợp đồng / an táng
   Draft: { label: 'Nháp', variant: 'neutral' },

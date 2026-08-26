@@ -29,6 +29,22 @@ export const SENSITIVE_FIELDS: readonly MaskRule[] = [
   { field: 'dateOfBirth', permission: 'crm.person.view_contact', strategy: 'year' },
   { field: 'dateOfDeath', permission: 'crm.person.view_contact', strategy: 'year' },
   { field: 'address', permission: 'crm.person.view_contact' },
+  { field: 'permanentAddress', permission: 'crm.person.view_contact' },
+  { field: 'contactAddress', permission: 'crm.person.view_contact' },
+  /* Dân tộc và tôn giáo: NĐ 13/2023 Điều 2.4 xếp vào dữ liệu cá nhân NHẠY CẢM, cùng nhóm
+   * với CCCD chứ không phải nhóm liên lạc — nên mở bằng `view_sensitive` (S3), KHÔNG phải
+   * `view_contact` (S2). Người bán cần gọi được cho khách; họ không cần biết khách theo
+   * đạo gì. */
+  { field: 'ethnicity', permission: 'crm.person.view_sensitive' },
+  { field: 'religion', permission: 'crm.person.view_sensitive' },
+  /* Nơi/ngày cấp CCCD đi liền với số CCCD nên cùng mức S3. Ngày cấp che thành NĂM: đủ để
+   * đối chiếu giấy tờ còn hạn hay không, không đủ để dò ra số. */
+  { field: 'nationalIdIssuedOn', permission: 'crm.person.view_sensitive', strategy: 'year' },
+  { field: 'nationalIdIssuedPlace', permission: 'crm.person.view_sensitive' },
+  /* Số tài khoản: mã RIÊNG, không dùng chung `view_sensitive`. CCCD lộ ra là rủi ro định
+   * danh; số tài khoản lộ ra là rủi ro tài chính. Ai cần cái thứ nhất để làm thủ tục tang
+   * lễ thì không vì thế mà cần cái thứ hai. */
+  { field: 'accountNumber', permission: 'crm.person.view_financial' },
   /* Địa chỉ IP là dữ liệu cá nhân theo NĐ13, và audit event nào cũng có một cái. Mở khoá
    * bằng cùng mã mở khoá ảnh chụp before/after — người đọc được nội dung thay đổi thì cũng
    * là người cần biết nó đến từ đâu; người chỉ xem nhật ký ở mức thường thì không cần
@@ -56,8 +72,45 @@ export const REVIEWED_NON_SENSITIVE: Readonly<Record<string, string>> = {
   notes: 'Ghi chú nghiệp vụ. RỦI RO ĐÃ BIẾT: người dùng có thể gõ dữ liệu cá nhân vào đây',
   genderSpecific:
     'Cờ boolean trên loại quan hệ nhân thân (Cha/Mẹ có phân biệt giới). Không phải dữ liệu của ai',
+  // Mã ngân hàng (VCB, BIDV...) là danh mục công khai. Che nó không giấu được gì, mà số
+  // tài khoản — thứ thật sự nhạy cảm — đã có luật che riêng bằng `view_financial`.
+  bankCode: 'Mã ngân hàng là danh mục công khai; số tài khoản mới là thứ được che',
+  /* Ba tên dưới đây là TÊN QUAN HỆ (mảng con của Person), không phải cột dữ liệu. Che
+   * chúng là xoá trắng cả mảng — sai chỗ: thứ nhạy cảm nằm ở LÁ bên trong (`phone`,
+   * `address`, `accountNumber`), và mỗi lá đã có luật che riêng, áp đệ quy qua maskTree.
+   * Ratchet bắt được chúng vì nó khớp theo tên chứ không phân biệt cột với quan hệ — đó
+   * là cảnh báo thừa đúng như thiết kế, thà thừa hơn sót. */
+  phones: 'Tên quan hệ PersonPhone[]; lá `phone` bên trong mới là thứ được che',
+  addresses: 'Tên quan hệ PersonAddress[]; lá `address` bên trong mới là thứ được che',
+  bankAccounts: 'Tên quan hệ PersonBankAccount[]; lá `accountNumber` bên trong mới là thứ được che',
+  accountHolder: 'Tên chủ tài khoản — là TÊN NGƯỜI, cùng lý do với fullName: gate bằng quyền route',
+  /* Hai nhãn của nhật ký kiểm toán (thêm 2026-08-26). Ghi ở đây vì chúng CHỨA dữ liệu mà
+   * sổ trên có che: `actorLabel` là email, `entityLabel` có thể là họ tên. Sổ khớp theo
+   * TÊN trường nên hai nhãn này không bị che — đó là CHỦ ĐÍCH, không phải sơ suất, và
+   * quyết định phải đọc được ở đây chứ không nằm im trong một file khác.
+   *
+   * Căn cứ: (1) nhật ký kiểm toán tồn tại để QUY TRÁCH NHIỆM — che người thao tác là xoá
+   * công dụng của nó; (2) hiến pháp INDEVCO công bố trước việc audit hoạt động trên tài
+   * sản số công ty; (3) `fullName` vốn đã được rà là dữ liệu tác nghiệp, gate bằng quyền
+   * route; (4) chỉ 5 vai có `audit.event.view`.
+   *
+   * Nếu về sau chủ doanh nghiệp muốn siết, chỗ sửa là thêm hai dòng vào SENSITIVE_FIELDS
+   * với mã `audit.event.view_sensitive` — cùng mã đang mở ảnh chụp before/after và IP. */
+  actorLabel:
+    'Email người thao tác trong nhật ký kiểm toán — danh tính NHÂN VIÊN để quy trách nhiệm, không phải dữ liệu khách hàng',
+  entityLabel:
+    'Tên đối tượng bị tác động trong nhật ký kiểm toán — cùng lý do với fullName, gate bằng audit.event.view',
+  entityTypeLabel:
+    'Nhãn loại đối tượng (Nhân thân/Khách hàng/Phần mộ...) — không phải dữ liệu của ai',
 };
 
-/** Tên trường nghi vấn — dùng cho test quét schema. Thà cảnh báo thừa hơn bỏ sót. */
+/* Tên trường nghi vấn — dùng cho test quét schema. Thà cảnh báo thừa hơn bỏ sót.
+ *
+ * Nhóm thứ hai (dân tộc/tôn giáo/ngân hàng/sức khoẻ/sinh trắc…) được thêm 2026-08-26.
+ * Trước đó ratchet KHÔNG bắt chúng: NĐ 13/2023 Điều 2.4 liệt kê chúng là dữ liệu nhạy
+ * cảm, nhưng vì hệ chưa có cột nào tên như vậy nên không ai để ý là tấm lưới có lỗ. Nếu
+ * sau này nhập dữ liệu nhân sự từ hệ cũ (`dan_toc`, `ton_giao`, `ProfileBankAccounts`),
+ * cột mới sẽ lọt thẳng ra API mà build vẫn xanh. Vá trước khi cần, không vá sau khi lộ.
+ */
 export const SUSPICIOUS_FIELD_PATTERN =
-  /(phone|email|address|dateOfBirth|dateOfDeath|nationalId|fullName|orgName|gender|notes|cccd|cmnd|ngaySinh|soCccd)/i;
+  /(phone|email|address|dateOfBirth|dateOfDeath|nationalId|fullName|orgName|gender|notes|cccd|cmnd|ngaySinh|soCccd|religion|ethnic|race|bank|account(?:Number|No)|health|medical|disability|blood|biometric|fingerprint|marital|placeOfBirth|criminal|politic|union|sexual|danToc|tonGiao|soTaiKhoan)/i;

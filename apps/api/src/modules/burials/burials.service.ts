@@ -6,6 +6,11 @@ import type { CreateBurialDto, CreateDeceasedDto } from './burials.dto';
 
 const ACTIVE_BURIAL_STATUSES = ['Draft', 'Verified', 'Scheduled', 'Completed'];
 
+/* Chủ mộ tự an táng vào chính phần mộ mình đứng tên. Không phải một mã trong
+ * `relationship_types` — ở đó không có "quan hệ với chính mình" — nên dùng một hằng
+ * riêng, và cố ý KHÔNG thêm vào danh mục để không ai gán nó cho hai người khác nhau. */
+const SELF_RELATIONSHIP = 'SELF';
+
 @Injectable()
 export class BurialsService {
   constructor(
@@ -41,6 +46,98 @@ export class BurialsService {
     };
   }
 
+  /* Người được an táng phải có quan hệ với chủ mộ (quyết định 2026-08-26).
+   *
+   * Trả về CĂN CỨ chứ không phải true/false: hồ sơ an táng phải kể được vì sao lúc đó
+   * cho phép, kể cả sau khi mộ đổi chủ hoặc quan hệ bị chấm dứt. Hai giá trị trả về được
+   * chụp thẳng vào bản ghi.
+   *
+   * Chỉ nhận quan hệ đã `Confirmed` và còn trong hiệu lực. Quan hệ `Pending`/`Disputed`
+   * KHÔNG đủ căn cứ đặt cốt — đó là việc không đảo ngược được.
+   */
+  private async resolveOwnerRelationship(
+    gravePlotId: string,
+    deceasedPersonId: string,
+  ): Promise<{ ownerCustomerId: string; relationshipToOwner: string }> {
+    const right = await this.prisma.graveUsageRight.findFirst({
+      where: { gravePlotId, status: 'Active' },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (right === null) {
+      throw new ConflictException(
+        'Mộ chưa có chủ đứng tên (chưa có quyền sử dụng hiệu lực) — không xác định được quan hệ',
+      );
+    }
+    const owner = await this.prisma.customer.findUnique({
+      where: { id: right.holderCustomerId },
+      select: { id: true, personId: true },
+    });
+    if (owner === null) {
+      throw new NotFoundException('Không tìm thấy chủ mộ');
+    }
+    if (owner.personId === null) {
+      /* Khách hàng tổ chức không có nhân thân để đối chiếu. CHƯA có quyết định về trường
+       * hợp này, nên chặn thay vì tự bịa ra một ngoại lệ — mở ngoại lệ ở đây là mở một
+       * đường vòng qua toàn bộ luật quan hệ. */
+      throw new ConflictException(
+        'Mộ do khách hàng tổ chức đứng tên — chưa có quy tắc quan hệ nhân thân cho trường hợp này',
+      );
+    }
+    const deceased = await this.prisma.deceasedPerson.findUnique({
+      where: { id: deceasedPersonId },
+      select: { personId: true },
+    });
+    if (deceased === null) {
+      throw new NotFoundException('Không tìm thấy hồ sơ người mất');
+    }
+    if (deceased.personId === owner.personId) {
+      return { ownerCustomerId: owner.id, relationshipToOwner: SELF_RELATIONSHIP };
+    }
+
+    const today = new Date();
+    const inEffect = [
+      { OR: [{ effectiveFrom: null }, { effectiveFrom: { lte: today } }] },
+      { OR: [{ effectiveTo: null }, { effectiveTo: { gte: today } }] },
+    ];
+    // Hướng thuận: người mất LÀ GÌ của chủ mộ — đúng chiều cần in ra thẻ.
+    const direct = await this.prisma.familyRelationship.findFirst({
+      where: {
+        sourcePersonId: deceased.personId,
+        targetPersonId: owner.personId,
+        status: 'Confirmed',
+        AND: inEffect,
+      },
+    });
+    if (direct !== null) {
+      return { ownerCustomerId: owner.id, relationshipToOwner: direct.relationshipType };
+    }
+    /* Dự phòng cho dữ liệu nhập từ hệ cũ chưa có dòng đối ứng: đọc chiều ngược rồi quy
+     * về chiều thuận qua `reciprocalCode`. Suy ra bằng danh mục, không tự đặt tên. */
+    const reverse = await this.prisma.familyRelationship.findFirst({
+      where: {
+        sourcePersonId: owner.personId,
+        targetPersonId: deceased.personId,
+        status: 'Confirmed',
+        AND: inEffect,
+      },
+    });
+    if (reverse !== null) {
+      const rtype = await this.prisma.relationshipType.findUnique({
+        where: { code: reverse.relationshipType },
+        select: { reciprocalCode: true },
+      });
+      if (rtype === null) {
+        throw new ConflictException(
+          `Quan hệ "${reverse.relationshipType}" không có trong danh mục — không quy được chiều`,
+        );
+      }
+      return { ownerCustomerId: owner.id, relationshipToOwner: rtype.reciprocalCode };
+    }
+    throw new ConflictException(
+      'Người được an táng chưa có quan hệ nhân thân đã xác nhận với chủ mộ',
+    );
+  }
+
   async createBurial(dto: CreateBurialDto, actor: string | null) {
     const { plotStatus, cap } = await this.effectiveCapacity(dto.gravePlotId);
     if (plotStatus !== 'Allocated' && plotStatus !== 'Occupied') {
@@ -54,12 +151,18 @@ export class BurialsService {
     if (activeCount >= cap) {
       throw new ConflictException(`Vượt sức chứa mộ (${activeCount}/${cap})`);
     }
+    const { ownerCustomerId, relationshipToOwner } = await this.resolveOwnerRelationship(
+      dto.gravePlotId,
+      dto.deceasedPersonId,
+    );
     const burial = await this.prisma.burialRecord.create({
       data: {
         id: ulid(),
         gravePlotId: dto.gravePlotId,
         deceasedPersonId: dto.deceasedPersonId,
         contractId: dto.contractId ?? null,
+        ownerCustomerId,
+        relationshipToOwner,
         burialDate: dto.burialDate !== undefined ? new Date(dto.burialDate) : null,
         legalDocFileId: dto.legalDocFileId ?? null,
         notes: dto.notes ?? null,
@@ -71,7 +174,12 @@ export class BurialsService {
       action: 'BURIAL.CREATED',
       entityType: 'burial_record',
       entityId: burial.id,
-      afterData: { gravePlotId: dto.gravePlotId, deceasedPersonId: dto.deceasedPersonId },
+      afterData: {
+        gravePlotId: dto.gravePlotId,
+        deceasedPersonId: dto.deceasedPersonId,
+        ownerCustomerId,
+        relationshipToOwner,
+      },
     });
     return burial;
   }

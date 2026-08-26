@@ -1,5 +1,16 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEmail, IsIn, IsISO8601, IsOptional, IsString, MinLength } from 'class-validator';
+import {
+  IsBoolean,
+  IsEmail,
+  IsIn,
+  IsInt,
+  IsISO8601,
+  IsOptional,
+  IsString,
+  Max,
+  Min,
+  MinLength,
+} from 'class-validator';
 
 export class CreatePersonDto {
   @ApiProperty() @IsString() @MinLength(1) fullName!: string;
@@ -12,6 +23,40 @@ export class CreatePersonDto {
   @IsOptional()
   @IsString()
   nationalId?: string;
+
+  @ApiPropertyOptional({ description: 'Ngày cấp CCCD' })
+  @IsOptional()
+  @IsISO8601()
+  nationalIdIssuedOn?: string;
+
+  @ApiPropertyOptional({ description: 'Nơi cấp CCCD' })
+  @IsOptional()
+  @IsString()
+  nationalIdIssuedPlace?: string;
+
+  @ApiPropertyOptional() @IsOptional() @IsString() phone?: string;
+  @ApiPropertyOptional() @IsOptional() @IsEmail() email?: string;
+  @ApiPropertyOptional({ description: 'Địa chỉ thường trú' })
+  @IsOptional()
+  @IsString()
+  permanentAddress?: string;
+  @ApiPropertyOptional({ description: 'Địa chỉ liên hệ' })
+  @IsOptional()
+  @IsString()
+  contactAddress?: string;
+
+  /* Dân tộc / tôn giáo: để văn bản tự do, KHÔNG ép danh mục đóng. Danh mục 54 dân tộc là
+   * chuyện nhà nước có thể sửa, và tôn giáo thì không có danh sách đóng nào đúng cho mọi
+   * người — ép enum ở đây là buộc người nhập phải nói dối khi không khớp. */
+  @ApiPropertyOptional({ description: 'Dân tộc — dữ liệu nhạy cảm NĐ13 Điều 2.4' })
+  @IsOptional()
+  @IsString()
+  ethnicity?: string;
+
+  @ApiPropertyOptional({ description: 'Tôn giáo — dữ liệu nhạy cảm NĐ13 Điều 2.4' })
+  @IsOptional()
+  @IsString()
+  religion?: string;
 }
 
 export class CreateCustomerDto {
@@ -42,4 +87,57 @@ export class CreateRelationshipDto {
   relationshipType!: string;
   @ApiPropertyOptional() @IsOptional() @IsISO8601() effectiveFrom?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() verificationSource?: string;
+}
+
+/* ---- Bảng phụ nhân thân ----
+ *
+ * Bốn DTO dưới đây cố ý KHÔNG nhận `personId` trong thân yêu cầu: person id lấy từ đường
+ * dẫn. Nhận trong thân là để client tự chọn ghi vào hồ sơ nào — đúng hình dạng của lỗi
+ * IDOR, và guard phạm vi ở tầng trên sẽ không thấy gì bất thường.
+ */
+
+export class AddPersonPhoneDto {
+  @ApiProperty() @IsString() @MinLength(1) phone!: string;
+  @ApiPropertyOptional({ description: 'MOBILE | HOME | WORK | RELATIVE — nhãn tự do' })
+  @IsOptional()
+  @IsString()
+  kind?: string;
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() isPrimary?: boolean;
+  @ApiPropertyOptional() @IsOptional() @IsString() notes?: string;
+}
+
+export class AddPersonAddressDto {
+  @ApiProperty() @IsString() @MinLength(1) address!: string;
+  @ApiPropertyOptional({ description: 'TEMPORARY | WORK | HOMETOWN | OTHER' })
+  @IsOptional()
+  @IsString()
+  kind?: string;
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() isPrimary?: boolean;
+  @ApiPropertyOptional() @IsOptional() @IsString() notes?: string;
+}
+
+export class AddPersonEducationDto {
+  @ApiPropertyOptional() @IsOptional() @IsString() school?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() major?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() degree?: string;
+  @ApiPropertyOptional({ description: 'Năm tốt nghiệp' })
+  @IsOptional()
+  @IsInt()
+  @Min(1900)
+  @Max(2200)
+  graduationYear?: number;
+  @ApiPropertyOptional() @IsOptional() @IsString() notes?: string;
+}
+
+export class AddPersonBankAccountDto {
+  @ApiProperty({ description: 'Mã ngân hàng, ví dụ VCB' })
+  @IsString()
+  @MinLength(1)
+  bankCode!: string;
+  @ApiProperty({ description: 'Số tài khoản — che bằng crm.person.view_financial' })
+  @IsString()
+  @MinLength(1)
+  accountNumber!: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() accountHolder?: string;
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() isPrimary?: boolean;
 }

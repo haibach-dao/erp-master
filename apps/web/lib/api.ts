@@ -126,7 +126,22 @@ export interface DedupWarning {
 
 export interface CreateCustomerInput {
   type: string;
-  person?: { fullName: string; gender?: string; nationalId?: string };
+  person?: {
+    fullName: string;
+    gender?: string;
+    dateOfBirth?: string;
+    nationalId?: string;
+    nationalIdIssuedOn?: string;
+    nationalIdIssuedPlace?: string;
+    phone?: string;
+    email?: string;
+    permanentAddress?: string;
+    contactAddress?: string;
+    /* Dân tộc / tôn giáo — dữ liệu nhạy cảm theo NĐ13 Điều 2.4, chỉ người cầm
+     * `crm.person.view_sensitive` đọc lại được bản không che. */
+    ethnicity?: string;
+    religion?: string;
+  };
   orgName?: string;
   phone?: string;
   email?: string;
@@ -533,3 +548,254 @@ export const moveAccessRule = (id: string, direction: 'up' | 'down'): Promise<un
 
 export const revokeAccessRule = (id: string): Promise<unknown> =>
   apiFetch(`/api/v1/authz/access-rules/${encodeURIComponent(id)}`, { method: 'DELETE' });
+
+/* ---- Sơ đồ mặt bằng ---- */
+
+export interface PlotMapEntry {
+  id: string;
+  plotCode: string;
+  status: string;
+  zone: string | null;
+  subzone: string | null;
+  block: string | null;
+  row: string | null;
+  mapX: number;
+  mapY: number;
+}
+
+export interface PlotMap {
+  cemeteryId: string;
+  cemeteryName: string;
+  plots: PlotMapEntry[];
+  totalPlots: number;
+  /** Số mộ chưa có toạ độ — server nói thẳng thay vì im lặng bỏ qua. */
+  missingPosition: number;
+}
+
+export const getPlotMap = (cemeteryId: string): Promise<PlotMap> =>
+  apiFetch(`/api/v1/cemetery/cemeteries/${encodeURIComponent(cemeteryId)}/plot-map`);
+
+export const setPlotPosition = (
+  gravePlotId: string,
+  mapX: number | null,
+  mapY: number | null,
+): Promise<PlotMapEntry> =>
+  apiFetch(`/api/v1/cemetery/grave-plots/${encodeURIComponent(gravePlotId)}/position`, {
+    method: 'POST',
+    body: JSON.stringify({ mapX, mapY }),
+  });
+
+/* ---- Thẻ quản lý mộ ---- */
+
+export interface CardOccupant {
+  burialRecordId: string;
+  fullName: string;
+  dateOfBirth: string | null;
+  dateOfDeath: string | null;
+  burialDate: string | null;
+  relationshipToOwner: string | null;
+  status: string;
+}
+
+export interface CardPlot {
+  gravePlotId: string;
+  plotCode: string;
+  cemeteryName: string;
+  zone: string | null;
+  subzone: string | null;
+  block: string | null;
+  row: string | null;
+  mapX: number | null;
+  mapY: number | null;
+  graveTypeName: string;
+  capacity: number;
+  emptySlots: number;
+  occupants: CardOccupant[];
+}
+
+export interface GraveCard {
+  customerId: string;
+  customerCode: string;
+  owner: {
+    fullName: string | null;
+    gender: string | null;
+    dateOfBirth: string | null;
+    nationalIdMasked: string | null;
+    nationalIdIssuedOn: string | null;
+    nationalIdIssuedPlace: string | null;
+    phone: string | null;
+    permanentAddress: string | null;
+    religion: string | null;
+  };
+  ownershipDate: string | null;
+  plots: CardPlot[];
+  /** Chỉ có ở bản xem trước — số DỰ KIẾN nếu bấm cấp thẻ. */
+  nextPrintNumber?: number;
+  /** Chỉ có sau khi đã cấp. */
+  printNumber?: number;
+  cardPrintLogId?: string;
+  approvedBy?: string | null;
+  approvedTitle?: string | null;
+  issued: boolean;
+  reprint?: boolean;
+}
+
+export interface CardIssuance {
+  id: string;
+  printNumber: number;
+  printReason: string | null;
+  approvedBy: string | null;
+  approvedTitle: string | null;
+  issuedBy: string | null;
+  issuedAt: string;
+}
+
+export const previewGraveCard = (customerId: string): Promise<GraveCard> =>
+  apiFetch(`/api/v1/cemetery/cards/${encodeURIComponent(customerId)}/preview`);
+
+export const issueGraveCard = (
+  customerId: string,
+  input: { printReason?: string; approvedBy?: string; approvedTitle?: string },
+): Promise<GraveCard> =>
+  apiFetch(`/api/v1/cemetery/cards/${encodeURIComponent(customerId)}/issue`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+
+export const reprintGraveCard = (cardPrintLogId: string): Promise<GraveCard> =>
+  apiFetch(`/api/v1/cemetery/cards/reprint/${encodeURIComponent(cardPrintLogId)}`);
+
+export const listCardIssuances = (customerId: string): Promise<CardIssuance[]> =>
+  apiFetch(`/api/v1/cemetery/cards/${encodeURIComponent(customerId)}/issuances`);
+
+/* ---- Hồ sơ nhân thân đầy đủ ---- */
+
+export interface PersonSubRecord {
+  id: string;
+  status: string;
+  isPrimary?: boolean;
+  kind?: string | null;
+  notes?: string | null;
+}
+
+export interface PersonProfile {
+  id: string;
+  fullName: string;
+  gender: string | null;
+  dateOfBirth: string | null;
+  nationalIdMasked: string | null;
+  nationalIdIssuedOn: string | null;
+  nationalIdIssuedPlace: string | null;
+  phone: string | null;
+  email: string | null;
+  permanentAddress: string | null;
+  contactAddress: string | null;
+  ethnicity: string | null;
+  religion: string | null;
+  phones: (PersonSubRecord & { phone: string })[];
+  addresses: (PersonSubRecord & { address: string })[];
+  education: (PersonSubRecord & {
+    school: string | null;
+    major: string | null;
+    degree: string | null;
+    graduationYear: number | null;
+  })[];
+  bankAccounts: (PersonSubRecord & {
+    bankCode: string;
+    accountNumber: string;
+    accountHolder: string | null;
+  })[];
+}
+
+export const getPersonProfile = (personId: string): Promise<PersonProfile> =>
+  apiFetch(`/api/v1/crm/persons/${encodeURIComponent(personId)}/profile`);
+
+export const addPersonPhone = (
+  personId: string,
+  input: { phone: string; kind?: string; isPrimary?: boolean; notes?: string },
+) =>
+  apiFetch(`/api/v1/crm/persons/${encodeURIComponent(personId)}/phones`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+
+export const addPersonAddress = (
+  personId: string,
+  input: { address: string; kind?: string; isPrimary?: boolean; notes?: string },
+) =>
+  apiFetch(`/api/v1/crm/persons/${encodeURIComponent(personId)}/addresses`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+
+export const addPersonEducation = (
+  personId: string,
+  input: { school?: string; major?: string; degree?: string; graduationYear?: number },
+) =>
+  apiFetch(`/api/v1/crm/persons/${encodeURIComponent(personId)}/education`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+
+export const addPersonBankAccount = (
+  personId: string,
+  input: {
+    bankCode: string;
+    accountNumber: string;
+    accountHolder?: string;
+    isPrimary?: boolean;
+  },
+) =>
+  apiFetch(`/api/v1/crm/persons/${encodeURIComponent(personId)}/bank-accounts`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+
+export const deactivatePersonSubRecord = (
+  personId: string,
+  kind: 'phones' | 'addresses' | 'education' | 'bank-accounts',
+  recordId: string,
+) =>
+  apiFetch(
+    `/api/v1/crm/persons/${encodeURIComponent(personId)}/${kind}/${encodeURIComponent(recordId)}/deactivate`,
+    { method: 'POST' },
+  );
+
+/* ---- Chi tiết khách hàng 360 ---- */
+
+export interface CustomerPlot {
+  gravePlotId: string;
+  plotCode: string | null;
+  cemeteryName: string | null;
+  zone: string | null;
+  block: string | null;
+  row: string | null;
+  status: string | null;
+  capacity: number | null;
+  effectiveFrom: string | null;
+}
+
+export interface CustomerRelationship {
+  id: string;
+  relationshipType: string;
+  status: string;
+  target: { id: string; fullName: string; gender: string | null };
+}
+
+export interface CustomerDetail {
+  id: string;
+  customerCode: string;
+  type: string;
+  orgName: string | null;
+  phone: string | null;
+  email: string | null;
+  companyId: string | null;
+  personId: string | null;
+  createdAt: string;
+  person: PersonProfile | null;
+  gravePlots: CustomerPlot[];
+  relationships: CustomerRelationship[];
+}
+
+export const getCustomerDetail = (customerId: string): Promise<CustomerDetail> =>
+  apiFetch(`/api/v1/crm/customers/${encodeURIComponent(customerId)}`);
