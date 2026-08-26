@@ -799,3 +799,59 @@ export interface CustomerDetail {
 
 export const getCustomerDetail = (customerId: string): Promise<CustomerDetail> =>
   apiFetch(`/api/v1/crm/customers/${encodeURIComponent(customerId)}`);
+
+/* ---- Nhật ký kiểm toán ---- */
+
+export interface AuditEvent {
+  id: string;
+  occurredAt: string;
+  actorType: string;
+  actorId: string | null;
+  actorLabel: string | null;
+  action: string;
+  entityType: string;
+  entityId: string;
+  entityTypeLabel: string;
+  entityLabel: string;
+  result: string;
+  correlationId: string | null;
+}
+
+export interface AuditEventPage {
+  data: AuditEvent[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface AuditFacets {
+  actors: { id: string; label: string; count: number }[];
+  actions: { code: string; count: number }[];
+  entityTypes: { code: string; label: string; count: number }[];
+  results: { code: string; count: number }[];
+}
+
+export interface AuditFilters {
+  from?: string;
+  to?: string;
+  actorId?: string;
+  action?: string;
+  entityType?: string;
+  result?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+export function listAuditEvents(filters: AuditFilters): Promise<AuditEventPage> {
+  const qs = new URLSearchParams();
+  /* Chỉ gửi tham số CÓ giá trị. Gửi `action=` rỗng thì DTO nhận chuỗi rỗng và lọc ra
+   * không dòng nào — bộ lọc "tất cả" biến thành bộ lọc "không gì". */
+  for (const [k, v] of Object.entries(filters)) {
+    if (v !== undefined && v !== '' && v !== null) {
+      qs.set(k, String(v));
+    }
+  }
+  return apiFetch<AuditEventPage>(`/api/v1/audit-events?${qs.toString()}`);
+}
+
+export const getAuditFacets = (): Promise<AuditFacets> => apiFetch('/api/v1/audit-events/facets');
