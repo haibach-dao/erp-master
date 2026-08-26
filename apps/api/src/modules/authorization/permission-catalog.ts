@@ -67,6 +67,11 @@ export const ACTIONS = [
    * có số lần cấp, có chữ ký, có giá trị đối chứng với khách. Hai việc khác nhau về hậu
    * quả nên phải đếm được riêng trong nhật ký. */
   'print',
+  /* Thêm 2026-08-26. KHÔNG dùng lại `assign`: gán là cho một phần mộ CHƯA có chủ, sang
+   * tên là chuyển quyền ĐANG có của người này sang người khác. Hai việc khác nhau về hậu
+   * quả (một cái tạo quyền mới, một cái tước quyền của ai đó) nên phải cấp được riêng và
+   * đếm được riêng trong nhật ký. */
+  'transfer',
   'grant',
   'revoke',
   'submit',
@@ -143,6 +148,21 @@ export const PERMISSION_CATALOG: readonly PermissionDef[] = [
    * qua thẻ đều thành một lần cấp — đúng lỗi hệ cũ mắc phải. */
   p('cemetery.card.view', 'S2', 'Xem trước thẻ quản lý mộ (không cấp số)'),
   p('cemetery.card.print', 'S3', 'Cấp/in thẻ quản lý mộ — tăng số lần cấp, ghi nhật ký'),
+  /* Quyền sử dụng phần mộ = ai đứng tên mộ HÔM NAY.
+   *
+   * `assign` là S3 vì nó tạo ra quyền sở hữu mà KHÔNG đi qua hợp đồng — bình thường
+   * `contract.record.activate` mới sinh ra quyền sử dụng. Đường tắt này có thật trong
+   * nghiệp vụ (chuyển từ hệ cũ, sửa sai, cấp lại), nhưng nó vượt mặt chuỗi thẩm định nên
+   * phải là một mã riêng, cấp riêng, và ghi nhật ký riêng — chứ không nấp trong
+   * `cemetery.plot.set_status`. */
+  p('cemetery.usage_right.view', 'S2', 'Xem quyền sử dụng phần mộ (ai đứng tên)'),
+  p('cemetery.usage_right.assign', 'S3', 'Gán phần mộ cho chủ mộ, không qua hợp đồng'),
+  /* Thu hồi: mộ trở về TRỐNG. Chặn khi mộ còn người an táng — một phần mộ có người nằm
+   * mà không ai đứng tên là hồ sơ không ai chịu trách nhiệm. */
+  p('cemetery.usage_right.release', 'S3', 'Thu hồi quyền sử dụng, mộ trở về trống'),
+  /* Sang tên: đây là đường THỪA KẾ. Gán mộ chặn người đã mất, nên nếu không có đường này
+   * thì mộ của người đã mất kẹt vĩnh viễn ở tên họ. */
+  p('cemetery.usage_right.transfer', 'S3', 'Sang tên phần mộ cho chủ mới (kể cả thừa kế)'),
   p('cemetery.hold.view', 'S1', 'Xem phiếu giữ chỗ'),
   p('cemetery.hold.hold', 'S2', 'Giữ chỗ lô mộ'),
   p('cemetery.hold.release', 'S3', 'Huỷ giữ chỗ lô mộ'),
@@ -168,6 +188,13 @@ export const PERMISSION_CATALOG: readonly PermissionDef[] = [
   p('crm.customer.view', 'S2', 'Xem khách hàng'),
   p('crm.customer.search', 'S2', 'Tra cứu khách hàng theo tiêu chí tự nhập'),
   p('crm.customer.create', 'S2', 'Tạo khách hàng'),
+  p('crm.customer.update', 'S2', 'Sửa hồ sơ khách hàng'),
+  /* XOÁ HẲN, không phải đóng hồ sơ. S3 vì không đảo ngược được.
+   *
+   * Vì sao vẫn có: dữ liệu nhập thử và dữ liệu nhập sai lúc đầu phải dọn được, nếu không
+   * người ta sẽ dọn bằng cách sửa đè lên một hồ sơ có thật — tệ hơn nhiều. Service chặn
+   * xoá khi còn bất kỳ thứ gì trỏ tới, nên mã này không phải cửa xoá lịch sử. */
+  p('crm.customer.delete', 'S3', 'Xoá hẳn hồ sơ khách hàng chưa phát sinh nghiệp vụ'),
   p('crm.customer.export', 'S3', 'Trích xuất khách hàng ra ngoài hệ'),
   p('crm.relationship.view', 'S3', 'Xem quan hệ nhân thân'),
   p('crm.relationship.create', 'S3', 'Tạo quan hệ nhân thân'),
@@ -396,6 +423,7 @@ export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
      * KHÔNG có `crm.person.view_sensitive`, nên thẻ họ in ra hiện CCCD dạng `079***123`.
      * Đó là hành vi ĐÚNG theo thiết kế, không phải lỗi — nếu nghiệp vụ đòi thẻ phải có
      * CCCD đầy đủ thì đó là quyết định của chủ doanh nghiệp về việc cấp thêm mã S3. */
+    'cemetery.usage_right.view',
     'cemetery.card.view',
     'cemetery.card.print',
     ...FILE_BASIC,
@@ -409,6 +437,7 @@ export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
     'cemetery.hold.hold',
     'crm.customer.view',
     'crm.customer.create',
+    'crm.customer.update',
     'crm.customer.search',
     'crm.person.view',
     'crm.person.view_contact', // G0-Q1 sửa 2026-08-25: người bán cần gọi được cho khách
@@ -519,6 +548,13 @@ export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
     /* Toạ độ sơ đồ là dữ liệu MẶT BẰNG — người quản lý nghĩa trang là người biết thực địa,
      * và vai này có phạm vi SITE nên chỉ sửa được sơ đồ nghĩa trang mình phụ trách. */
     'cemetery.plot.update',
+    'cemetery.usage_right.view',
+    /* Ghế THẨM ĐỊNH tác nghiệp là nơi hợp lý nhất cho đường tắt này: họ đã là người
+     * duyệt hồ sơ an táng và đổi trạng thái mộ, và phạm vi SITE bó họ vào nghĩa trang
+     * mình phụ trách. */
+    'cemetery.usage_right.assign',
+    'cemetery.usage_right.release',
+    'cemetery.usage_right.transfer',
     'cemetery.card.view',
     'cemetery.card.print',
     'cemetery.hold.release',

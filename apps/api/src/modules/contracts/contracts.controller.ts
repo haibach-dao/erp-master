@@ -6,7 +6,7 @@ import { PermissionGuard } from '../authorization/permission.guard';
 import { RequirePermission } from '../authorization/require-permission.decorator';
 import { MaskUnless } from '../../common/masking/mask.decorator';
 import { ContractsService } from './contracts.service';
-import { AddPartyDto, CreateContractDto } from './contracts.dto';
+import { AddPartyDto, CreateContractDto, CancelContractDto } from './contracts.dto';
 
 @ApiTags('contracts')
 @ApiBearerAuth()
@@ -41,6 +41,14 @@ export class ContractsController {
   @RequirePermission('contract.record.activate')
   activate(@Param('id') id: string, @Req() req: Request) {
     return this.svc.activate(id, this.actor(req));
+  }
+
+  /* Huỷ hợp đồng. Mã quyền này có trong danh mục từ đầu nhưng CHƯA từng có endpoint —
+   * nên rào chắn xoá khách hàng bảo "dọn hợp đồng trước" mà không có chỗ nào để dọn. */
+  @Post(':id/cancel')
+  @RequirePermission('contract.record.cancel')
+  cancel(@Param('id') id: string, @Body() dto: CancelContractDto, @Req() req: Request) {
+    return this.svc.cancel(id, dto, req.user?.userId ?? null);
   }
 
   @Get(':id')

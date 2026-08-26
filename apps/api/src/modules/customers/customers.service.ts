@@ -9,6 +9,8 @@ import { ulid } from 'ulid';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PiiService } from '../../common/pii/pii.service';
 import { AuditService } from '../audit/audit.service';
+import { activeBurial, activeSubRecord, activeUsageRight } from '../../common/lifecycle/active';
+import { CUSTOMER_BLOCKING_REFERENCES } from '../../common/lifecycle/customer-references';
 import type {
   AddPersonAddressDto,
   AddPersonBankAccountDto,
@@ -17,6 +19,7 @@ import type {
   CreateCustomerDto,
   CreatePersonDto,
   CreateRelationshipDto,
+  UpdateCustomerDto,
 } from './customers.dto';
 
 interface DedupWarning {
@@ -49,6 +52,7 @@ export class CustomersService {
       email: dto.email ?? null,
       permanentAddress: dto.permanentAddress ?? null,
       contactAddress: dto.contactAddress ?? null,
+      placeOfBirth: dto.placeOfBirth ?? null,
       ethnicity: dto.ethnicity ?? null,
       religion: dto.religion ?? null,
     };
@@ -257,7 +261,13 @@ export class CustomersService {
   getPersonRelationships(personId: string) {
     return this.prisma.familyRelationship.findMany({
       where: { sourcePersonId: personId },
-      include: { target: { select: { id: true, fullName: true, gender: true } } },
+      /* Cần cả giới tính VÀ ngày sinh để đặt được nhãn cụ thể: "bố đẻ" hay "mẹ đẻ" suy từ
+       * giới tính; "anh trai" hay "em trai" còn cần so tuổi. */
+      include: {
+        target: {
+          select: { id: true, fullName: true, gender: true, dateOfBirth: true },
+        },
+      },
       orderBy: { createdAt: 'desc' },
     });
   }
@@ -271,7 +281,7 @@ export class CustomersService {
    * Chỉ trả mục còn hiệu lực ở các bảng phụ; mục đã ngừng dùng thuộc màn hình lịch sử.
    */
   async getCustomerDetail(customerId: string) {
-    const activeSub = { where: { status: 'active' }, orderBy: { createdAt: 'asc' } } as const;
+    const activeSub = { where: activeSubRecord, orderBy: { createdAt: 'asc' } } as const;
     const customer = await this.prisma.customer.findUnique({
       where: { id: customerId },
       include: {
@@ -281,6 +291,9 @@ export class CustomersService {
             addresses: activeSub,
             education: activeSub,
             bankAccounts: activeSub,
+            /* Còn sống hay đã mất. Suy từ sự tồn tại của hồ sơ người mất chứ không từ
+             * một cờ riêng — cờ riêng là thứ lệch được với hồ sơ an táng. */
+            deceased: { select: { id: true, dateOfDeath: true, deathCertFileId: true } },
           },
         },
       },
@@ -292,7 +305,7 @@ export class CustomersService {
     /* Phần mộ đang đứng tên. Đi qua `GraveUsageRight` chứ không qua hợp đồng: quyền sử
      * dụng mới là thứ nói ai đang là chủ mộ HÔM NAY, hợp đồng chỉ là căn cứ sinh ra nó. */
     const rights = await this.prisma.graveUsageRight.findMany({
-      where: { holderCustomerId: customerId, status: 'Active' },
+      where: { holderCustomerId: customerId, ...activeUsageRight },
       orderBy: { createdAt: 'asc' },
     });
     const plots =
@@ -309,7 +322,13 @@ export class CustomersService {
         ? []
         : await this.prisma.familyRelationship.findMany({
             where: { sourcePersonId: customer.personId, status: { not: 'Ended' } },
-            include: { target: { select: { id: true, fullName: true, gender: true } } },
+            /* Cần cả giới tính VÀ ngày sinh để đặt được nhãn cụ thể: "bố đẻ" hay "mẹ đẻ" suy từ
+             * giới tính; "anh trai" hay "em trai" còn cần so tuổi. */
+            include: {
+              target: {
+                select: { id: true, fullName: true, gender: true, dateOfBirth: true },
+              },
+            },
             orderBy: { createdAt: 'desc' },
           });
 
@@ -318,6 +337,10 @@ export class CustomersService {
       gravePlots: rights.map((r) => {
         const plot = plotById.get(r.gravePlotId);
         return {
+          /* Id của QUYỀN, không chỉ id của mộ: thu hồi và sang tên thao tác trên quyền
+           * sử dụng, và bắt giao diện đi tra lại quyền từ id mộ là một lượt gọi thừa cho
+           * thứ vốn đã có sẵn ở đây. */
+          usageRightId: r.id,
           gravePlotId: r.gravePlotId,
           plotCode: plot?.plotCode ?? null,
           cemeteryName: plot?.cemetery.name ?? null,
@@ -334,10 +357,258 @@ export class CustomersService {
     };
   }
 
-  // Customer 360 search by code / name / phone / email / org name.
-  search(q: string) {
-    return this.prisma.customer.findMany({
+  /* ---- Sửa hồ sơ khách hàng ----
+   *
+   * Nhận cả trường của Customer lẫn của Person trong MỘT lời gọi: với người dùng đó là
+   * một hồ sơ, và bắt họ lưu hai lần ở hai chỗ là chỗ dữ liệu lệch nhau khi lần lưu thứ
+   * hai thất bại.
+   *
+   * CCCD sửa được nhưng phải sinh lại CẢ BA cột (hash để chống trùng, masked để hiện,
+   * cipher để lưu) — sửa một cột là ba câu trả lời khác nhau về cùng một số.
+   */
+  async updateCustomer(customerId: string, dto: UpdateCustomerDto, actor: string | null) {
+    const before = await this.prisma.customer.findUnique({
+      where: { id: customerId },
+      include: { person: true },
+    });
+    if (before === null) {
+      throw new NotFoundException('Không tìm thấy khách hàng');
+    }
+
+    const customerData: Prisma.CustomerUpdateInput = {};
+    if (dto.type !== undefined) customerData.type = dto.type;
+    if (dto.orgName !== undefined) customerData.orgName = dto.orgName === '' ? null : dto.orgName;
+    if (dto.phone !== undefined) customerData.phone = dto.phone === '' ? null : dto.phone;
+    if (dto.email !== undefined) customerData.email = dto.email === '' ? null : dto.email;
+
+    const dp = dto.person;
+    const personData: Prisma.PersonUpdateInput = {};
+    if (dp !== undefined) {
+      if (before.personId === null) {
+        throw new BadRequestException(
+          'Khách hàng tổ chức không có hồ sơ nhân thân để sửa — đổi loại khách hàng trước',
+        );
+      }
+      /* Chỉ gọi bên trong nhánh đã kiểm `!== undefined`, nên tham số là `string` chắc
+       * chắn. Nhận `string | undefined` ở đây thì kiểu trả về cũng mang `undefined`, và
+       * `exactOptionalPropertyTypes` sẽ từ chối gán vào ô không nhận undefined. */
+      const text = (v: string): string | null => (v === '' ? null : v);
+      const date = (v: string): Date | null => (v === '' ? null : new Date(v));
+
+      if (dp.fullName !== undefined) personData.fullName = dp.fullName;
+      if (dp.gender !== undefined) personData.gender = text(dp.gender);
+      if (dp.dateOfBirth !== undefined) personData.dateOfBirth = date(dp.dateOfBirth);
+      if (dp.nationalIdIssuedOn !== undefined)
+        personData.nationalIdIssuedOn = date(dp.nationalIdIssuedOn);
+      if (dp.nationalIdIssuedPlace !== undefined)
+        personData.nationalIdIssuedPlace = text(dp.nationalIdIssuedPlace);
+      if (dp.phone !== undefined) personData.phone = text(dp.phone);
+      if (dp.email !== undefined) personData.email = text(dp.email);
+      if (dp.permanentAddress !== undefined)
+        personData.permanentAddress = text(dp.permanentAddress);
+      if (dp.contactAddress !== undefined) personData.contactAddress = text(dp.contactAddress);
+      if (dp.placeOfBirth !== undefined) personData.placeOfBirth = text(dp.placeOfBirth);
+      if (dp.ethnicity !== undefined) personData.ethnicity = text(dp.ethnicity);
+      if (dp.religion !== undefined) personData.religion = text(dp.religion);
+      if (dp.nationalId !== undefined) {
+        const nid = dp.nationalId;
+        personData.nationalIdHash = nid === '' ? null : this.pii.hash(nid);
+        personData.nationalIdMasked = nid === '' ? null : this.pii.mask(nid);
+        personData.nationalIdCipher = nid === '' ? null : this.pii.encrypt(nid);
+      }
+    }
+
+    const personId = before.personId;
+    const updated = await this.prisma.$transaction(async (tx) => {
+      if (personId !== null && Object.keys(personData).length > 0) {
+        await tx.person.update({ where: { id: personId }, data: personData });
+      }
+      return Object.keys(customerData).length > 0
+        ? tx.customer.update({ where: { id: customerId }, data: customerData })
+        : before;
+    });
+
+    /* Audit ghi TÊN TRƯỜNG đã đổi, KHÔNG ghi giá trị của trường nhạy cảm. Nhật ký đọc
+     * được bằng một mã quyền KHÁC với mã mở khoá CCCD — chép giá trị vào đó là mở một cửa
+     * sau vòng qua lớp che. */
+    await this.audit.record({
+      actorType: 'USER',
+      actorId: actor,
+      action: 'CUSTOMER.UPDATED',
+      entityType: 'customer',
+      entityId: customerId,
+      afterData: {
+        changedCustomerFields: Object.keys(customerData),
+        changedPersonFields: Object.keys(personData),
+      },
+    });
+    return updated;
+  }
+
+  /* ---- Xoá hẳn hồ sơ khách hàng ----
+   *
+   * Chỉ xoá được khi CHƯA phát sinh nghiệp vụ nào. Sáu bảng dưới đây trỏ tới khách hàng
+   * bằng id LỎNG — không có khoá ngoại, chỉ `grave_holds` là có — nên CSDL sẽ vui vẻ để
+   * lại con trỏ treo nếu không tự kiểm. Đó là lý do hàm này đếm tay từng chỗ thay vì
+   * trông vào ràng buộc.
+   *
+   * Trả về danh sách CHẶN chứ không phải một câu "không xoá được": người dùng cần biết
+   * phải dọn cái gì trước, không phải biết là mình vừa thất bại.
+   */
+  async deleteCustomer(customerId: string, actor: string | null) {
+    const customer = await this.prisma.customer.findUnique({
+      where: { id: customerId },
+      include: { person: { select: { id: true, fullName: true } } },
+    });
+    if (customer === null) {
+      throw new NotFoundException('Không tìm thấy khách hàng');
+    }
+    const personId = customer.person?.id ?? null;
+
+    /* Rào chắn SINH RA từ sổ đăng ký, không viết tay từng lời gọi.
+     *
+     * Viết tay là cách đã hỏng ba lần trong một ngày: mỗi lần vá một lời gọi mà không hỏi
+     * "còn lời gọi nào nữa không". Ở đây danh sách nằm một chỗ, và một test đối chiếu nó
+     * với `schema.prisma` — thêm bảng trỏ tới khách hàng mà quên khai là gãy build.
+     */
+    const now = new Date();
+    const client = this.prisma as unknown as Record<
+      string,
+      { count: (a: { where: Record<string, unknown> }) => Promise<number> }
+    >;
+
+    const counted = await Promise.all(
+      CUSTOMER_BLOCKING_REFERENCES.map(async (ref) => {
+        const model = ref.model.charAt(0).toLowerCase() + ref.model.slice(1);
+        const n = await client[model]!.count({
+          where: { [ref.column]: customerId, ...ref.activeWhere(now) },
+        });
+        return { ref, n };
+      }),
+    );
+
+    /* Người này đã được an táng thì hồ sơ an táng trỏ vào hồ sơ NGƯỜI MẤT của họ, không
+     * trỏ vào hồ sơ khách hàng — nên nó không nằm trong sổ đăng ký theo cột khách hàng, và
+     * phải hỏi riêng. */
+    const deceased =
+      personId === null
+        ? null
+        : await this.prisma.deceasedPerson.findUnique({
+            where: { personId },
+            select: { id: true },
+          });
+    const burialsAsDeceased =
+      deceased === null
+        ? 0
+        : await this.prisma.burialRecord.count({
+            where: { deceasedPersonId: deceased.id, ...activeBurial() },
+          });
+
+    /* Lời từ chối phải chỉ ĐÍCH DANH thứ đang chặn, không chỉ đếm. "còn 2 hợp đồng" bảo
+     * có việc phải làm; "còn 2 hợp đồng (HD1, HD2)" bảo làm ở đâu. */
+    const blockers = await Promise.all(
+      counted
+        .filter((c) => c.n > 0)
+        .map(async (c) => {
+          const base = c.ref.message(c.n);
+          if (c.ref.identify === undefined) return base;
+          const labels = await c.ref.identify(
+            client as unknown as Record<string, { findMany: (a: unknown) => Promise<unknown[]> }>,
+            customerId,
+            now,
+          );
+          const shown = labels.slice(0, 3).join(', ');
+          const more = c.n > labels.length ? `, +${c.n - labels.length}` : '';
+          return shown === '' ? base : `${base} (${shown}${more})`;
+        }),
+    );
+    if (burialsAsDeceased > 0) {
+      blockers.push(`đã được an táng (${burialsAsDeceased} hồ sơ)`);
+    }
+
+    if (blockers.length > 0) {
+      throw new ConflictException(
+        `Không xoá được — khách hàng ${blockers.join(', ')}. Dọn các mục này trước, hoặc giữ hồ sơ lại.`,
+      );
+    }
+
+    /* Đếm quan hệ để BÁO, không để chặn: quan hệ nhân thân nằm ở cả hồ sơ người kia, nên
+     * xoá người này tất yếu rút họ khỏi cây gia đình của người kia. Nói ra con số thay vì
+     * lặng lẽ xoá. */
+    const relationships =
+      personId === null
+        ? 0
+        : await this.prisma.familyRelationship.count({
+            where: { OR: [{ sourcePersonId: personId }, { targetPersonId: personId }] },
+          });
+
+    /* Dòng LỊCH SỬ trỏ tới khách hàng này (quyền đã thu hồi/sang tên, phiếu giữ chỗ đã
+     * huỷ hoặc hết hạn) không chặn xoá — nhưng để lại thì chúng thành con trỏ treo, vì sáu
+     * bảng đó không có khoá ngoại. Xoá cùng và ĐẾM để báo. */
+    const [staleRights, staleHolds] = await Promise.all([
+      this.prisma.graveUsageRight.count({ where: { holderCustomerId: customerId } }),
+      this.prisma.graveHold.count({ where: { customerId } }),
+    ]);
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.graveUsageRight.deleteMany({ where: { holderCustomerId: customerId } });
+      await tx.graveHold.deleteMany({ where: { customerId } });
+      if (personId !== null) {
+        await tx.familyRelationship.deleteMany({
+          where: { OR: [{ sourcePersonId: personId }, { targetPersonId: personId }] },
+        });
+        await tx.personPhone.deleteMany({ where: { personId } });
+        await tx.personAddress.deleteMany({ where: { personId } });
+        await tx.personEducation.deleteMany({ where: { personId } });
+        await tx.personBankAccount.deleteMany({ where: { personId } });
+        if (deceased !== null) {
+          await tx.deceasedPerson.delete({ where: { id: deceased.id } });
+        }
+      }
+      await tx.customer.delete({ where: { id: customerId } });
+      /* Xoá luôn Person: một hồ sơ nhân thân không gắn khách hàng nào chính là cái lệch
+       * vừa phải đi vá bằng migration hôm nay. Đừng tạo thêm cái mới. */
+      if (personId !== null) {
+        await tx.person.delete({ where: { id: personId } });
+      }
+    });
+
+    await this.audit.record({
+      actorType: 'USER',
+      actorId: actor,
+      action: 'CUSTOMER.DELETED',
+      entityType: 'customer',
+      entityId: customerId,
+      beforeData: {
+        customerCode: customer.customerCode,
+        fullName: customer.person?.fullName ?? customer.orgName,
+        deletedRelationships: relationships,
+        deletedUsageRights: staleRights,
+        deletedHolds: staleHolds,
+        deletedDeceasedRecord: deceased !== null,
+      },
+    });
+    return {
+      deleted: true,
+      deletedRelationships: relationships,
+      deletedUsageRights: staleRights,
+      deletedHolds: staleHolds,
+    };
+  }
+
+  /* Customer 360 search by code / name / phone / email / org name.
+   *
+   * Trả kèm ba thứ bảng tổng hợp cần mà bản ghi Customer không tự có: nơi sinh, phần mộ
+   * đang đứng tên, và người này còn sống hay đã mất. Gộp ở đây thay vì để giao diện gọi
+   * thêm — 50 dòng mà mỗi dòng một lời gọi là 50 lượt cho một lần mở trang.
+   */
+  async search(q: string, deceasedOnly = false) {
+    const customers = await this.prisma.customer.findMany({
       where: {
+        /* Lọc "đã mất" ở SERVER, không để giao diện tự lọc sau khi nhận về: truy vấn cắt
+         * ở 50 dòng, nên lọc phía client sẽ bỏ sót người đã mất nếu danh sách có nhiều
+         * khách còn sống đứng trước. */
+        ...(deceasedOnly ? { person: { deceased: { isNot: null } } } : {}),
         OR: [
           { customerCode: { contains: q, mode: 'insensitive' } },
           { phone: { contains: q } },
@@ -347,10 +618,54 @@ export class CustomersService {
         ],
       },
       include: {
-        person: { select: { id: true, fullName: true, gender: true, nationalIdMasked: true } },
+        person: {
+          select: {
+            id: true,
+            fullName: true,
+            gender: true,
+            nationalIdMasked: true,
+            dateOfBirth: true,
+            placeOfBirth: true,
+            /* Sống hay đã mất suy từ SỰ TỒN TẠI của hồ sơ người mất, không phải từ một
+             * cờ boolean riêng. Một cờ riêng là thứ có thể lệch với hồ sơ an táng; ở đây
+             * hai câu trả lời không thể mâu thuẫn vì chúng là cùng một sự thật. */
+            deceased: { select: { dateOfDeath: true } },
+          },
+        },
       },
       take: 50,
     });
+    if (customers.length === 0) {
+      return [];
+    }
+
+    // Một lượt cho cả trang, không phải mỗi khách một lượt.
+    const rights = await this.prisma.graveUsageRight.findMany({
+      where: { holderCustomerId: { in: customers.map((c) => c.id) }, ...activeUsageRight },
+      select: { holderCustomerId: true, gravePlotId: true },
+    });
+    const plots =
+      rights.length === 0
+        ? []
+        : await this.prisma.gravePlot.findMany({
+            where: { id: { in: rights.map((r) => r.gravePlotId) } },
+            select: { id: true, plotCode: true },
+          });
+    const codeById = new Map(plots.map((pl) => [pl.id, pl.plotCode]));
+
+    const byCustomer = new Map<string, string[]>();
+    for (const r of rights) {
+      const list = byCustomer.get(r.holderCustomerId) ?? [];
+      const code = codeById.get(r.gravePlotId);
+      if (code !== undefined) list.push(code);
+      byCustomer.set(r.holderCustomerId, list);
+    }
+
+    return customers.map((c) => ({
+      ...c,
+      gravePlotCodes: (byCustomer.get(c.id) ?? []).sort(),
+      isDeceased: c.person?.deceased != null,
+    }));
   }
 
   // Decrypt CCCD — every full view is audited (G0-A6). Fine-grained permission is a follow-up.
@@ -543,7 +858,7 @@ export class CustomersService {
    * cả mục đã ngừng thì đó là màn hình lịch sử, không phải màn hình tác nghiệp.
    */
   async getPersonProfile(personId: string) {
-    const active = { where: { status: 'active' }, orderBy: { createdAt: 'asc' } } as const;
+    const active = { where: activeSubRecord, orderBy: { createdAt: 'asc' } } as const;
     const person = await this.prisma.person.findUnique({
       where: { id: personId },
       include: {

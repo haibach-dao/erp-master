@@ -42,6 +42,18 @@ export class BurialsController {
     return this.svc.complete(id, this.actor(req));
   }
 
+  /* AI đủ điều kiện an táng vào phần mộ này: đã mất, có quan hệ đã xác nhận với chủ mộ
+   * (hoặc chính là chủ mộ), và chưa nằm ở cốt nào.
+   *
+   * Có endpoint riêng thay vì để giao diện tự lọc: ba điều kiện này là LUẬT NGHIỆP VỤ, và
+   * luật sống ở hai chỗ là luật sẽ lệch. Gate bằng mã đọc hồ sơ an táng — người xem được
+   * danh sách này là người sắp lập hồ sơ. */
+  @Get('candidates')
+  @RequirePermission('burial.record.view')
+  candidates(@Query('gravePlotId') gravePlotId: string) {
+    return this.svc.burialCandidates(gravePlotId);
+  }
+
   @Get(':id')
   @RequirePermission('burial.record.view')
   get(@Param('id') id: string) {

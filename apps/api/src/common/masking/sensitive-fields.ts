@@ -31,6 +31,9 @@ export const SENSITIVE_FIELDS: readonly MaskRule[] = [
   { field: 'address', permission: 'crm.person.view_contact' },
   { field: 'permanentAddress', permission: 'crm.person.view_contact' },
   { field: 'contactAddress', permission: 'crm.person.view_contact' },
+  /* Nơi sinh: NĐ 13/2023 Điều 2.3 xếp vào dữ liệu cá nhân CƠ BẢN, không phải nhóm nhạy
+   * cảm Điều 2.4 — nên cùng mức với địa chỉ và ngày sinh, không cùng mức với CCCD. */
+  { field: 'placeOfBirth', permission: 'crm.person.view_contact' },
   /* Dân tộc và tôn giáo: NĐ 13/2023 Điều 2.4 xếp vào dữ liệu cá nhân NHẠY CẢM, cùng nhóm
    * với CCCD chứ không phải nhóm liên lạc — nên mở bằng `view_sensitive` (S3), KHÔNG phải
    * `view_contact` (S2). Người bán cần gọi được cho khách; họ không cần biết khách theo

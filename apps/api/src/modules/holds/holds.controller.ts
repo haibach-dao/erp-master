@@ -20,6 +20,14 @@ export class HoldsController {
     return this.svc.createHold(dto, req.user?.userId ?? null);
   }
 
+  /* Quét phiếu giữ chỗ hết hạn. Gate bằng `release` — hệ quả giống hệt huỷ giữ chỗ (nhả
+   * mộ về trống), chỉ khác là làm hàng loạt theo ngày hết hạn thay vì theo tay người. */
+  @Post('expire-stale')
+  @RequirePermission('cemetery.hold.release')
+  expireStale(@Req() req: Request) {
+    return this.svc.expireStaleHolds(req.user?.userId ?? null);
+  }
+
   @Post(':id/release')
   @RequirePermission('cemetery.hold.release')
   release(@Param('id') id: string, @Req() req: Request) {

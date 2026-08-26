@@ -45,6 +45,11 @@ export class CreatePersonDto {
   @IsString()
   contactAddress?: string;
 
+  @ApiPropertyOptional({ description: 'Nơi sinh — dữ liệu cá nhân cơ bản NĐ13 Điều 2.3' })
+  @IsOptional()
+  @IsString()
+  placeOfBirth?: string;
+
   /* Dân tộc / tôn giáo: để văn bản tự do, KHÔNG ép danh mục đóng. Danh mục 54 dân tộc là
    * chuyện nhà nước có thể sửa, và tôn giáo thì không có danh sách đóng nào đúng cho mọi
    * người — ép enum ở đây là buộc người nhập phải nói dối khi không khớp. */
@@ -140,4 +145,37 @@ export class AddPersonBankAccountDto {
   accountNumber!: string;
   @ApiPropertyOptional() @IsOptional() @IsString() accountHolder?: string;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() isPrimary?: boolean;
+}
+
+/* Sửa hồ sơ khách hàng.
+ *
+ * MỌI trường đều tuỳ chọn, và service phân biệt "không gửi" với "gửi chuỗi rỗng":
+ * không gửi = giữ nguyên, chuỗi rỗng = XOÁ giá trị. Không phân biệt được hai thứ đó thì
+ * không có cách nào xoá một giá trị đã nhập sai.
+ */
+export class UpdatePersonDto {
+  @ApiPropertyOptional() @IsOptional() @IsString() @MinLength(1) fullName?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() gender?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() dateOfBirth?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() nationalId?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() nationalIdIssuedOn?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() nationalIdIssuedPlace?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() phone?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() email?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() permanentAddress?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() contactAddress?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() placeOfBirth?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() ethnicity?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() religion?: string;
+}
+
+export class UpdateCustomerDto {
+  @ApiPropertyOptional({ enum: ['INDIVIDUAL', 'ORGANIZATION', 'AGENT', 'PROSPECT'] })
+  @IsOptional()
+  @IsIn(['INDIVIDUAL', 'ORGANIZATION', 'AGENT', 'PROSPECT'])
+  type?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() orgName?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() phone?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() email?: string;
+  @ApiPropertyOptional() @IsOptional() person?: UpdatePersonDto;
 }

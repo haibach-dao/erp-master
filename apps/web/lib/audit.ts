@@ -126,3 +126,27 @@ export function formatAuditTime(iso: string): { display: string; iso: string } {
     `${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`;
   return { display, iso: d.toISOString() };
 }
+
+/* Ô chọn ngày trả về `yyyy-MM-dd` — KHÔNG có giờ, KHÔNG có múi giờ.
+ *
+ * Gửi thẳng chuỗi đó lên server là sai một cách âm thầm: `new Date('2026-08-26')` được
+ * hiểu là nửa đêm UTC, tức 07:00 sáng giờ Việt Nam. Nên "từ ngày 26/08" sẽ bỏ mất mọi
+ * việc làm từ 0h đến 7h sáng hôm đó, và "đến ngày 26/08" sẽ cắt mất gần cả ngày.
+ *
+ * Hai hàm dưới đây quy ngày người dùng chọn về đúng đầu/cuối ngày THEO GIỜ MÁY, rồi đổi
+ * sang ISO. Trình duyệt là chỗ duy nhất biết múi giờ của người đang xem, nên phép quy đổi
+ * này phải làm ở đây chứ không ở server.
+ */
+export function startOfDayIso(date: string): string | undefined {
+  if (date === '') return undefined;
+  const [y, m, d] = date.split('-').map(Number);
+  if (y === undefined || m === undefined || d === undefined) return undefined;
+  return new Date(y, m - 1, d, 0, 0, 0, 0).toISOString();
+}
+
+export function endOfDayIso(date: string): string | undefined {
+  if (date === '') return undefined;
+  const [y, m, d] = date.split('-').map(Number);
+  if (y === undefined || m === undefined || d === undefined) return undefined;
+  return new Date(y, m - 1, d, 23, 59, 59, 999).toISOString();
+}

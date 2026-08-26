@@ -144,3 +144,121 @@ describe('activate — đi thẳng được, nhưng phải để lại vết', (
     await expect(svc.activate('ct-1', MANAGER)).rejects.toThrow(/không phân bổ được/);
   });
 });
+
+/* HUỶ hợp đồng phải ĐẢO đúng ba thứ `activate` đã sinh ra: trạng thái hợp đồng, quyền sử
+ * dụng phần mộ, và trạng thái phần mộ. Bỏ sót một cái là để lại một chủ mộ không có hợp
+ * đồng, hoặc một phần mộ `Allocated` mà không ai đứng tên.
+ *
+ * Mã quyền `contract.record.cancel` có trong danh mục từ đầu nhưng KHÔNG có endpoint — nên
+ * rào chắn xoá khách hàng bảo "dọn hợp đồng trước" mà hệ không có chỗ nào để dọn.
+ */
+describe('huỷ hợp đồng — đảo đúng hệ quả của activate', () => {
+  function buildCancel(
+    over: { status?: string; burials?: number; plotStatus?: string; rights?: number } = {},
+  ) {
+    const { status = 'Active', burials = 0, plotStatus = 'Allocated', rights = 1 } = over;
+    const record = vi.fn().mockResolvedValue(undefined);
+    const updateContract = vi.fn().mockResolvedValue({ id: 'ct-1', status: 'Cancelled' });
+    const updateRight = vi.fn().mockResolvedValue({});
+    const updatePlot = vi.fn().mockResolvedValue({});
+    const createHistory = vi.fn().mockResolvedValue({});
+
+    const tx = {
+      externalContract: { update: updateContract },
+      graveUsageRight: {
+        findMany: vi
+          .fn()
+          .mockResolvedValue(Array.from({ length: rights }, (_, i) => ({ id: `ur-${i}` }))),
+        update: updateRight,
+      },
+      gravePlot: {
+        findUnique: vi.fn().mockResolvedValue({ id: 'plot-1', status: plotStatus }),
+        update: updatePlot,
+      },
+      gravePlotStatusHistory: { create: createHistory },
+    };
+
+    const prisma = {
+      externalContract: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'ct-1',
+          contractNo: 'HD-001',
+          companyId: 'co-1',
+          gravePlotId: 'plot-1',
+          status,
+        }),
+      },
+      burialRecord: { count: vi.fn().mockResolvedValue(burials) },
+      $transaction: vi.fn().mockImplementation((fn: (t: unknown) => unknown) => fn(tx)),
+    } as unknown as PrismaService;
+
+    const svc = new ContractsService(
+      prisma,
+      { record } as unknown as AuditService,
+      { assertCompany: vi.fn() } as unknown as ScopeService,
+    );
+    return { svc, record, updateContract, updateRight, updatePlot, createHistory };
+  }
+
+  it('huỷ được: hợp đồng Cancelled, quyền sử dụng Ended, mộ về Available', async () => {
+    const { svc, updateContract, updateRight, updatePlot } = buildCancel();
+
+    await svc.cancel('ct-1', { reason: 'khách đổi ý' }, 'u1');
+
+    expect(updateContract).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: 'Cancelled' }) }),
+    );
+    expect(updateRight).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: 'Ended' }) }),
+    );
+    expect(updatePlot).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: 'Available' }) }),
+    );
+  });
+
+  /* Huỷ hợp đồng của một phần mộ đã có người nằm là rút căn cứ pháp lý của một việc không
+   * đảo ngược được. Muốn đổi người chịu trách nhiệm thì đó là SANG TÊN. */
+  it('mộ đã có hồ sơ an táng thì CHẶN, và chỉ sang SANG TÊN', async () => {
+    const { svc, updateContract } = buildCancel({ burials: 1 });
+
+    await expect(svc.cancel('ct-1', { reason: 'x' }, 'u1')).rejects.toThrow(
+      /đã có 1 hồ sơ an táng.*SANG TÊN/s,
+    );
+    expect(updateContract).not.toHaveBeenCalled();
+  });
+
+  it('hợp đồng đã huỷ rồi thì không huỷ lại', async () => {
+    const { svc } = buildCancel({ status: 'Cancelled' });
+
+    await expect(svc.cancel('ct-1', { reason: 'x' }, 'u1')).rejects.toThrow(/đã huỷ rồi/);
+  });
+
+  it('huỷ hợp đồng NHÁP thì không có quyền nào để chấm dứt, mộ không đổi', async () => {
+    const { svc, updateRight, updatePlot } = buildCancel({
+      status: 'Draft',
+      rights: 0,
+      plotStatus: 'Available',
+    });
+
+    await svc.cancel('ct-1', { reason: 'bỏ bản nháp' }, 'u1');
+
+    expect(updateRight).not.toHaveBeenCalled();
+    expect(updatePlot).not.toHaveBeenCalled();
+  });
+
+  it('audit ghi lý do và số quyền đã chấm dứt theo', async () => {
+    const { svc, record } = buildCancel({ rights: 2 });
+
+    await svc.cancel('ct-1', { reason: 'khách trả lại mộ' }, 'u1');
+
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'CONTRACT.CANCELLED',
+        afterData: expect.objectContaining({
+          reason: 'khách trả lại mộ',
+          endedUsageRights: 2,
+        }),
+      }),
+    );
+  });
+});

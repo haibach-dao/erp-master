@@ -13,6 +13,9 @@ import {
   CreateGravePlotDto,
   CreateGraveTypeDto,
   SetPlotPositionDto,
+  AssignUsageRightDto,
+  ReleaseUsageRightDto,
+  TransferUsageRightDto,
 } from './cemetery.dto';
 
 // M0 cemetery catalog. Every route carries a permission code; the record-level scope
@@ -114,5 +117,51 @@ export class CemeteryController {
   @RequirePermission('cemetery.plot.view')
   plotMap(@Param('id') id: string, @Req() req: Request) {
     return this.svc.plotMap(id, req.user?.userId ?? null);
+  }
+
+  /* ---- Quyền sử dụng phần mộ ---- */
+
+  /* Gán mộ cho chủ mộ KHÔNG qua hợp đồng. Mã S3 riêng vì nó vượt mặt chuỗi thẩm định —
+   * đường bình thường là `contract.record.activate`. Service chặn khách hàng đã mất. */
+  @Post('usage-rights')
+  @RequirePermission('cemetery.usage_right.assign')
+  assignUsageRight(@Body() dto: AssignUsageRightDto, @Req() req: Request) {
+    return this.svc.assignUsageRight(dto, req.user?.userId ?? null);
+  }
+
+  @Get('grave-plots/:id/ownership')
+  @RequirePermission('cemetery.usage_right.view')
+  plotOwnership(@Param('id') id: string, @Req() req: Request) {
+    return this.svc.plotOwnership(id, req.user?.userId ?? null);
+  }
+
+  /* Thu hồi: mộ trở về TRỐNG. Service chặn khi mộ còn hồ sơ an táng — muốn đổi người chịu
+   * trách nhiệm cho một mộ đã có người nằm thì đó là SANG TÊN. */
+  @Post('usage-rights/:id/release')
+  @RequirePermission('cemetery.usage_right.release')
+  releaseUsageRight(
+    @Param('id') id: string,
+    @Body() dto: ReleaseUsageRightDto,
+    @Req() req: Request,
+  ) {
+    return this.svc.releaseUsageRight(id, dto, req.user?.userId ?? null);
+  }
+
+  /* Sang tên — đây là đường THỪA KẾ. Gán mộ chặn người đã mất đứng tên, nên không có
+   * đường này thì mộ của người đã mất kẹt vĩnh viễn ở tên họ. */
+  @Post('usage-rights/:id/transfer')
+  @RequirePermission('cemetery.usage_right.transfer')
+  transferUsageRight(
+    @Param('id') id: string,
+    @Body() dto: TransferUsageRightDto,
+    @Req() req: Request,
+  ) {
+    return this.svc.transferUsageRight(id, dto, req.user?.userId ?? null);
+  }
+
+  @Get('grave-plots/:id/usage-right-history')
+  @RequirePermission('cemetery.usage_right.view')
+  usageRightHistory(@Param('id') id: string, @Req() req: Request) {
+    return this.svc.usageRightHistory(id, req.user?.userId ?? null);
   }
 }

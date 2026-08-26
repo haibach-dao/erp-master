@@ -1,5 +1,14 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsIn, IsInt, IsNumber, IsOptional, IsString, Min, MinLength } from 'class-validator';
+import {
+  IsIn,
+  IsInt,
+  IsISO8601,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Min,
+  MinLength,
+} from 'class-validator';
 import { GRAVE_PLOT_STATUSES } from './cemetery.constants';
 
 export class CreateCompanyDto {
@@ -63,4 +72,47 @@ export class SetPlotPositionDto {
   @IsOptional()
   @IsNumber()
   mapY?: number | null;
+}
+
+export class AssignUsageRightDto {
+  @ApiProperty() @IsString() @MinLength(1) gravePlotId!: string;
+  @ApiProperty() @IsString() @MinLength(1) holderCustomerId!: string;
+  @ApiPropertyOptional({ description: 'Ngày bắt đầu đứng tên; mặc định hôm nay' })
+  @IsOptional()
+  @IsISO8601()
+  effectiveFrom?: string;
+  @ApiPropertyOptional({ description: 'Vì sao gán tay, không qua hợp đồng' })
+  @IsOptional()
+  @IsString()
+  note?: string;
+}
+
+/* Thu hồi và sang tên đều BẮT BUỘC có lý do.
+ *
+ * Bắt buộc ở DTO chứ không ở cột CSDL: bản ghi cũ không mang lý do, và ép NOT NULL là
+ * phải bịa lý do cho chúng. Ở đây thì mọi lần thao tác TỪ NAY đều phải nói vì sao — hai
+ * việc này tước quyền của một người, nên "vì sao" không được để trống.
+ */
+export class ReleaseUsageRightDto {
+  @ApiProperty({ description: 'Vì sao thu hồi' })
+  @IsString()
+  @MinLength(3)
+  reason!: string;
+}
+
+export class TransferUsageRightDto {
+  @ApiProperty({ description: 'Khách hàng nhận sang tên — phải còn sống' })
+  @IsString()
+  @MinLength(1)
+  toCustomerId!: string;
+
+  @ApiProperty({ description: 'Vì sao sang tên: thừa kế, chuyển nhượng, sửa sai...' })
+  @IsString()
+  @MinLength(3)
+  reason!: string;
+
+  @ApiPropertyOptional({ description: 'Ngày chủ mới bắt đầu đứng tên; mặc định hôm nay' })
+  @IsOptional()
+  @IsISO8601()
+  effectiveFrom?: string;
 }

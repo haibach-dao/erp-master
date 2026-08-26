@@ -25,4 +25,13 @@ export class AuditController {
   list(@Query() query: AuditQueryDto) {
     return this.auditQuery.query(query);
   }
+
+  /* Giá trị có thật trong nhật ký, cho các ô chọn của bộ lọc. Cùng mã gate với việc đọc
+   * nhật ký: ai đọc được nhật ký thì đọc được danh sách người/hành động trong đó — che
+   * cái này mà mở cái kia là vô nghĩa. */
+  @Get('facets')
+  @RequirePermission('audit.event.view')
+  facets() {
+    return this.auditQuery.facets();
+  }
 }

@@ -1,10 +1,15 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { ulid } from 'ulid';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import {
+  activeBurial,
+  activeUsageRight,
+  completedBurial,
+  confirmedRelationship,
+} from '../../common/lifecycle/active';
 import type { CreateBurialDto, CreateDeceasedDto } from './burials.dto';
-
-const ACTIVE_BURIAL_STATUSES = ['Draft', 'Verified', 'Scheduled', 'Completed'];
 
 /* Chủ mộ tự an táng vào chính phần mộ mình đứng tên. Không phải một mã trong
  * `relationship_types` — ở đó không có "quan hệ với chính mình" — nên dùng một hằng
@@ -18,7 +23,41 @@ export class BurialsService {
     private readonly audit: AuditService,
   ) {}
 
-  createDeceased(dto: CreateDeceasedDto) {
+  /* Lập hồ sơ người mất.
+   *
+   * NGƯỜI MẤT CŨNG LÀ KHÁCH HÀNG (quyết định 26/08/2026). Ép ở đây chứ không chỉ ở giao
+   * diện: hệ từng được dựng theo giả định ngược lại, và hậu quả là 3 người đã được an
+   * táng nhưng màn hình khách hàng không bao giờ thấy họ. Một quy ước chỉ sống ở giao
+   * diện là quy ước sẽ bị đường khác đi vòng qua.
+   */
+  async createDeceased(dto: CreateDeceasedDto) {
+    const person = await this.prisma.person.findUnique({
+      where: { id: dto.personId },
+      select: { id: true, fullName: true, customer: { select: { id: true } } },
+    });
+    if (person === null) {
+      throw new NotFoundException('Không tìm thấy nhân thân');
+    }
+    if (person.customer === null) {
+      throw new ConflictException(
+        `${person.fullName} chưa có hồ sơ khách hàng — lập hồ sơ khách hàng trước khi ghi nhận đã mất`,
+      );
+    }
+    const existing = await this.prisma.deceasedPerson.findUnique({
+      where: { personId: dto.personId },
+      select: { id: true },
+    });
+    /* Đã có hồ sơ thì trả lại chính nó thay vì ném lỗi ràng buộc: giao diện an táng gọi
+     * hàm này mỗi lần đặt cốt, và người này có thể được an táng vào mộ thứ hai. */
+    if (existing !== null) {
+      return this.prisma.deceasedPerson.update({
+        where: { id: existing.id },
+        data: {
+          ...(dto.dateOfDeath !== undefined ? { dateOfDeath: new Date(dto.dateOfDeath) } : {}),
+          ...(dto.deathCertFileId !== undefined ? { deathCertFileId: dto.deathCertFileId } : {}),
+        },
+      });
+    }
     return this.prisma.deceasedPerson.create({
       data: {
         id: ulid(),
@@ -60,7 +99,7 @@ export class BurialsService {
     deceasedPersonId: string,
   ): Promise<{ ownerCustomerId: string; relationshipToOwner: string }> {
     const right = await this.prisma.graveUsageRight.findFirst({
-      where: { gravePlotId, status: 'Active' },
+      where: { gravePlotId, ...activeUsageRight },
       orderBy: { createdAt: 'desc' },
     });
     if (right === null) {
@@ -104,7 +143,7 @@ export class BurialsService {
       where: {
         sourcePersonId: deceased.personId,
         targetPersonId: owner.personId,
-        status: 'Confirmed',
+        ...confirmedRelationship,
         AND: inEffect,
       },
     });
@@ -117,7 +156,7 @@ export class BurialsService {
       where: {
         sourcePersonId: owner.personId,
         targetPersonId: deceased.personId,
-        status: 'Confirmed',
+        ...confirmedRelationship,
         AND: inEffect,
       },
     });
@@ -138,6 +177,180 @@ export class BurialsService {
     );
   }
 
+  /* Cốt phải nằm trong sức chứa và chưa ai chiếm.
+   *
+   * Kiểm ở đây là để BÁO LỖI ĐỌC ĐƯỢC — "cốt 3 đã có người" thay vì một lỗi ràng buộc
+   * CSDL khó hiểu. Nhưng nó KHÔNG phải chỗ bảo đảm: hai người bấm cùng lúc thì cả hai
+   * cùng thấy cốt trống rồi cùng ghi (TOCTOU). Chỗ bảo đảm thật là partial unique index
+   * `burial_records_active_slot`, và lỗi của nó được dịch lại ở `createBurial`.
+   */
+  private async assertSlotAvailable(
+    gravePlotId: string,
+    slotNumber: number | undefined,
+    capacity: number,
+  ): Promise<void> {
+    if (slotNumber === undefined) {
+      return;
+    }
+    if (slotNumber > capacity) {
+      throw new ConflictException(`Phần mộ chỉ có ${capacity} cốt — không có cốt số ${slotNumber}`);
+    }
+    const taken = await this.prisma.burialRecord.findFirst({
+      where: { gravePlotId, slotNumber, ...activeBurial() },
+      include: { deceased: { include: { person: { select: { fullName: true } } } } },
+    });
+    if (taken !== null) {
+      throw new ConflictException(`Cốt số ${slotNumber} đã có ${taken.deceased.person.fullName}`);
+    }
+  }
+
+  /* AI ĐỦ ĐIỀU KIỆN được an táng vào phần mộ này.
+   *
+   * Ba điều kiện, và cả ba đều đã có ở tầng chặn — nhưng trước đây giao diện liệt kê MỌI
+   * khách hàng rồi để server từ chối. Mời người dùng chọn một lựa chọn chắc chắn hỏng là
+   * cách bắt họ học luật bằng cách va vào nó.
+   *
+   *   1. ĐÃ MẤT — có hồ sơ người mất
+   *   2. CÓ QUAN HỆ với chủ mộ, đã xác nhận và còn hiệu lực (hoặc CHÍNH LÀ chủ mộ)
+   *   3. CHƯA được gán vào cốt nào — một người chỉ nằm ở một chỗ
+   *
+   * Danh sách này và `createBurial` phải nói CÙNG một điều. Chúng dùng chung
+   * `eligibleRelationWhere` để định nghĩa "quan hệ hợp lệ" — hai bản sao của cùng một luật
+   * là hai câu trả lời sẽ lệch nhau, đúng bệnh đã trả giá nhiều lần.
+   */
+  private eligibleRelationWhere(ownerPersonId: string, now: Date) {
+    return {
+      ...confirmedRelationship,
+      AND: [
+        { OR: [{ effectiveFrom: null }, { effectiveFrom: { lte: now } }] },
+        { OR: [{ effectiveTo: null }, { effectiveTo: { gte: now } }] },
+      ],
+      OR: [{ sourcePersonId: ownerPersonId }, { targetPersonId: ownerPersonId }],
+    };
+  }
+
+  async burialCandidates(gravePlotId: string) {
+    const right = await this.prisma.graveUsageRight.findFirst({
+      where: { gravePlotId, ...activeUsageRight },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (right === null) {
+      /* Không có chủ mộ thì không có ai đủ điều kiện — nhưng trả LÝ DO thay vì mảng rỗng
+       * suông: "không ai đủ điều kiện" và "mộ chưa có chủ" là hai tình huống khác nhau và
+       * người dùng phải làm hai việc khác nhau. */
+      return { blocked: 'Phần mộ chưa có chủ đứng tên', owner: null, candidates: [] };
+    }
+    const owner = await this.prisma.customer.findUnique({
+      where: { id: right.holderCustomerId },
+      select: {
+        id: true,
+        customerCode: true,
+        orgName: true,
+        person: { select: { id: true, fullName: true } },
+      },
+    });
+    if (owner?.person == null) {
+      return {
+        blocked: 'Mộ do khách hàng tổ chức đứng tên — chưa có quy tắc quan hệ nhân thân',
+        owner: null,
+        candidates: [],
+      };
+    }
+    const ownerPersonId = owner.person.id;
+    const now = new Date();
+
+    // Người có quan hệ hợp lệ với chủ mộ, LẤY CẢ HAI CHIỀU rồi bỏ chính chủ ra.
+    const relations = await this.prisma.familyRelationship.findMany({
+      where: this.eligibleRelationWhere(ownerPersonId, now),
+      select: { sourcePersonId: true, targetPersonId: true, relationshipType: true },
+    });
+    const relatedIds = new Set<string>();
+    for (const r of relations) {
+      relatedIds.add(r.sourcePersonId === ownerPersonId ? r.targetPersonId : r.sourcePersonId);
+    }
+    /* Chủ mộ tự an táng vào mộ mình đứng tên là hợp lệ (`SELF`) — nên chính họ cũng là
+     * ứng viên, dù không có quan hệ nào với chính mình. */
+    relatedIds.add(ownerPersonId);
+
+    if (relatedIds.size === 0) {
+      return { blocked: null, owner, candidates: [] };
+    }
+
+    /* Đã mất VÀ chưa nằm ở đâu. Lọc "chưa nằm ở đâu" bằng truy vấn con thay vì lấy về rồi
+     * lọc trong bộ nhớ: danh sách quan hệ có thể dài, và lọc ở CSDL thì luật nằm một chỗ. */
+    const deceased = await this.prisma.deceasedPerson.findMany({
+      where: {
+        personId: { in: [...relatedIds] },
+        burialRecords: { none: activeBurial() },
+      },
+      select: {
+        id: true,
+        dateOfDeath: true,
+        person: {
+          select: {
+            id: true,
+            fullName: true,
+            gender: true,
+            dateOfBirth: true,
+            customer: { select: { id: true, customerCode: true } },
+          },
+        },
+      },
+      orderBy: { person: { fullName: 'asc' } },
+    });
+
+    return {
+      blocked: null,
+      owner: {
+        customerId: owner.id,
+        customerCode: owner.customerCode,
+        personId: ownerPersonId,
+        fullName: owner.person.fullName,
+      },
+      candidates: deceased.map((d) => ({
+        deceasedPersonId: d.id,
+        personId: d.person.id,
+        fullName: d.person.fullName,
+        gender: d.person.gender,
+        dateOfBirth: d.person.dateOfBirth,
+        dateOfDeath: d.dateOfDeath,
+        customerId: d.person.customer?.id ?? null,
+        customerCode: d.person.customer?.customerCode ?? null,
+        isOwner: d.person.id === ownerPersonId,
+        relationshipType:
+          d.person.id === ownerPersonId
+            ? SELF_RELATIONSHIP
+            : (relations.find(
+                (r) => r.sourcePersonId === d.person.id || r.targetPersonId === d.person.id,
+              )?.relationshipType ?? null),
+      })),
+    };
+  }
+
+  /* Một người chỉ nằm ở MỘT chỗ.
+   *
+   * Trước đây không có kiểm này: cùng một hồ sơ người mất có thể được gán vào hai phần mộ
+   * khác nhau, và không gì báo. Sức chứa chặn theo TỪNG mộ nên nó không thấy được người
+   * này đã nằm ở mộ bên cạnh.
+   */
+  private async assertNotAlreadyBuried(deceasedPersonId: string): Promise<void> {
+    const existing = await this.prisma.burialRecord.findFirst({
+      where: { deceasedPersonId, ...activeBurial() },
+      select: { id: true, slotNumber: true, gravePlotId: true },
+    });
+    if (existing === null) {
+      return;
+    }
+    const plot = await this.prisma.gravePlot.findUnique({
+      where: { id: existing.gravePlotId },
+      select: { plotCode: true },
+    });
+    throw new ConflictException(
+      `Người này đã được an táng ở phần mộ ${plot?.plotCode ?? existing.gravePlotId}` +
+        `${existing.slotNumber === null ? '' : ` (cốt ${existing.slotNumber})`}. Huỷ hồ sơ an táng cũ trước nếu muốn chuyển.`,
+    );
+  }
+
   async createBurial(dto: CreateBurialDto, actor: string | null) {
     const { plotStatus, cap } = await this.effectiveCapacity(dto.gravePlotId);
     if (plotStatus !== 'Allocated' && plotStatus !== 'Occupied') {
@@ -146,7 +359,7 @@ export class BurialsService {
       );
     }
     const activeCount = await this.prisma.burialRecord.count({
-      where: { gravePlotId: dto.gravePlotId, status: { in: ACTIVE_BURIAL_STATUSES } },
+      where: { gravePlotId: dto.gravePlotId, ...activeBurial() },
     });
     if (activeCount >= cap) {
       throw new ConflictException(`Vượt sức chứa mộ (${activeCount}/${cap})`);
@@ -155,19 +368,35 @@ export class BurialsService {
       dto.gravePlotId,
       dto.deceasedPersonId,
     );
-    const burial = await this.prisma.burialRecord.create({
-      data: {
-        id: ulid(),
-        gravePlotId: dto.gravePlotId,
-        deceasedPersonId: dto.deceasedPersonId,
-        contractId: dto.contractId ?? null,
-        ownerCustomerId,
-        relationshipToOwner,
-        burialDate: dto.burialDate !== undefined ? new Date(dto.burialDate) : null,
-        legalDocFileId: dto.legalDocFileId ?? null,
-        notes: dto.notes ?? null,
-      },
-    });
+    await this.assertNotAlreadyBuried(dto.deceasedPersonId);
+    await this.assertSlotAvailable(dto.gravePlotId, dto.slotNumber, cap);
+    /* Ràng buộc CSDL là chỗ bảo đảm thật cho "một cốt một người" — nhưng lỗi nó ném ra là
+     * `P2002 unique constraint`, đọc lên màn hình thì vô nghĩa với người dùng. Dịch lại
+     * đúng một mã lỗi đó; mọi lỗi khác để nguyên, nuốt hết là giấu mất lỗi thật. */
+    let burial;
+    try {
+      burial = await this.prisma.burialRecord.create({
+        data: {
+          id: ulid(),
+          gravePlotId: dto.gravePlotId,
+          deceasedPersonId: dto.deceasedPersonId,
+          contractId: dto.contractId ?? null,
+          slotNumber: dto.slotNumber ?? null,
+          ownerCustomerId,
+          relationshipToOwner,
+          burialDate: dto.burialDate !== undefined ? new Date(dto.burialDate) : null,
+          legalDocFileId: dto.legalDocFileId ?? null,
+          notes: dto.notes ?? null,
+        },
+      });
+    } catch (e) {
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        throw new ConflictException(
+          `Cốt số ${dto.slotNumber} vừa có người khác nhận — chọn cốt khác`,
+        );
+      }
+      throw e;
+    }
     await this.audit.record({
       actorType: 'USER',
       actorId: actor,
@@ -177,6 +406,7 @@ export class BurialsService {
       afterData: {
         gravePlotId: dto.gravePlotId,
         deceasedPersonId: dto.deceasedPersonId,
+        slotNumber: dto.slotNumber ?? null,
         ownerCustomerId,
         relationshipToOwner,
       },
@@ -227,7 +457,7 @@ export class BurialsService {
       }
       const cap = plot.capacityOverride ?? plot.graveType.defaultCapacity;
       const completedCount = await tx.burialRecord.count({
-        where: { gravePlotId: burial.gravePlotId, status: 'Completed' },
+        where: { gravePlotId: burial.gravePlotId, ...completedBurial },
       });
       if (completedCount >= cap) {
         throw new ConflictException(`Vượt sức chứa mộ (${completedCount}/${cap})`);

@@ -107,6 +107,10 @@ export interface CustomerPerson {
   fullName: string;
   gender: string | null;
   nationalIdMasked: string | null;
+  dateOfBirth: string | null;
+  placeOfBirth: string | null;
+  /** Có bản ghi = đã mất. Không có = còn sống. Không phải cờ boolean riêng. */
+  deceased: { dateOfDeath: string | null } | null;
 }
 
 export interface Customer360 {
@@ -117,6 +121,9 @@ export interface Customer360 {
   phone: string | null;
   email: string | null;
   person: CustomerPerson | null;
+  /** Mã các phần mộ đang đứng tên. API gom sẵn để bảng không phải gọi thêm mỗi dòng. */
+  gravePlotCodes: string[];
+  isDeceased: boolean;
 }
 
 export interface DedupWarning {
@@ -147,8 +154,12 @@ export interface CreateCustomerInput {
   email?: string;
 }
 
-export function searchCustomers(q: string): Promise<Customer360[]> {
-  return apiFetch<Customer360[]>(`/api/v1/crm/customers/search?q=${encodeURIComponent(q)}`);
+export function searchCustomers(q: string, deceasedOnly = false): Promise<Customer360[]> {
+  /* `deceasedOnly` lọc ở SERVER: truy vấn cắt ở 50 dòng, nên lọc phía client sẽ bỏ sót
+   * người đã mất khi danh sách có nhiều khách còn sống đứng trước. */
+  return apiFetch<Customer360[]>(
+    `/api/v1/crm/customers/search?q=${encodeURIComponent(q)}${deceasedOnly ? '&deceasedOnly=true' : ''}`,
+  );
 }
 
 export function createCustomer(
@@ -317,6 +328,14 @@ export const addContractParty = (
   });
 export const verifyContract = (id: string): Promise<ExternalContract> =>
   apiFetch(`/api/v1/contracts/${id}/verify`, { method: 'POST' });
+/* Huỷ hợp đồng. Server đảo TOÀN BỘ hệ quả của `activate`: chấm dứt quyền sử dụng do hợp
+ * đồng này sinh ra và nhả phần mộ về trống. Lý do bắt buộc — ba hệ quả cho một lần bấm. */
+export const cancelContract = (id: string, reason: string): Promise<unknown> =>
+  apiFetch(`/api/v1/contracts/${encodeURIComponent(id)}/cancel`, {
+    method: 'POST',
+    body: JSON.stringify({ reason }),
+  });
+
 export const activateContract = (id: string): Promise<unknown> =>
   apiFetch(`/api/v1/contracts/${id}/activate`, { method: 'POST' });
 
@@ -397,6 +416,8 @@ export const createDeceased = (input: {
 export const createBurial = (input: {
   gravePlotId: string;
   deceasedPersonId: string;
+  /** Cốt số mấy trong phần mộ (1..sức chứa). Bỏ trống = chưa xác định vị trí. */
+  slotNumber?: number;
   contractId?: string;
   burialDate?: string;
   legalDocFileId?: string;
@@ -690,8 +711,11 @@ export interface PersonProfile {
   email: string | null;
   permanentAddress: string | null;
   contactAddress: string | null;
+  placeOfBirth: string | null;
   ethnicity: string | null;
   religion: string | null;
+  /** Có bản ghi = đã mất. Suy từ hồ sơ người mất, không phải từ một cờ riêng. */
+  deceased: { id: string; dateOfDeath: string | null; deathCertFileId: string | null } | null;
   phones: (PersonSubRecord & { phone: string })[];
   addresses: (PersonSubRecord & { address: string })[];
   education: (PersonSubRecord & {
@@ -764,6 +788,8 @@ export const deactivatePersonSubRecord = (
 /* ---- Chi tiết khách hàng 360 ---- */
 
 export interface CustomerPlot {
+  /** Id của QUYỀN SỬ DỤNG — thu hồi và sang tên thao tác trên quyền, không trên mộ. */
+  usageRightId: string;
   gravePlotId: string;
   plotCode: string | null;
   cemeteryName: string | null;
@@ -779,8 +805,22 @@ export interface CustomerRelationship {
   id: string;
   relationshipType: string;
   status: string;
-  target: { id: string; fullName: string; gender: string | null };
+  /* Quy ước lưu trữ: khách hàng này LÀ `relationshipType` của `target`.
+   * Cần giới tính + ngày sinh của target để đặt nhãn chiều ngược cho cụ thể. */
+  target: {
+    id: string;
+    fullName: string;
+    gender: string | null;
+    dateOfBirth: string | null;
+  };
 }
+
+/* Chấm dứt một quan hệ. Server đóng cả dòng đối ứng trong cùng giao dịch và ghi audit.
+ * KHÔNG phải xoá: quan hệ đã từng đúng vẫn phải đọc lại được khi đối chiếu hồ sơ cũ. */
+export const endRelationship = (relationshipId: string) =>
+  apiFetch(`/api/v1/crm/relationships/${encodeURIComponent(relationshipId)}/end`, {
+    method: 'POST',
+  });
 
 export interface CustomerDetail {
   id: string;
@@ -799,3 +839,214 @@ export interface CustomerDetail {
 
 export const getCustomerDetail = (customerId: string): Promise<CustomerDetail> =>
   apiFetch(`/api/v1/crm/customers/${encodeURIComponent(customerId)}`);
+
+/* ---- Nhật ký kiểm toán ---- */
+
+export interface AuditEvent {
+  id: string;
+  occurredAt: string;
+  actorType: string;
+  actorId: string | null;
+  actorLabel: string | null;
+  action: string;
+  entityType: string;
+  entityId: string;
+  entityTypeLabel: string;
+  entityLabel: string;
+  result: string;
+  correlationId: string | null;
+}
+
+export interface AuditEventPage {
+  data: AuditEvent[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface AuditFacets {
+  actors: { id: string; label: string; count: number }[];
+  actions: { code: string; count: number }[];
+  entityTypes: { code: string; label: string; count: number }[];
+  results: { code: string; count: number }[];
+}
+
+export interface AuditFilters {
+  from?: string;
+  to?: string;
+  actorId?: string;
+  action?: string;
+  entityType?: string;
+  result?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+export function listAuditEvents(filters: AuditFilters): Promise<AuditEventPage> {
+  const qs = new URLSearchParams();
+  /* Chỉ gửi tham số CÓ giá trị. Gửi `action=` rỗng thì DTO nhận chuỗi rỗng và lọc ra
+   * không dòng nào — bộ lọc "tất cả" biến thành bộ lọc "không gì". */
+  for (const [k, v] of Object.entries(filters)) {
+    if (v !== undefined && v !== '' && v !== null) {
+      qs.set(k, String(v));
+    }
+  }
+  return apiFetch<AuditEventPage>(`/api/v1/audit-events?${qs.toString()}`);
+}
+
+export const getAuditFacets = (): Promise<AuditFacets> => apiFetch('/api/v1/audit-events/facets');
+
+export const createRelationship = (input: {
+  sourcePersonId: string;
+  targetPersonId: string;
+  relationshipType: string;
+  effectiveFrom?: string;
+  verificationSource?: string;
+}) => apiFetch('/api/v1/crm/relationships', { method: 'POST', body: JSON.stringify(input) });
+
+export const listRelationshipTypes = (): Promise<
+  { code: string; name: string; reciprocalCode: string }[]
+> => apiFetch('/api/v1/cemetery/relationship-types');
+
+/* ---- Quyền sử dụng phần mộ: ai đứng tên ---- */
+
+export interface PlotOwnership {
+  gravePlotId: string;
+  plotCode: string;
+  status: string;
+  graveTypeName: string;
+  capacity: number;
+  holder: {
+    customerId: string;
+    customerCode: string;
+    name: string | null;
+    personId: string | null;
+    isDeceased: boolean;
+  } | null;
+  occupants: {
+    burialRecordId: string;
+    slotNumber: number | null;
+    personId: string;
+    fullName: string;
+    relationshipToOwner: string | null;
+    status: string;
+    burialDate: string | null;
+  }[];
+  /** Cốt còn trống, API tính sẵn để hai màn hình không đưa ra hai đáp án. */
+  freeSlots: number[];
+  unnumberedBurials: number;
+}
+
+export const getPlotOwnership = (gravePlotId: string): Promise<PlotOwnership> =>
+  apiFetch(`/api/v1/cemetery/grave-plots/${encodeURIComponent(gravePlotId)}/ownership`);
+
+export const assignUsageRight = (input: {
+  gravePlotId: string;
+  holderCustomerId: string;
+  effectiveFrom?: string;
+  note?: string;
+}) => apiFetch('/api/v1/cemetery/usage-rights', { method: 'POST', body: JSON.stringify(input) });
+
+/* ---- Sửa / xoá hồ sơ khách hàng ---- */
+
+export interface UpdateCustomerInput {
+  type?: string;
+  orgName?: string;
+  phone?: string;
+  email?: string;
+  /* Trường của nhân thân. KHÁC payload tạo mới ở một điểm: chuỗi rỗng ở đây nghĩa là
+   * XOÁ giá trị cũ, không phải "bỏ qua". Không phân biệt được thì không có cách nào xoá
+   * một giá trị đã nhập sai. */
+  person?: {
+    fullName?: string;
+    gender?: string;
+    dateOfBirth?: string;
+    nationalId?: string;
+    nationalIdIssuedOn?: string;
+    nationalIdIssuedPlace?: string;
+    phone?: string;
+    email?: string;
+    permanentAddress?: string;
+    contactAddress?: string;
+    placeOfBirth?: string;
+    ethnicity?: string;
+    religion?: string;
+  };
+}
+
+export const updateCustomer = (customerId: string, input: UpdateCustomerInput) =>
+  apiFetch(`/api/v1/crm/customers/${encodeURIComponent(customerId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  });
+
+export const deleteCustomer = (
+  customerId: string,
+): Promise<{ deleted: boolean; deletedRelationships: number }> =>
+  apiFetch(`/api/v1/crm/customers/${encodeURIComponent(customerId)}`, { method: 'DELETE' });
+
+/* ---- Thu hồi / sang tên quyền sử dụng phần mộ ---- */
+
+export const releaseUsageRight = (usageRightId: string, reason: string) =>
+  apiFetch(`/api/v1/cemetery/usage-rights/${encodeURIComponent(usageRightId)}/release`, {
+    method: 'POST',
+    body: JSON.stringify({ reason }),
+  });
+
+export const transferUsageRight = (
+  usageRightId: string,
+  input: { toCustomerId: string; reason: string; effectiveFrom?: string },
+) =>
+  apiFetch(`/api/v1/cemetery/usage-rights/${encodeURIComponent(usageRightId)}/transfer`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+
+export interface UsageRightHistoryEntry {
+  usageRightId: string;
+  holderCustomerId: string;
+  holderName: string | null;
+  holderCode: string | null;
+  status: string;
+  effectiveFrom: string | null;
+  effectiveTo: string | null;
+  endedReason: string | null;
+  previousRightId: string | null;
+  /** Quyền sinh ra ngoài hợp đồng phải đọc ra được — nếu không, không ai phân biệt được
+   *  quyền nào đã qua thẩm định. */
+  viaContract: boolean;
+}
+
+export const getUsageRightHistory = (
+  gravePlotId: string,
+): Promise<{ gravePlotId: string; plotCode: string; history: UsageRightHistoryEntry[] }> =>
+  apiFetch(`/api/v1/cemetery/grave-plots/${encodeURIComponent(gravePlotId)}/usage-right-history`);
+
+/* ---- Ai đủ điều kiện an táng vào một phần mộ ----
+ *
+ * Ba điều kiện do SERVER quyết: đã mất, có quan hệ đã xác nhận với chủ mộ (hoặc chính là
+ * chủ mộ), và chưa nằm ở cốt nào. Giao diện không tự lọc — luật sống ở hai chỗ là luật sẽ
+ * lệch, và người dùng sẽ thấy một danh sách khác với thứ server chấp nhận.
+ */
+export interface BurialCandidate {
+  deceasedPersonId: string;
+  personId: string;
+  fullName: string;
+  gender: string | null;
+  dateOfBirth: string | null;
+  dateOfDeath: string | null;
+  customerId: string | null;
+  customerCode: string | null;
+  isOwner: boolean;
+  relationshipType: string | null;
+}
+
+export interface BurialCandidates {
+  /** Có giá trị = không ai đủ điều kiện VÌ LÝ DO này (chưa có chủ mộ, chủ là tổ chức…). */
+  blocked: string | null;
+  owner: { customerId: string; customerCode: string; personId: string; fullName: string } | null;
+  candidates: BurialCandidate[];
+}
+
+export const getBurialCandidates = (gravePlotId: string): Promise<BurialCandidates> =>
+  apiFetch(`/api/v1/burials/candidates?gravePlotId=${encodeURIComponent(gravePlotId)}`);

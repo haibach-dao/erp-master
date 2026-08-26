@@ -2,7 +2,9 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
+  Patch,
   Param,
   Post,
   Query,
@@ -23,6 +25,7 @@ import {
   CreateCustomerDto,
   CreatePersonDto,
   CreateRelationshipDto,
+  UpdateCustomerDto,
 } from './customers.dto';
 
 /* Danh sách ĐÓNG các nhóm bảng phụ. Đặt ở đây thay vì rải chuỗi ở call site vì đoạn
@@ -56,8 +59,8 @@ export class CustomersController {
 
   @Get('customers/search')
   @RequirePermission('crm.customer.search')
-  search(@Query('q') q: string) {
-    return this.svc.search(q ?? '');
+  search(@Query('q') q: string, @Query('deceasedOnly') deceasedOnly?: string) {
+    return this.svc.search(q ?? '', deceasedOnly === 'true');
   }
 
   /* PHẢI khai SAU `customers/search`. Express khớp route theo thứ tự đăng ký, nên
@@ -73,6 +76,22 @@ export class CustomersController {
   @RequirePermission('crm.customer.view')
   customerDetail(@Param('id') id: string) {
     return this.svc.getCustomerDetail(id);
+  }
+
+  /* Sửa và xoá khai SAU `customers/:id` cho gọn nhóm, nhưng chúng dùng động từ HTTP khác
+   * nên không đụng thứ tự khớp route — Express khớp theo (động từ, đường dẫn). */
+  @Patch('customers/:id')
+  @RequirePermission('crm.customer.update')
+  updateCustomer(@Param('id') id: string, @Body() dto: UpdateCustomerDto, @Req() req: Request) {
+    return this.svc.updateCustomer(id, dto, this.actor(req));
+  }
+
+  /* Xoá HẲN. Service từ chối khi còn bất kỳ nghiệp vụ nào trỏ tới, và câu từ chối liệt kê
+   * đúng cái đang chặn — người dùng cần biết phải dọn gì, không phải biết mình thất bại. */
+  @Delete('customers/:id')
+  @RequirePermission('crm.customer.delete')
+  deleteCustomer(@Param('id') id: string, @Req() req: Request) {
+    return this.svc.deleteCustomer(id, this.actor(req));
   }
 
   @Post('relationships')

@@ -3,10 +3,8 @@ import { ulid } from 'ulid';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { ScopeService } from '../authorization/scope.service';
+import { activeBurial, activeUsageRight } from '../../common/lifecycle/active';
 import type { IssueCardDto } from './cards.dto';
-
-/** Hồ sơ an táng còn hiệu lực — huỷ rồi thì không in lên thẻ nữa. */
-const ACTIVE_BURIAL_STATUSES = ['Draft', 'Verified', 'Scheduled', 'Completed'];
 
 const CARD_TYPE = 'GRAVE';
 
@@ -35,7 +33,7 @@ export class CardsService {
     await this.scope.assertCompany(actor, customer.companyId);
 
     const rights = await this.prisma.graveUsageRight.findMany({
-      where: { holderCustomerId: customerId, status: 'Active' },
+      where: { holderCustomerId: customerId, ...activeUsageRight },
       orderBy: { createdAt: 'asc' },
     });
     if (rights.length === 0) {
@@ -51,7 +49,7 @@ export class CardsService {
     const burials = await this.prisma.burialRecord.findMany({
       where: {
         gravePlotId: { in: rights.map((r) => r.gravePlotId) },
-        status: { in: ACTIVE_BURIAL_STATUSES },
+        ...activeBurial(),
       },
       include: { deceased: { include: { person: true } } },
       orderBy: { burialDate: 'asc' },

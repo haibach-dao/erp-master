@@ -2,12 +2,15 @@
 
 import { use, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
   ArrowLeft,
+  Pencil,
+  Trash2,
   Banknote,
   GraduationCap,
-  IdCard,
   Landmark,
+  IdCard,
   MapPin,
   Phone,
   Plus,
@@ -19,12 +22,27 @@ import {
   addPersonBankAccount,
   addPersonEducation,
   addPersonPhone,
+  createRelationship,
+  endRelationship,
   deactivatePersonSubRecord,
+  deleteCustomer,
   getCustomerDetail,
+  listRelationshipTypes,
+  updateCustomer,
+  searchCustomers,
   type CustomerDetail,
 } from '@/lib/api';
-import { customerType, statusOf } from '@/lib/status';
+import { customerType } from '@/lib/status';
+import {
+  CustomerFormTabs,
+  EMPTY_CUSTOMER_FORM,
+  changedOnly,
+  type CustomerFormValue,
+} from '@/components/customer-form';
+import { birthOrder, bothDirections, relationshipLabel } from '@/lib/relationship';
 import { cn } from '@/lib/utils';
+import { CustomerGraveActions } from '@/components/customer-grave-actions';
+import { Tabs, TabPanel, type TabItem } from '@/components/ui/tabs';
 import { PageHeader } from '@/components/ui/page-header';
 import { Alert } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -78,13 +96,6 @@ function fmtDate(v: string | null): string | null {
 }
 
 const GENDER: Record<string, string> = { MALE: 'Nam', FEMALE: 'Nữ', UNKNOWN: 'Không xác định' };
-const RELATIONSHIP: Record<string, string> = {
-  SPOUSE: 'Vợ/Chồng',
-  PARENT: 'Cha/Mẹ',
-  CHILD: 'Con',
-  SIBLING: 'Anh/Chị/Em',
-};
-
 type SubKind = 'phones' | 'addresses' | 'education' | 'bank-accounts';
 
 const EMPTY_SUB = {
@@ -101,10 +112,76 @@ const EMPTY_SUB = {
   isPrimary: false,
 };
 
+/* Con số trên tab cho biết bên trong có gì mà không phải mở ra xem. Tab rỗng vẫn hiện —
+ * ẩn nó đi thì người dùng không biết hệ có phần đó. */
+function TABS(c: CustomerDetail): TabItem[] {
+  const p = c.person;
+  return [
+    { id: 'nhan-than', label: 'Nhân thân', icon: IdCard },
+    {
+      id: 'lien-lac',
+      label: 'Liên lạc',
+      icon: Phone,
+      count: (p?.phones.length ?? 0) + (p?.addresses.length ?? 0),
+    },
+    { id: 'phan-mo', label: 'Phần mộ', icon: Landmark, count: c.gravePlots.length },
+    { id: 'quan-he', label: 'Quan hệ', icon: Users, count: c.relationships.length },
+    {
+      id: 'khac',
+      label: 'Học vấn & ngân hàng',
+      icon: Banknote,
+      count: (p?.education.length ?? 0) + (p?.bankAccounts.length ?? 0),
+    },
+  ];
+}
+
+/* Đổ hồ sơ hiện tại vào form sửa.
+ *
+ * CCCD CỐ Ý để trống: cái hệ đang giữ là bản đã che (`079***123`), và đổ nó vào ô nhập là
+ * mời người dùng bấm Lưu để ghi chính chuỗi che đó đè lên số thật. Trống = giữ nguyên.
+ *
+ * Ngày về dạng `yyyy-MM-dd` cho ô <input type="date">; ngày đã bị lớp che rút thành NĂM
+ * thì bỏ trống, vì "2021" không phải một ngày và ô lịch sẽ từ chối nó.
+ */
+function toDateInput(v: string | null): string {
+  if (v === null || v === '' || /^\d{4}$/.test(v)) return '';
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
+}
+
+function formFromCustomer(c: CustomerDetail): CustomerFormValue {
+  const p = c.person;
+  return {
+    type: c.type,
+    fullName: p?.fullName ?? '',
+    gender: p?.gender ?? '',
+    dateOfBirth: toDateInput(p?.dateOfBirth ?? null),
+    placeOfBirth: p?.placeOfBirth ?? '',
+    nationalId: '',
+    nationalIdIssuedOn: toDateInput(p?.nationalIdIssuedOn ?? null),
+    nationalIdIssuedPlace: p?.nationalIdIssuedPlace ?? '',
+    permanentAddress: p?.permanentAddress ?? '',
+    contactAddress: p?.contactAddress ?? '',
+    ethnicity: p?.ethnicity ?? '',
+    religion: p?.religion ?? '',
+    orgName: c.orgName ?? '',
+    phone: c.phone ?? '',
+    email: c.email ?? '',
+  };
+}
+
 export default function CustomerDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const qc = useQueryClient();
+  const router = useRouter();
   const [adding, setAdding] = useState<SubKind | null>(null);
+  const [relOpen, setRelOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [tab, setTab] = useState('nhan-than');
+  const [editTab, setEditTab] = useState('chung');
+  const [editForm, setEditForm] = useState<CustomerFormValue>(EMPTY_CUSTOMER_FORM);
+  const [rel, setRel] = useState({ targetPersonId: '', relationshipType: '', q: '' });
   const [sub, setSub] = useState(EMPTY_SUB);
 
   const detail = useQuery({
@@ -113,6 +190,43 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
   });
 
   const refresh = () => void qc.invalidateQueries({ queryKey: ['customerDetail', id] });
+
+  const relTypes = useQuery({ queryKey: ['relationshipTypes'], queryFn: listRelationshipTypes });
+  /* Chọn người có quan hệ từ danh sách KHÁCH HÀNG. Người mất cũng là khách hàng, nên
+   * không cần một đường tra cứu nhân thân riêng — và một đường riêng là chỗ dữ liệu lại
+   * lệch ra ngoài danh sách khách như trước. */
+  const relCustomers = useQuery({
+    queryKey: ['customers', rel.q],
+    queryFn: () => searchCustomers(rel.q),
+    enabled: relOpen,
+  });
+
+  /* CHIỀU LƯU TRỮ: `source --CODE--> target` nghĩa là "source LÀ code của target".
+   *
+   * Bản trước gửi ngược: nó đặt khách hàng làm `source` trong khi nhãn trên màn hình nói
+   * "người kia là gì của khách hàng". Kết quả là dòng ghi vào CSDL mang nghĩa trái với
+   * điều người nhập vừa đọc — và `resolveOwnerRelationship` bên an táng đọc theo đúng quy
+   * ước, nên nó sẽ suy ra quan hệ ngược khi đặt cốt.
+   *
+   * Đúng phải là: người vừa chọn làm `source`, khách hàng làm `target`. */
+  const addRel = useMutation({
+    mutationFn: () => {
+      const personId = detail.data?.personId;
+      if (personId === null || personId === undefined) {
+        throw new Error('Khách hàng tổ chức không có hồ sơ nhân thân');
+      }
+      return createRelationship({
+        sourcePersonId: rel.targetPersonId,
+        targetPersonId: personId,
+        relationshipType: rel.relationshipType,
+      });
+    },
+    onSuccess: () => {
+      setRel({ targetPersonId: '', relationshipType: '', q: '' });
+      setRelOpen(false);
+      refresh();
+    },
+  });
 
   const addSub = useMutation({
     mutationFn: async () => {
@@ -156,6 +270,47 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
     },
   });
 
+  /* Chọn nhầm thì sửa được: chấm dứt quan hệ cũ rồi khai lại. KHÔNG sửa tại chỗ — quan
+   * hệ có hiệu lực theo thời gian, và ghi đè là xoá mất việc "trước đây đã từng khai
+   * khác". Server đóng cả dòng đối ứng trong cùng giao dịch. */
+  const endRel = useMutation({
+    mutationFn: (relationshipId: string) => endRelationship(relationshipId),
+    onSuccess: refresh,
+  });
+
+  /* Chỉ gửi trường THỰC SỰ đổi. Gửi cả hồ sơ thì audit ghi 15 trường "đã đổi" trong khi
+   * người dùng chỉ sửa một — và nhật ký như thế thì không dùng để rà soát được. */
+  const saveEdit = useMutation({
+    mutationFn: () => {
+      const base = formFromCustomer(c);
+      const diff = changedOnly(editForm, base);
+      const { type, orgName, phone, email, ...personFields } = diff;
+      const person = Object.fromEntries(
+        Object.entries(personFields).filter(([, v]) => v !== undefined),
+      );
+      return updateCustomer(id, {
+        ...(type !== undefined ? { type } : {}),
+        ...(orgName !== undefined ? { orgName } : {}),
+        ...(phone !== undefined ? { phone } : {}),
+        ...(email !== undefined ? { email } : {}),
+        ...(Object.keys(person).length > 0 ? { person } : {}),
+      });
+    },
+    onSuccess: () => {
+      setEditOpen(false);
+      refresh();
+      void qc.invalidateQueries({ queryKey: ['customers'] });
+    },
+  });
+
+  const removeCustomer = useMutation({
+    mutationFn: () => deleteCustomer(id),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['customers'] });
+      router.push('/cemetery/customers');
+    },
+  });
+
   const deactivate = useMutation({
     mutationFn: ({ kind, recordId }: { kind: SubKind; recordId: string }) => {
       const personId = detail.data?.personId;
@@ -166,6 +321,13 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
     },
     onSuccess: refresh,
   });
+
+  /* Bỏ khách tổ chức (không có nhân thân) và bỏ chính khách hàng này: server chặn quan hệ
+   * với chính mình, nên đừng mời người dùng chọn một lựa chọn chắc chắn lỗi. */
+  const relCandidates = (relCustomers.data ?? []).filter(
+    (x) => x.person !== null && x.person.id !== detail.data?.personId,
+  );
+  const chosenPerson = relCandidates.find((x) => x.person?.id === rel.targetPersonId);
 
   if (detail.isPending) {
     return <p className="text-sm text-muted-foreground">Đang tải hồ sơ…</p>;
@@ -178,21 +340,67 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
   const p = c.person;
   const name = p?.fullName ?? c.orgName ?? c.customerCode;
 
+  /* Hai câu xác nhận trước khi lưu. `source` là NGƯỜI VỪA CHỌN, `target` là khách hàng
+   * này — đúng chiều sẽ ghi xuống CSDL, nên câu hiện ra chính là điều sắp được lưu, không
+   * phải một bản diễn giải gần đúng. */
+  const relPreview =
+    chosenPerson?.person != null && p !== null && rel.relationshipType !== ''
+      ? bothDirections(
+          {
+            fullName: chosenPerson.person.fullName,
+            gender: chosenPerson.person.gender,
+            dateOfBirth: chosenPerson.person.dateOfBirth,
+          },
+          { fullName: p.fullName, gender: p.gender, dateOfBirth: p.dateOfBirth },
+          rel.relationshipType,
+        )
+      : null;
+
   return (
     <section className="space-y-6">
+      {/* Sống hay đã mất là thứ quyết định người này còn đứng tên mộ được không, nên nó
+          phải nằm ở chỗ nhìn đầu tiên chứ không lẫn trong bảng thuộc tính. */}
+      {p !== null && p.deceased !== null ? (
+        <Alert variant="warning" title="Khách hàng đã mất">
+          {p.deceased.dateOfDeath === null
+            ? 'Chưa ghi ngày mất.'
+            : `Ngày mất: ${fmtDate(p.deceased.dateOfDeath) ?? '—'}.`}{' '}
+          Không gán thêm phần mộ cho người đã mất — chuyển quyền phải qua thủ tục kế thừa.
+        </Alert>
+      ) : null}
+
       <PageHeader
         title={name}
-        description={`${customerType(c.type)} · ${c.customerCode}`}
+        description={`${customerType(c.type)} · ${c.customerCode}${p === null ? '' : p.deceased === null ? ' · Còn sống' : ' · Đã mất'}`}
         actions={
-          /* `Link` mang class của nút, KHÔNG bọc `Link` trong `Button`: `<a>` lồng trong
-           * `<button>` là HTML không hợp lệ và trình duyệt tự gỡ ra, làm hỏng điều hướng. */
-          <Link
-            href="/cemetery/customers"
-            className={cn(buttonVariants({ variant: 'secondary' }), 'gap-1.5')}
-          >
-            <ArrowLeft className="size-4" aria-hidden />
-            Về danh sách
-          </Link>
+          <>
+            {/* `Link` mang class của nút, KHÔNG bọc `Link` trong `Button`: `<a>` lồng
+                trong `<button>` là HTML không hợp lệ và trình duyệt tự gỡ ra. */}
+            <Link
+              href="/cemetery/customers"
+              className={cn(buttonVariants({ variant: 'secondary' }), 'gap-1.5')}
+            >
+              <ArrowLeft className="size-4" aria-hidden />
+              Về danh sách
+            </Link>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                /* Nạp giá trị HIỆN TẠI vào form mỗi lần mở, không giữ lại lần sửa trước:
+                   mở ra thấy dữ liệu cũ của lần bấm trước là chỗ người dùng lưu nhầm. */
+                setEditForm(formFromCustomer(c));
+                setEditTab('chung');
+                setEditOpen(true);
+              }}
+            >
+              <Pencil className="size-4" aria-hidden />
+              Sửa
+            </Button>
+            <Button variant="destructive" onClick={() => setDeleteOpen(true)}>
+              <Trash2 className="size-4" aria-hidden />
+              Xoá
+            </Button>
+          </>
         }
       />
 
@@ -203,216 +411,352 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
         <Alert variant="destructive">{(deactivate.error as Error).message}</Alert>
       ) : null}
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <IdCard className="size-4" aria-hidden />
-              Thông tin nhân thân
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {p === null ? (
-              <EmptyState
-                icon={Users}
-                title="Khách hàng tổ chức"
-                description="Không có hồ sơ nhân thân gắn kèm."
-              />
-            ) : (
-              <div className="divide-y divide-border">
-                <Row label="Họ và tên" value={p.fullName} />
-                <Row
-                  label="Giới tính"
-                  value={p.gender === null ? null : (GENDER[p.gender] ?? p.gender)}
+      <Tabs items={TABS(c)} value={tab} onChange={setTab}>
+        <TabPanel id="nhan-than" value={tab}>
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <IdCard className="size-4" aria-hidden />
+                Thông tin nhân thân
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {p === null ? (
+                <EmptyState
+                  icon={Users}
+                  title="Khách hàng tổ chức"
+                  description="Không có hồ sơ nhân thân gắn kèm."
                 />
-                <Row label="Ngày sinh" value={fmtDate(p.dateOfBirth)} />
-                <Row label="Số CCCD" value={p.nationalIdMasked} />
-                <Row label="Ngày cấp" value={fmtDate(p.nationalIdIssuedOn)} />
-                <Row label="Nơi cấp" value={p.nationalIdIssuedPlace} />
-                <Row label="Điện thoại chính" value={p.phone} />
-                <Row label="Email chính" value={p.email} />
-                <Row label="Địa chỉ thường trú" value={p.permanentAddress} />
-                <Row label="Địa chỉ liên hệ" value={p.contactAddress} />
-                <Row label="Dân tộc" value={p.ethnicity} />
-                <Row label="Tôn giáo" value={p.religion} />
-              </div>
-            )}
-          </CardContent>
-        </Card>
+              ) : (
+                <div className="divide-y divide-border">
+                  <Row label="Họ và tên" value={p.fullName} />
+                  <Row
+                    label="Giới tính"
+                    value={p.gender === null ? null : (GENDER[p.gender] ?? p.gender)}
+                  />
+                  <Row label="Ngày sinh" value={fmtDate(p.dateOfBirth)} />
+                  <Row label="Số CCCD" value={p.nationalIdMasked} />
+                  <Row label="Ngày cấp" value={fmtDate(p.nationalIdIssuedOn)} />
+                  <Row label="Nơi cấp" value={p.nationalIdIssuedPlace} />
+                  <Row label="Điện thoại chính" value={p.phone} />
+                  <Row label="Email chính" value={p.email} />
+                  <Row label="Địa chỉ thường trú" value={p.permanentAddress} />
+                  <Row label="Địa chỉ liên hệ" value={p.contactAddress} />
+                  <Row label="Dân tộc" value={p.ethnicity} />
+                  <Row label="Tôn giáo" value={p.religion} />
+                  <Row label="Nơi sinh" value={p.placeOfBirth} />
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabPanel>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Landmark className="size-4" aria-hidden />
-              Phần mộ đang đứng tên
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {c.gravePlots.length === 0 ? (
-              <EmptyState
-                icon={Landmark}
-                title="Chưa đứng tên phần mộ nào"
-                description="Quyền sử dụng phát sinh khi hợp đồng có hiệu lực."
-              />
-            ) : (
+        <TabPanel id="lien-lac" value={tab}>
+          {p !== null ? (
+            <div className="grid gap-6 lg:grid-cols-2">
+              <SubCard
+                icon={Phone}
+                title="Số điện thoại khác"
+                hint="Số chính nằm ở khối nhân thân bên trên."
+                onAdd={() => setAdding('phones')}
+                empty={p.phones.length === 0}
+                emptyText="Chưa có số nào khác."
+              >
+                {p.phones.map((row) => (
+                  <SubRow
+                    key={row.id}
+                    primary={row.isPrimary === true}
+                    main={row.phone}
+                    meta={row.kind ?? null}
+                    onRemove={() => deactivate.mutate({ kind: 'phones', recordId: row.id })}
+                  />
+                ))}
+              </SubCard>
+
+              <SubCard
+                icon={MapPin}
+                title="Địa chỉ khác"
+                hint="Thường trú và liên hệ nằm ở khối nhân thân."
+                onAdd={() => setAdding('addresses')}
+                empty={p.addresses.length === 0}
+                emptyText="Chưa có địa chỉ nào khác."
+              >
+                {p.addresses.map((row) => (
+                  <SubRow
+                    key={row.id}
+                    primary={row.isPrimary === true}
+                    main={row.address}
+                    meta={row.kind ?? null}
+                    onRemove={() => deactivate.mutate({ kind: 'addresses', recordId: row.id })}
+                  />
+                ))}
+              </SubCard>
+            </div>
+          ) : null}
+        </TabPanel>
+
+        <TabPanel id="phan-mo" value={tab}>
+          <CustomerGraveActions customer={c} onChanged={refresh} />
+        </TabPanel>
+
+        <TabPanel id="quan-he" value={tab}>
+          <Card>
+            <CardHeader className="flex-row items-start justify-between">
+              <div className="space-y-1">
+                <CardTitle className="flex items-center gap-2">
+                  <Users className="size-4" aria-hidden />
+                  Quan hệ nhân thân
+                </CardTitle>
+                {/* Nói rõ vì sao khối này quan trọng: không có quan hệ thì không đặt cốt được. */}
+                <p className="text-xs text-muted-foreground">
+                  An táng vào mộ của khách này đòi người mất có quan hệ đã xác nhận với họ.
+                </p>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={p === null}
+                onClick={() => setRelOpen(true)}
+                title={p === null ? 'Khách hàng tổ chức không có hồ sơ nhân thân' : undefined}
+              >
+                <Plus className="size-4" aria-hidden />
+                Khai quan hệ
+              </Button>
+            </CardHeader>
+            <CardContent>
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Mã mộ</TableHead>
-                    <TableHead>Vị trí</TableHead>
+                    <TableHead>Quan hệ</TableHead>
                     <TableHead>Trạng thái</TableHead>
-                    <TableHead>Sức chứa</TableHead>
+                    <TableHead />
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {c.gravePlots.map((g) => (
-                    <TableRow key={g.gravePlotId}>
-                      <TableCell className="font-mono text-xs">{g.plotCode ?? '—'}</TableCell>
-                      <TableCell className="text-xs text-muted-foreground">
-                        {[g.cemeteryName, g.zone, g.block, g.row].filter(Boolean).join(' / ') ||
-                          '—'}
-                      </TableCell>
-                      <TableCell>
-                        {g.status === null ? (
-                          '—'
-                        ) : (
-                          <Badge variant={statusOf(g.status).variant}>
-                            {statusOf(g.status).label}
-                          </Badge>
-                        )}
-                      </TableCell>
-                      <TableCell className="num">{g.capacity ?? '—'}</TableCell>
-                    </TableRow>
-                  ))}
+                  {c.relationships.length === 0 ? (
+                    <TableMessage colSpan={3}>
+                      <EmptyState
+                        icon={Users}
+                        title="Chưa khai quan hệ nào"
+                        description="An táng đòi có quan hệ đã xác nhận với chủ mộ."
+                      />
+                    </TableMessage>
+                  ) : (
+                    c.relationships.map((r) => {
+                      /* Dòng lưu là "khách hàng này LÀ relationshipType của target". Hiện
+                     thành CÂU đủ hai chiều thay vì hai cột rời — hai cột rời là chỗ người
+                     đọc phải tự đoán ai là gì của ai, và đoán sai thì không ai biết. */
+                      const both =
+                        p === null
+                          ? null
+                          : bothDirections(
+                              {
+                                fullName: p.fullName,
+                                gender: p.gender,
+                                dateOfBirth: p.dateOfBirth,
+                              },
+                              {
+                                fullName: r.target.fullName,
+                                gender: r.target.gender,
+                                dateOfBirth: r.target.dateOfBirth,
+                              },
+                              r.relationshipType,
+                            );
+                      return (
+                        <TableRow key={r.id}>
+                          <TableCell>
+                            <span className="block font-medium">
+                              {both?.forward ?? r.relationshipType}
+                            </span>
+                            <span className="block text-xs text-muted-foreground">
+                              {both?.backward ?? ''}
+                            </span>
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant={r.status === 'Confirmed' ? 'success' : 'warning'}>
+                              {r.status === 'Confirmed' ? 'Đã xác nhận' : r.status}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              disabled={endRel.isPending}
+                              onClick={() => endRel.mutate(r.id)}
+                              title="Chấm dứt quan hệ này rồi khai lại cho đúng"
+                            >
+                              Chấm dứt
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })
+                  )}
                 </TableBody>
               </Table>
-            )}
-          </CardContent>
-        </Card>
-      </div>
+            </CardContent>
+          </Card>
+        </TabPanel>
 
-      {p !== null ? (
-        <div className="grid gap-6 lg:grid-cols-2">
-          <SubCard
-            icon={Phone}
-            title="Số điện thoại khác"
-            hint="Số chính nằm ở khối nhân thân bên trên."
-            onAdd={() => setAdding('phones')}
-            empty={p.phones.length === 0}
-            emptyText="Chưa có số nào khác."
-          >
-            {p.phones.map((row) => (
-              <SubRow
-                key={row.id}
-                primary={row.isPrimary === true}
-                main={row.phone}
-                meta={row.kind ?? null}
-                onRemove={() => deactivate.mutate({ kind: 'phones', recordId: row.id })}
-              />
-            ))}
-          </SubCard>
-
-          <SubCard
-            icon={MapPin}
-            title="Địa chỉ khác"
-            hint="Thường trú và liên hệ nằm ở khối nhân thân."
-            onAdd={() => setAdding('addresses')}
-            empty={p.addresses.length === 0}
-            emptyText="Chưa có địa chỉ nào khác."
-          >
-            {p.addresses.map((row) => (
-              <SubRow
-                key={row.id}
-                primary={row.isPrimary === true}
-                main={row.address}
-                meta={row.kind ?? null}
-                onRemove={() => deactivate.mutate({ kind: 'addresses', recordId: row.id })}
-              />
-            ))}
-          </SubCard>
-
-          <SubCard
-            icon={GraduationCap}
-            title="Học vấn"
-            onAdd={() => setAdding('education')}
-            empty={p.education.length === 0}
-            emptyText="Chưa ghi nhận học vấn."
-          >
-            {p.education.map((row) => (
-              <SubRow
-                key={row.id}
-                primary={false}
-                main={[row.degree, row.major].filter(Boolean).join(' — ') || '(chưa rõ)'}
-                meta={[row.school, row.graduationYear].filter(Boolean).join(' · ') || null}
-                onRemove={() => deactivate.mutate({ kind: 'education', recordId: row.id })}
-              />
-            ))}
-          </SubCard>
-
-          <SubCard
-            icon={Banknote}
-            title="Tài khoản ngân hàng"
-            hint="Số tài khoản mở bằng quyền riêng crm.person.view_financial."
-            onAdd={() => setAdding('bank-accounts')}
-            empty={p.bankAccounts.length === 0}
-            emptyText="Chưa có tài khoản nào."
-          >
-            {p.bankAccounts.map((row) => (
-              <SubRow
-                key={row.id}
-                primary={row.isPrimary === true}
-                main={row.accountNumber}
-                meta={[row.bankCode, row.accountHolder].filter(Boolean).join(' · ') || null}
-                masked
-                onRemove={() => deactivate.mutate({ kind: 'bank-accounts', recordId: row.id })}
-              />
-            ))}
-          </SubCard>
-        </div>
-      ) : null}
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Users className="size-4" aria-hidden />
-            Quan hệ nhân thân
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Người liên quan</TableHead>
-                <TableHead>Quan hệ</TableHead>
-                <TableHead>Trạng thái</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {c.relationships.length === 0 ? (
-                <TableMessage colSpan={3}>
-                  <EmptyState
-                    icon={Users}
-                    title="Chưa khai quan hệ nào"
-                    description="An táng đòi có quan hệ đã xác nhận với chủ mộ."
+        <TabPanel id="khac" value={tab}>
+          {p !== null ? (
+            <div className="grid gap-6 lg:grid-cols-2">
+              <SubCard
+                icon={GraduationCap}
+                title="Học vấn"
+                onAdd={() => setAdding('education')}
+                empty={p.education.length === 0}
+                emptyText="Chưa ghi nhận học vấn."
+              >
+                {p.education.map((row) => (
+                  <SubRow
+                    key={row.id}
+                    primary={false}
+                    main={[row.degree, row.major].filter(Boolean).join(' — ') || '(chưa rõ)'}
+                    meta={[row.school, row.graduationYear].filter(Boolean).join(' · ') || null}
+                    onRemove={() => deactivate.mutate({ kind: 'education', recordId: row.id })}
                   />
-                </TableMessage>
-              ) : (
-                c.relationships.map((r) => (
-                  <TableRow key={r.id}>
-                    <TableCell className="font-medium">{r.target.fullName}</TableCell>
-                    <TableCell>{RELATIONSHIP[r.relationshipType] ?? r.relationshipType}</TableCell>
-                    <TableCell>
-                      <Badge variant={r.status === 'Confirmed' ? 'success' : 'warning'}>
-                        {r.status === 'Confirmed' ? 'Đã xác nhận' : r.status}
-                      </Badge>
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
+                ))}
+              </SubCard>
+
+              <SubCard
+                icon={Banknote}
+                title="Tài khoản ngân hàng"
+                hint="Số tài khoản mở bằng quyền riêng crm.person.view_financial."
+                onAdd={() => setAdding('bank-accounts')}
+                empty={p.bankAccounts.length === 0}
+                emptyText="Chưa có tài khoản nào."
+              >
+                {p.bankAccounts.map((row) => (
+                  <SubRow
+                    key={row.id}
+                    primary={row.isPrimary === true}
+                    main={row.accountNumber}
+                    meta={[row.bankCode, row.accountHolder].filter(Boolean).join(' · ') || null}
+                    masked
+                    onRemove={() => deactivate.mutate({ kind: 'bank-accounts', recordId: row.id })}
+                  />
+                ))}
+              </SubCard>
+            </div>
+          ) : null}
+        </TabPanel>
+      </Tabs>
+
+      <Dialog
+        open={relOpen}
+        onClose={() => setRelOpen(false)}
+        title="Khai quan hệ nhân thân"
+        description="Chọn người, rồi chọn NGƯỜI ĐÓ là gì của khách hàng này."
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setRelOpen(false)}>
+              Huỷ
+            </Button>
+            <Button
+              disabled={
+                rel.targetPersonId === '' || rel.relationshipType === '' || addRel.isPending
+              }
+              loading={addRel.isPending}
+              onClick={() => addRel.mutate()}
+            >
+              Lưu quan hệ
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          {addRel.error !== null ? (
+            <Alert variant="destructive">{(addRel.error as Error).message}</Alert>
+          ) : null}
+
+          {/* Ô tìm và danh sách kết quả gộp làm một. Trước đây tách thành ô nhập rời với
+              ô chọn rời: gõ xong vẫn phải mở ô thứ hai, và ô thứ hai không cho thấy giới
+              tính hay tuổi — hai thứ quyết định nhãn quan hệ. */}
+          <Field label="Tìm người" hint="Gõ tên hoặc mã KH. Người mất cũng là khách hàng.">
+            <Input
+              value={rel.q}
+              onChange={(e) => setRel({ ...rel, q: e.target.value })}
+              placeholder="Họ tên, mã KH…"
+              autoFocus
+            />
+          </Field>
+
+          <div className="max-h-48 overflow-y-auto rounded-md border">
+            {relCandidates.length === 0 ? (
+              <p className="px-3 py-4 text-center text-sm text-muted-foreground">
+                {rel.q === '' ? 'Gõ để tìm khách hàng.' : 'Không tìm thấy ai khớp.'}
+              </p>
+            ) : (
+              <ul className="divide-y divide-border">
+                {relCandidates.map((x) => (
+                  <li key={x.id}>
+                    <button
+                      type="button"
+                      onClick={() => setRel({ ...rel, targetPersonId: x.person?.id ?? '' })}
+                      className={cn(
+                        'flex w-full items-center justify-between px-3 py-2 text-left text-sm transition-colors hover:bg-accent/50',
+                        rel.targetPersonId === x.person?.id ? 'bg-accent' : '',
+                      )}
+                    >
+                      <span>
+                        <span className="font-medium">{x.person?.fullName}</span>
+                        <span className="block text-xs text-muted-foreground">
+                          {x.customerCode} · {GENDER[x.person?.gender ?? ''] ?? 'Chưa rõ giới tính'}
+                          {x.isDeceased ? ' · đã mất' : ''}
+                        </span>
+                      </span>
+                      {rel.targetPersonId === x.person?.id ? (
+                        <Badge variant="default">Đã chọn</Badge>
+                      ) : null}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          <Field
+            label={`Người đó là gì của ${name}`}
+            hint={
+              chosenPerson === undefined
+                ? 'Chọn người trước để hệ đặt đúng nhãn theo giới tính.'
+                : chosenPerson.person?.gender == null
+                  ? 'Người này chưa khai giới tính nên nhãn để dạng chung.'
+                  : undefined
+            }
+          >
+            <Select
+              value={rel.relationshipType}
+              disabled={chosenPerson === undefined}
+              onChange={(e) => setRel({ ...rel, relationshipType: e.target.value })}
+            >
+              <option value="">— Chọn quan hệ —</option>
+              {(relTypes.data ?? []).map((t) => (
+                <option key={t.code} value={t.code}>
+                  {/* Nhãn theo GIỚI TÍNH của người vừa chọn: "Bố đẻ" hay "Mẹ đẻ", không
+                      phải "Cha/Mẹ" chung chung. */}
+                  {relationshipLabel(
+                    t.code,
+                    chosenPerson?.person?.gender ?? null,
+                    birthOrder(chosenPerson?.person?.dateOfBirth ?? null, p?.dateOfBirth ?? null),
+                  )}
+                </option>
+              ))}
+            </Select>
+          </Field>
+
+          {/* Xác nhận CẢ HAI CHIỀU trước khi lưu. Quan hệ vốn hai chiều nhưng người nhập
+              chỉ khai một chiều — hiện đủ hai câu thì không còn chỗ hiểu ngược, và người
+              nhập tự thấy mình chọn sai trước khi bấm. */}
+          {relPreview !== null ? (
+            <Alert variant="info" title="Sẽ ghi nhận">
+              <p>{relPreview.forward}</p>
+              <p>{relPreview.backward}</p>
+            </Alert>
+          ) : null}
+        </div>
+      </Dialog>
 
       <Dialog
         open={adding !== null}
@@ -556,6 +900,100 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
             </label>
           ) : null}
         </form>
+      </Dialog>
+      <Dialog
+        open={editOpen}
+        onClose={() => setEditOpen(false)}
+        title="Sửa hồ sơ khách hàng"
+        description="Ô để trống nghĩa là XOÁ giá trị cũ. Chỉ trường thực sự đổi mới được gửi đi."
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setEditOpen(false)}>
+              Huỷ
+            </Button>
+            <Button form="edit-form" type="submit" loading={saveEdit.isPending}>
+              {saveEdit.isPending ? 'Đang lưu…' : 'Lưu thay đổi'}
+            </Button>
+          </>
+        }
+      >
+        <form
+          id="edit-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            saveEdit.mutate();
+          }}
+        >
+          {saveEdit.error !== null ? (
+            <Alert variant="destructive" title="Không lưu được" className="mb-4">
+              {(saveEdit.error as Error).message}
+            </Alert>
+          ) : null}
+
+          {/* CCCD hiện ra dạng đã che, nên ô CCCD để TRỐNG khi mở form. Đổ `079***123` vào
+              ô nhập là mời người dùng lưu lại chính chuỗi che đó đè lên số thật. */}
+          <Alert variant="info" className="mb-4">
+            Ô CCCD để trống = giữ nguyên số cũ. Nhập số mới nếu muốn thay.
+          </Alert>
+
+          <CustomerFormTabs
+            value={editForm}
+            onChange={(patch) => setEditForm((f) => ({ ...f, ...patch }))}
+            tab={editTab}
+            onTabChange={setEditTab}
+            lockType
+          />
+        </form>
+      </Dialog>
+
+      <Dialog
+        open={deleteOpen}
+        onClose={() => setDeleteOpen(false)}
+        title="Xoá hồ sơ khách hàng"
+        description="Không lấy lại được."
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setDeleteOpen(false)}>
+              Huỷ
+            </Button>
+            <Button
+              variant="destructive"
+              loading={removeCustomer.isPending}
+              onClick={() => removeCustomer.mutate()}
+            >
+              Xoá hẳn
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          {removeCustomer.error !== null ? (
+            <Alert variant="destructive" title="Không xoá được">
+              {(removeCustomer.error as Error).message}
+            </Alert>
+          ) : null}
+
+          <p className="text-sm">
+            Xoá <strong>{name}</strong> ({c.customerCode})?
+          </p>
+
+          {/* Nói TRƯỚC cái sẽ mất theo. Xoá xong mới biết mình vừa làm gì là quá muộn. */}
+          <Alert variant="warning" title="Sẽ xoá theo">
+            <ul className="list-disc space-y-0.5 pl-5">
+              <li>Hồ sơ nhân thân và toàn bộ số điện thoại, địa chỉ, học vấn, tài khoản</li>
+              <li>
+                {c.relationships.length} quan hệ nhân thân — người bên kia cũng mất quan hệ này khỏi
+                hồ sơ của họ
+              </li>
+              {p?.deceased != null ? <li>Hồ sơ người mất</li> : null}
+            </ul>
+          </Alert>
+
+          <p className="text-xs text-muted-foreground">
+            Hệ sẽ TỪ CHỐI nếu khách hàng còn đứng tên mộ, có hồ sơ an táng, đã cấp thẻ, có hợp đồng
+            hoặc dịch vụ — và nói rõ cái nào đang chặn.
+          </p>
+        </div>
       </Dialog>
     </section>
   );
