@@ -9,12 +9,8 @@ import { ulid } from 'ulid';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PiiService } from '../../common/pii/pii.service';
 import { AuditService } from '../audit/audit.service';
-import {
-  activeBurial,
-  activeSubRecord,
-  activeUsageRight,
-  holdStillHolding,
-} from '../../common/lifecycle/active';
+import { activeBurial, activeSubRecord, activeUsageRight } from '../../common/lifecycle/active';
+import { CUSTOMER_BLOCKING_REFERENCES } from '../../common/lifecycle/customer-references';
 import type {
   AddPersonAddressDto,
   AddPersonBankAccountDto,
@@ -469,34 +465,31 @@ export class CustomersService {
     }
     const personId = customer.person?.id ?? null;
 
-    /* Chỉ đếm thứ CÒN HIỆU LỰC.
+    /* Rào chắn SINH RA từ sổ đăng ký, không viết tay từng lời gọi.
      *
-     * Bản trước đếm mọi dòng bất kể trạng thái, nên một quyền sử dụng đã THU HỒI vẫn chặn
-     * xoá — người dùng thu hồi mộ xong, màn hình báo "chưa đứng tên phần mộ nào", mà xoá
-     * thì vẫn bị từ chối "đang đứng tên 1 phần mộ". Hai câu trả lời trái nhau cho cùng
-     * một câu hỏi.
-     *
-     * Giữ chỗ cũng vậy, thêm một lớp: phiếu HẾT HẠN mà chưa ai quét vẫn mang status
-     * `Active`. Nó không giữ gì nữa nên không được chặn — lọc theo `expiresAt` chứ không
-     * chỉ theo trạng thái. */
+     * Viết tay là cách đã hỏng ba lần trong một ngày: mỗi lần vá một lời gọi mà không hỏi
+     * "còn lời gọi nào nữa không". Ở đây danh sách nằm một chỗ, và một test đối chiếu nó
+     * với `schema.prisma` — thêm bảng trỏ tới khách hàng mà quên khai là gãy build.
+     */
     const now = new Date();
-    const [rights, holds, ownerBurials, cards, subscriptions, parties] = await Promise.all([
-      this.prisma.graveUsageRight.count({
-        where: { holderCustomerId: customerId, ...activeUsageRight },
-      }),
-      this.prisma.graveHold.count({
-        where: { customerId, ...holdStillHolding(now) },
-      }),
-      this.prisma.burialRecord.count({
-        where: { ownerCustomerId: customerId, ...activeBurial() },
-      }),
-      this.prisma.cardPrintLog.count({ where: { customerId } }),
-      this.prisma.serviceSubscription.count({ where: { customerId } }),
-      this.prisma.contractParty.count({ where: { customerId } }),
-    ]);
+    const client = this.prisma as unknown as Record<
+      string,
+      { count: (a: { where: Record<string, unknown> }) => Promise<number> }
+    >;
 
-    /* Người này đã được an táng thì hồ sơ an táng trỏ vào hồ sơ người mất của họ — xoá đi
-     * là để lại một hồ sơ an táng không biết chôn ai. */
+    const counted = await Promise.all(
+      CUSTOMER_BLOCKING_REFERENCES.map(async (ref) => {
+        const model = ref.model.charAt(0).toLowerCase() + ref.model.slice(1);
+        const n = await client[model]!.count({
+          where: { [ref.column]: customerId, ...ref.activeWhere(now) },
+        });
+        return { ref, n };
+      }),
+    );
+
+    /* Người này đã được an táng thì hồ sơ an táng trỏ vào hồ sơ NGƯỜI MẤT của họ, không
+     * trỏ vào hồ sơ khách hàng — nên nó không nằm trong sổ đăng ký theo cột khách hàng, và
+     * phải hỏi riêng. */
     const deceased =
       personId === null
         ? null
@@ -511,14 +504,10 @@ export class CustomersService {
             where: { deceasedPersonId: deceased.id, ...activeBurial() },
           });
 
-    const blockers: string[] = [];
-    if (rights > 0) blockers.push(`đang đứng tên ${rights} phần mộ`);
-    if (holds > 0) blockers.push(`${holds} phiếu giữ chỗ`);
-    if (ownerBurials > 0) blockers.push(`là chủ mộ trong ${ownerBurials} hồ sơ an táng`);
-    if (burialsAsDeceased > 0) blockers.push(`đã được an táng (${burialsAsDeceased} hồ sơ)`);
-    if (cards > 0) blockers.push(`${cards} lần cấp thẻ mộ`);
-    if (subscriptions > 0) blockers.push(`${subscriptions} dịch vụ đã đăng ký`);
-    if (parties > 0) blockers.push(`là bên trong ${parties} hợp đồng`);
+    const blockers = counted.filter((c) => c.n > 0).map((c) => c.ref.message(c.n));
+    if (burialsAsDeceased > 0) {
+      blockers.push(`đã được an táng (${burialsAsDeceased} hồ sơ)`);
+    }
 
     if (blockers.length > 0) {
       throw new ConflictException(
