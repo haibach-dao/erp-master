@@ -153,8 +153,12 @@ export interface CreateCustomerInput {
   email?: string;
 }
 
-export function searchCustomers(q: string): Promise<Customer360[]> {
-  return apiFetch<Customer360[]>(`/api/v1/crm/customers/search?q=${encodeURIComponent(q)}`);
+export function searchCustomers(q: string, deceasedOnly = false): Promise<Customer360[]> {
+  /* `deceasedOnly` lọc ở SERVER: truy vấn cắt ở 50 dòng, nên lọc phía client sẽ bỏ sót
+   * người đã mất khi danh sách có nhiều khách còn sống đứng trước. */
+  return apiFetch<Customer360[]>(
+    `/api/v1/crm/customers/search?q=${encodeURIComponent(q)}${deceasedOnly ? '&deceasedOnly=true' : ''}`,
+  );
 }
 
 export function createCustomer(
@@ -866,26 +870,6 @@ export function listAuditEvents(filters: AuditFilters): Promise<AuditEventPage> 
 }
 
 export const getAuditFacets = (): Promise<AuditFacets> => apiFetch('/api/v1/audit-events/facets');
-
-/* ---- Tra cứu nhân thân ----
- *
- * Khác tra cứu khách hàng: người ĐƯỢC AN TÁNG thường không phải khách hàng, nên tìm họ
- * trong danh sách khách sẽ không bao giờ ra.
- */
-export interface PersonSearchResult {
-  id: string;
-  fullName: string;
-  gender: string | null;
-  dateOfBirth: string | null;
-  nationalIdMasked: string | null;
-  isDeceased: boolean;
-  deceasedPersonId: string | null;
-}
-
-export const searchPersons = (q: string, deceasedOnly = false): Promise<PersonSearchResult[]> =>
-  apiFetch(
-    `/api/v1/crm/persons/search?q=${encodeURIComponent(q)}${deceasedOnly ? '&deceasedOnly=true' : ''}`,
-  );
 
 export const createRelationship = (input: {
   sourcePersonId: string;

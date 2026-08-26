@@ -319,3 +319,76 @@ describe('an táng — chọn cốt trong phần mộ', () => {
     );
   });
 });
+
+/* NGƯỜI MẤT CŨNG LÀ KHÁCH HÀNG (chủ doanh nghiệp chốt 26/08/2026).
+ *
+ * Hệ trước đó dựng theo giả định ngược lại, và hậu quả đo được: 3 người đã an táng nhưng
+ * màn hình khách hàng không bao giờ thấy họ. Ép ở service chứ không chỉ ở giao diện —
+ * quy ước chỉ sống ở giao diện là quy ước sẽ bị đường khác đi vòng qua.
+ */
+describe('hồ sơ người mất — phải là khách hàng trước', () => {
+  function buildDeceased(over: { person?: unknown; existing?: unknown } = {}) {
+    const create = vi
+      .fn()
+      .mockImplementation((args: { data: unknown }) => Promise.resolve(args.data));
+    const update = vi
+      .fn()
+      .mockImplementation((args: { data: unknown }) =>
+        Promise.resolve({ id: 'dec-1', ...args.data }),
+      );
+    const prisma = {
+      person: {
+        findUnique: vi
+          .fn()
+          .mockResolvedValue(
+            over.person === undefined
+              ? { id: 'p1', fullName: 'Nguyễn Văn A', customer: { id: 'cus-1' } }
+              : over.person,
+          ),
+      },
+      deceasedPerson: {
+        findUnique: vi.fn().mockResolvedValue(over.existing ?? null),
+        create,
+        update,
+      },
+    } as unknown as PrismaService;
+    const svc = new BurialsService(prisma, { record: vi.fn() } as unknown as AuditService);
+    return { svc, create, update };
+  }
+
+  it('người ĐÃ là khách hàng thì lập được hồ sơ người mất', async () => {
+    const { svc, create } = buildDeceased();
+
+    await svc.createDeceased({ personId: 'p1', dateOfDeath: '2026-01-15' });
+
+    expect(create).toHaveBeenCalledOnce();
+  });
+
+  it('người CHƯA là khách hàng thì chặn, câu lỗi bảo lập hồ sơ khách hàng trước', async () => {
+    const { svc, create } = buildDeceased({
+      person: { id: 'p1', fullName: 'Nguyễn Văn A', customer: null },
+    });
+
+    await expect(svc.createDeceased({ personId: 'p1' })).rejects.toThrow(
+      /chưa có hồ sơ khách hàng/,
+    );
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('không tìm thấy nhân thân thì 404', async () => {
+    const { svc } = buildDeceased({ person: null });
+
+    await expect(svc.createDeceased({ personId: 'khong-co' })).rejects.toThrow(NotFoundException);
+  });
+
+  /* Màn hình an táng gọi hàm này mỗi lần đặt cốt, và một người có thể được an táng vào mộ
+   * thứ hai. Ném lỗi trùng ở đó là chặn một việc hợp lệ. */
+  it('đã có hồ sơ người mất thì cập nhật, không ném lỗi trùng', async () => {
+    const { svc, create, update } = buildDeceased({ existing: { id: 'dec-1' } });
+
+    await svc.createDeceased({ personId: 'p1', dateOfDeath: '2026-02-01' });
+
+    expect(create).not.toHaveBeenCalled();
+    expect(update).toHaveBeenCalledOnce();
+  });
+});

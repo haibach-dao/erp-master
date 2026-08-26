@@ -22,7 +22,7 @@ import {
   deactivatePersonSubRecord,
   getCustomerDetail,
   listRelationshipTypes,
-  searchPersons,
+  searchCustomers,
   type CustomerDetail,
 } from '@/lib/api';
 import { customerType } from '@/lib/status';
@@ -120,9 +120,12 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
   const refresh = () => void qc.invalidateQueries({ queryKey: ['customerDetail', id] });
 
   const relTypes = useQuery({ queryKey: ['relationshipTypes'], queryFn: listRelationshipTypes });
-  const relPersons = useQuery({
-    queryKey: ['persons', rel.q],
-    queryFn: () => searchPersons(rel.q),
+  /* Chọn người có quan hệ từ danh sách KHÁCH HÀNG. Người mất cũng là khách hàng, nên
+   * không cần một đường tra cứu nhân thân riêng — và một đường riêng là chỗ dữ liệu lại
+   * lệch ra ngoài danh sách khách như trước. */
+  const relCustomers = useQuery({
+    queryKey: ['customers', rel.q],
+    queryFn: () => searchCustomers(rel.q),
     enabled: relOpen,
   });
 
@@ -469,13 +472,14 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
               onChange={(e) => setRel({ ...rel, targetPersonId: e.target.value })}
             >
               <option value="">— Chọn người —</option>
-              {(relPersons.data ?? [])
-                /* Bỏ chính chủ mộ khỏi danh sách: server chặn quan hệ với chính mình,
-                   nên đừng mời người dùng chọn một lựa chọn chắc chắn lỗi. */
-                .filter((x) => x.id !== c.personId)
+              {(relCustomers.data ?? [])
+                /* Bỏ khách tổ chức (không có nhân thân) và bỏ chính chủ mộ: server chặn
+                   quan hệ với chính mình, nên đừng mời người dùng chọn một lựa chọn chắc
+                   chắn lỗi. */
+                .filter((x) => x.person !== null && x.person.id !== c.personId)
                 .map((x) => (
-                  <option key={x.id} value={x.id}>
-                    {x.fullName}
+                  <option key={x.id} value={x.person?.id ?? x.id}>
+                    {x.person?.fullName} · {x.customerCode}
                     {x.isDeceased ? ' (đã mất)' : ''}
                   </option>
                 ))}

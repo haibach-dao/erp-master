@@ -338,50 +338,19 @@ export class CustomersService {
     };
   }
 
-  /* Tra cứu NHÂN THÂN, khác hẳn tra cứu khách hàng.
-   *
-   * Người được an táng thường KHÔNG phải khách hàng — họ chỉ là một `Person` có hồ sơ
-   * người mất. Tìm họ trong danh sách khách hàng thì không bao giờ ra. Đây là đường để
-   * chọn người mất khi khai quan hệ và khi đặt cốt.
-   *
-   * `deceasedOnly` để màn hình an táng chỉ thấy người đã có hồ sơ người mất — chọn nhầm
-   * người còn sống vào một phần cốt là loại lỗi không nên dựa vào sự cẩn thận để tránh.
-   */
-  async searchPersons(q: string, deceasedOnly: boolean) {
-    const persons = await this.prisma.person.findMany({
-      where: {
-        ...(q === '' ? {} : { fullName: { contains: q, mode: 'insensitive' } }),
-        ...(deceasedOnly ? { deceased: { isNot: null } } : {}),
-      },
-      select: {
-        id: true,
-        fullName: true,
-        gender: true,
-        dateOfBirth: true,
-        nationalIdMasked: true,
-        deceased: { select: { id: true, dateOfDeath: true } },
-      },
-      orderBy: { fullName: 'asc' },
-      take: 50,
-    });
-    return persons.map((p) => ({
-      ...p,
-      /* Cờ tiện dụng cho giao diện. `deceased` vẫn giữ nguyên bên cạnh vì màn hình an
-       * táng cần `deceasedPersonId` chứ không chỉ cần biết có hay không. */
-      isDeceased: p.deceased !== null,
-      deceasedPersonId: p.deceased?.id ?? null,
-    }));
-  }
-
   /* Customer 360 search by code / name / phone / email / org name.
    *
    * Trả kèm ba thứ bảng tổng hợp cần mà bản ghi Customer không tự có: nơi sinh, phần mộ
    * đang đứng tên, và người này còn sống hay đã mất. Gộp ở đây thay vì để giao diện gọi
    * thêm — 50 dòng mà mỗi dòng một lời gọi là 50 lượt cho một lần mở trang.
    */
-  async search(q: string) {
+  async search(q: string, deceasedOnly = false) {
     const customers = await this.prisma.customer.findMany({
       where: {
+        /* Lọc "đã mất" ở SERVER, không để giao diện tự lọc sau khi nhận về: truy vấn cắt
+         * ở 50 dòng, nên lọc phía client sẽ bỏ sót người đã mất nếu danh sách có nhiều
+         * khách còn sống đứng trước. */
+        ...(deceasedOnly ? { person: { deceased: { isNot: null } } } : {}),
         OR: [
           { customerCode: { contains: q, mode: 'insensitive' } },
           { phone: { contains: q } },

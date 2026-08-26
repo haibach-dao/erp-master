@@ -158,11 +158,6 @@ export const PERMISSION_CATALOG: readonly PermissionDef[] = [
 
   // --- crm ---
   p('crm.person.view', 'S2', 'Xem nhân thân (đã mask)'),
-  /* Tra cứu nhân thân theo tên/CCCD. Tách khỏi `crm.customer.search` vì hai tập khác
-   * nhau: người ĐƯỢC AN TÁNG thường không phải khách hàng, nên tìm trong danh sách khách
-   * sẽ không bao giờ ra họ. Cần mã riêng để chọn người mất khi khai quan hệ và khi an
-   * táng. */
-  p('crm.person.search', 'S2', 'Tra cứu nhân thân theo tiêu chí tự nhập'),
   p('crm.person.create', 'S2', 'Tạo nhân thân'),
   p('crm.person.update', 'S2', 'Sửa nhân thân'),
   /* Tách khỏi `view_sensitive` (2026-08-25). Điện thoại/email/địa chỉ/ngày sinh là dữ
@@ -401,7 +396,6 @@ export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
     'crm.customer.view',
     'crm.customer.create',
     'crm.person.view',
-    'crm.person.search',
     'contract.record.view',
     'contract.party.view',
     'service.catalog.view',
@@ -427,7 +421,6 @@ export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
     'crm.customer.create',
     'crm.customer.search',
     'crm.person.view',
-    'crm.person.search',
     'crm.person.view_contact', // G0-Q1 sửa 2026-08-25: người bán cần gọi được cho khách
     'crm.person.create',
     'crm.relationship.view',
@@ -461,7 +454,6 @@ export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
       'crm.customer.create',
       'crm.customer.search',
       'crm.person.view',
-      'crm.person.search',
       'crm.person.create',
       'crm.person.update',
       'crm.person.view_contact', // giữ nguyên tầm nhìn cũ sau khi tách mã
@@ -484,7 +476,6 @@ export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
     ...CATALOG_READ,
     'crm.customer.view',
     'crm.person.view',
-    'crm.person.search',
     'crm.relationship.view',
     'contract.record.view',
     'contract.party.view',
@@ -515,7 +506,6 @@ export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
     'cemetery.price.view',
     'crm.customer.view',
     'crm.person.view',
-    'crm.person.search',
     'crm.person.view_contact', // G0-Q1 sửa 2026-08-25: người thu tiền cần liên hệ được khách
     'contract.record.view',
     'contract.record.search',
@@ -550,7 +540,6 @@ export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
     'crm.customer.search',
     'crm.customer.view', // đọc dẫn xuất cho search
     'crm.person.view',
-    'crm.person.search',
     'crm.relationship.view', // đọc dẫn xuất cho verify/cancel
     'crm.relationship.verify',
     'crm.relationship.cancel',
@@ -588,7 +577,6 @@ export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
     'crm.customer.search',
     'crm.customer.view', // đọc dẫn xuất cho search
     'crm.person.view',
-    'crm.person.search',
     'crm.relationship.view', // đọc dẫn xuất cho verify/cancel
     'crm.relationship.verify',
     'crm.relationship.cancel',
@@ -662,7 +650,6 @@ export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
     'crm.customer.search',
     'crm.customer.view', // đọc dẫn xuất cho search
     'crm.person.view',
-    'crm.person.search',
     'crm.consent.view',
     'contract.record.view', // đọc dẫn xuất cho export
     'contract.record.search',
@@ -692,7 +679,6 @@ export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
     'crm.customer.view',
     'crm.customer.search',
     'crm.person.view',
-    'crm.person.search',
     'crm.person.view_contact', // giữ nguyên tầm nhìn cũ sau khi tách mã
     'crm.person.view_sensitive',
     'crm.person.set_protected',

@@ -19,7 +19,41 @@ export class BurialsService {
     private readonly audit: AuditService,
   ) {}
 
-  createDeceased(dto: CreateDeceasedDto) {
+  /* Lập hồ sơ người mất.
+   *
+   * NGƯỜI MẤT CŨNG LÀ KHÁCH HÀNG (quyết định 26/08/2026). Ép ở đây chứ không chỉ ở giao
+   * diện: hệ từng được dựng theo giả định ngược lại, và hậu quả là 3 người đã được an
+   * táng nhưng màn hình khách hàng không bao giờ thấy họ. Một quy ước chỉ sống ở giao
+   * diện là quy ước sẽ bị đường khác đi vòng qua.
+   */
+  async createDeceased(dto: CreateDeceasedDto) {
+    const person = await this.prisma.person.findUnique({
+      where: { id: dto.personId },
+      select: { id: true, fullName: true, customer: { select: { id: true } } },
+    });
+    if (person === null) {
+      throw new NotFoundException('Không tìm thấy nhân thân');
+    }
+    if (person.customer === null) {
+      throw new ConflictException(
+        `${person.fullName} chưa có hồ sơ khách hàng — lập hồ sơ khách hàng trước khi ghi nhận đã mất`,
+      );
+    }
+    const existing = await this.prisma.deceasedPerson.findUnique({
+      where: { personId: dto.personId },
+      select: { id: true },
+    });
+    /* Đã có hồ sơ thì trả lại chính nó thay vì ném lỗi ràng buộc: giao diện an táng gọi
+     * hàm này mỗi lần đặt cốt, và người này có thể được an táng vào mộ thứ hai. */
+    if (existing !== null) {
+      return this.prisma.deceasedPerson.update({
+        where: { id: existing.id },
+        data: {
+          ...(dto.dateOfDeath !== undefined ? { dateOfDeath: new Date(dto.dateOfDeath) } : {}),
+          ...(dto.deathCertFileId !== undefined ? { deathCertFileId: dto.deathCertFileId } : {}),
+        },
+      });
+    }
     return this.prisma.deceasedPerson.create({
       data: {
         id: ulid(),

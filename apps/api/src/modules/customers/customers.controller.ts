@@ -54,19 +54,10 @@ export class CustomersController {
     return this.svc.createCustomer(dto, this.actor(req));
   }
 
-  /* PHẢI đứng trước mọi route `persons/:id/...`? Không — `persons/search` có 2 đoạn còn
-   * chúng có 3, nên không đụng nhau. Nhưng vẫn khai route tĩnh trước cho nhất quán với
-   * `customers/search`: một quy ước đọc được vẫn hơn một ngoại lệ phải giải thích. */
-  @Get('persons/search')
-  @RequirePermission('crm.person.search')
-  searchPersons(@Query('q') q?: string, @Query('deceasedOnly') deceasedOnly?: string) {
-    return this.svc.searchPersons(q ?? '', deceasedOnly === 'true');
-  }
-
   @Get('customers/search')
   @RequirePermission('crm.customer.search')
-  search(@Query('q') q: string) {
-    return this.svc.search(q ?? '');
+  search(@Query('q') q: string, @Query('deceasedOnly') deceasedOnly?: string) {
+    return this.svc.search(q ?? '', deceasedOnly === 'true');
   }
 
   /* PHẢI khai SAU `customers/search`. Express khớp route theo thứ tự đăng ký, nên

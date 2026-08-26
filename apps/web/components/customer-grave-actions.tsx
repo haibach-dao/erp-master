@@ -10,7 +10,7 @@ import {
   getPlotOwnership,
   listCompanies,
   listGravePlots,
-  searchPersons,
+  searchCustomers,
   type CustomerDetail,
 } from '@/lib/api';
 import { statusOf } from '@/lib/status';
@@ -308,30 +308,37 @@ function BuryDialog({
     queryFn: () => getPlotOwnership(gravePlotId),
   });
 
-  /* Tìm trong TOÀN BỘ nhân thân, không chỉ người đã có hồ sơ người mất: thực tế là hồ sơ
-   * người mất thường được lập ngay lúc làm thủ tục an táng, không phải trước đó. */
-  const persons = useQuery({
-    queryKey: ['persons', q],
-    queryFn: () => searchPersons(q),
+  /* Chọn từ danh sách KHÁCH HÀNG, không phải nhân thân lẻ.
+   *
+   * Người mất cũng là khách hàng (quyết định 26/08/2026). Trước đây màn hình này tìm
+   * trong nhân thân, nên nó tạo ra được những người đã an táng mà màn hình khách hàng
+   * không bao giờ thấy — đúng cái lệch vừa phải đi vá bằng migration.
+   *
+   * KHÔNG lọc `deceasedOnly` ở đây: hồ sơ người mất thường được lập NGAY lúc làm thủ tục
+   * an táng, nên người cần chọn có thể chưa được đánh dấu đã mất. Hộp thoại hỏi ngày mất
+   * và tự lập hồ sơ khi lưu. */
+  const customers = useQuery({
+    queryKey: ['customers', q],
+    queryFn: () => searchCustomers(q),
   });
 
-  const selected = (persons.data ?? []).find((p) => p.id === personId);
+  const selected = (customers.data ?? []).find((c) => c.id === personId);
 
   const bury = useMutation({
     mutationFn: async () => {
       if (selected === undefined) {
         throw new Error('Chưa chọn người an táng');
       }
-      /* Chưa có hồ sơ người mất thì lập ngay tại đây. Bắt người dùng sang màn hình khác
-       * lập rồi quay lại là chỗ quy trình hay đứt. */
-      const deceasedPersonId =
-        selected.deceasedPersonId ??
-        (
-          await createDeceased({
-            personId: selected.id,
-            ...(dateOfDeath !== '' ? { dateOfDeath } : {}),
-          })
-        ).id;
+      if (selected.person === null) {
+        throw new Error('Khách hàng tổ chức không an táng được — chọn khách hàng cá nhân');
+      }
+      /* Lập/cập nhật hồ sơ người mất ngay tại đây. Bắt người dùng sang màn hình khác lập
+       * rồi quay lại là chỗ quy trình hay đứt. Server chấp nhận gọi lại khi hồ sơ đã có —
+       * một người có thể được an táng vào mộ thứ hai. */
+      const { id: deceasedPersonId } = await createDeceased({
+        personId: selected.person.id,
+        ...(dateOfDeath !== '' ? { dateOfDeath } : {}),
+      });
 
       return createBurial({
         gravePlotId,
@@ -410,27 +417,34 @@ function BuryDialog({
           </div>
         ) : null}
 
-        <Field label="Tìm người an táng" hint="Gõ tên để tìm trong hồ sơ nhân thân.">
-          <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Họ tên…" />
+        <Field
+          label="Tìm người an táng"
+          hint="Gõ tên hoặc mã KH. Người mất cũng là khách hàng — chưa có thì lập hồ sơ khách hàng trước."
+        >
+          <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Họ tên, mã KH…" />
         </Field>
 
         <Field label="Người an táng">
           <Select value={personId} onChange={(e) => setPersonId(e.target.value)}>
-            <option value="">— Chọn người —</option>
-            {(persons.data ?? []).map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.fullName}
-                {p.isDeceased ? ' (đã có hồ sơ người mất)' : ' (chưa có hồ sơ người mất)'}
-              </option>
-            ))}
+            <option value="">— Chọn khách hàng —</option>
+            {(customers.data ?? [])
+              /* Khách hàng tổ chức không an táng được — bỏ khỏi danh sách thay vì để
+                 người dùng chọn rồi nhận lỗi. */
+              .filter((x) => x.person !== null)
+              .map((x) => (
+                <option key={x.id} value={x.id}>
+                  {x.person?.fullName} · {x.customerCode}
+                  {x.isDeceased ? ' (đã mất)' : ' (đang ghi nhận là còn sống)'}
+                </option>
+              ))}
           </Select>
         </Field>
 
-        {/* Chưa có hồ sơ người mất thì lập luôn — hỏi ngày mất ngay tại đây. */}
+        {/* Chưa đánh dấu đã mất thì hỏi ngày mất — hệ lập hồ sơ người mất khi lưu. */}
         {selected !== undefined && !selected.isDeceased ? (
           <Field
             label="Ngày mất"
-            hint="Người này chưa có hồ sơ người mất; hệ sẽ lập khi bấm An táng."
+            hint="Khách này đang ghi nhận là còn sống; hệ sẽ lập hồ sơ người mất khi bấm An táng."
           >
             <Input
               type="date"
