@@ -20,6 +20,10 @@ import type {
   UpdateCustomerDto,
 } from './customers.dto';
 
+/* Hồ sơ an táng còn hiệu lực. Trùng danh sách ở `burials.service.ts` và ở partial unique
+ * index `burial_records_active_slot` — ba chỗ phải nói cùng một điều. */
+const ACTIVE_BURIAL_STATUSES = ['Draft', 'Verified', 'Scheduled', 'Completed'];
+
 interface DedupWarning {
   reason: string;
   matches: unknown[];
@@ -463,10 +467,27 @@ export class CustomersService {
     }
     const personId = customer.person?.id ?? null;
 
+    /* Chỉ đếm thứ CÒN HIỆU LỰC.
+     *
+     * Bản trước đếm mọi dòng bất kể trạng thái, nên một quyền sử dụng đã THU HỒI vẫn chặn
+     * xoá — người dùng thu hồi mộ xong, màn hình báo "chưa đứng tên phần mộ nào", mà xoá
+     * thì vẫn bị từ chối "đang đứng tên 1 phần mộ". Hai câu trả lời trái nhau cho cùng
+     * một câu hỏi.
+     *
+     * Giữ chỗ cũng vậy, thêm một lớp: phiếu HẾT HẠN mà chưa ai quét vẫn mang status
+     * `Active`. Nó không giữ gì nữa nên không được chặn — lọc theo `expiresAt` chứ không
+     * chỉ theo trạng thái. */
+    const now = new Date();
     const [rights, holds, ownerBurials, cards, subscriptions, parties] = await Promise.all([
-      this.prisma.graveUsageRight.count({ where: { holderCustomerId: customerId } }),
-      this.prisma.graveHold.count({ where: { customerId } }),
-      this.prisma.burialRecord.count({ where: { ownerCustomerId: customerId } }),
+      this.prisma.graveUsageRight.count({
+        where: { holderCustomerId: customerId, status: 'Active' },
+      }),
+      this.prisma.graveHold.count({
+        where: { customerId, status: 'Active', expiresAt: { gt: now } },
+      }),
+      this.prisma.burialRecord.count({
+        where: { ownerCustomerId: customerId, status: { in: ACTIVE_BURIAL_STATUSES } },
+      }),
       this.prisma.cardPrintLog.count({ where: { customerId } }),
       this.prisma.serviceSubscription.count({ where: { customerId } }),
       this.prisma.contractParty.count({ where: { customerId } }),
@@ -484,7 +505,9 @@ export class CustomersService {
     const burialsAsDeceased =
       deceased === null
         ? 0
-        : await this.prisma.burialRecord.count({ where: { deceasedPersonId: deceased.id } });
+        : await this.prisma.burialRecord.count({
+            where: { deceasedPersonId: deceased.id, status: { in: ACTIVE_BURIAL_STATUSES } },
+          });
 
     const blockers: string[] = [];
     if (rights > 0) blockers.push(`đang đứng tên ${rights} phần mộ`);
@@ -511,7 +534,17 @@ export class CustomersService {
             where: { OR: [{ sourcePersonId: personId }, { targetPersonId: personId }] },
           });
 
+    /* Dòng LỊCH SỬ trỏ tới khách hàng này (quyền đã thu hồi/sang tên, phiếu giữ chỗ đã
+     * huỷ hoặc hết hạn) không chặn xoá — nhưng để lại thì chúng thành con trỏ treo, vì sáu
+     * bảng đó không có khoá ngoại. Xoá cùng và ĐẾM để báo. */
+    const [staleRights, staleHolds] = await Promise.all([
+      this.prisma.graveUsageRight.count({ where: { holderCustomerId: customerId } }),
+      this.prisma.graveHold.count({ where: { customerId } }),
+    ]);
+
     await this.prisma.$transaction(async (tx) => {
+      await tx.graveUsageRight.deleteMany({ where: { holderCustomerId: customerId } });
+      await tx.graveHold.deleteMany({ where: { customerId } });
       if (personId !== null) {
         await tx.familyRelationship.deleteMany({
           where: { OR: [{ sourcePersonId: personId }, { targetPersonId: personId }] },
@@ -542,10 +575,17 @@ export class CustomersService {
         customerCode: customer.customerCode,
         fullName: customer.person?.fullName ?? customer.orgName,
         deletedRelationships: relationships,
+        deletedUsageRights: staleRights,
+        deletedHolds: staleHolds,
         deletedDeceasedRecord: deceased !== null,
       },
     });
-    return { deleted: true, deletedRelationships: relationships };
+    return {
+      deleted: true,
+      deletedRelationships: relationships,
+      deletedUsageRights: staleRights,
+      deletedHolds: staleHolds,
+    };
   }
 
   /* Customer 360 search by code / name / phone / email / org name.

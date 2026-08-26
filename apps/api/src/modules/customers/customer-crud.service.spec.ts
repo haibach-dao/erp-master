@@ -34,6 +34,8 @@ function build(
     });
 
   const tx = {
+    graveUsageRight: { deleteMany: del('graveUsageRight') },
+    graveHold: { deleteMany: del('graveHold') },
     familyRelationship: { deleteMany: del('familyRelationship') },
     personPhone: { deleteMany: del('personPhone') },
     personAddress: { deleteMany: del('personAddress') },
@@ -89,7 +91,7 @@ function build(
     } as unknown as PiiService,
     { record } as unknown as AuditService,
   );
-  return { svc, record, deleted, tx };
+  return { svc, record, deleted, tx, prisma };
 }
 
 /* Sáu bảng trỏ tới khách hàng bằng id LỎNG — chỉ `grave_holds` có khoá ngoại. Nghĩa là
@@ -140,6 +142,10 @@ describe('xoá khách hàng — khi sạch thì dọn hết, không để lại 
     await svc.deleteCustomer(CUSTOMER, 'u1');
 
     expect(deleted).toEqual([
+      /* Dòng lịch sử (quyền đã thu hồi, phiếu đã hết hạn) không CHẶN xoá nhưng phải đi
+         cùng — để lại thì thành con trỏ treo, vì hai bảng đó không có khoá ngoại. */
+      'graveUsageRight',
+      'graveHold',
       'familyRelationship',
       'personPhone',
       'personAddress',
@@ -166,7 +172,7 @@ describe('xoá khách hàng — khi sạch thì dọn hết, không để lại 
 
     await svc.deleteCustomer(CUSTOMER, 'u1');
 
-    expect(deleted).toEqual(['customer']);
+    expect(deleted).toEqual(['graveUsageRight', 'graveHold', 'customer']);
   });
 
   /* Xoá người này rút họ khỏi cây gia đình của người kia. Nói ra con số thay vì lặng lẽ
@@ -248,5 +254,67 @@ describe('sửa khách hàng', () => {
     await expect(svc.updateCustomer(CUSTOMER, { phone: '1' }, 'u1')).rejects.toThrow(
       NotFoundException,
     );
+  });
+});
+
+/* HAI LỖI ĐÃ XẢY RA THẬT (26/08/2026, chủ doanh nghiệp phát hiện).
+ *
+ * Người dùng thu hồi phần mộ, màn hình báo "chưa đứng tên phần mộ nào", nhưng bấm xoá thì
+ * bị từ chối "đang đứng tên 1 phần mộ". Hai câu trả lời trái nhau cho cùng một câu hỏi,
+ * vì rào chắn đếm MỌI dòng bất kể trạng thái.
+ *
+ * Cùng lúc, một phiếu giữ chỗ hết hạn từ 7 tiếng trước vẫn mang trạng thái `Active` (chưa
+ * có ai quét hết hạn), và cũng chặn xoá dù nó chẳng giữ gì nữa.
+ */
+describe('xoá khách hàng — chỉ đếm thứ CÒN HIỆU LỰC', () => {
+  it('quyền sử dụng đã THU HỒI thì không chặn xoá', async () => {
+    const { svc, prisma, deleted } = build();
+
+    await svc.deleteCustomer(CUSTOMER, 'u1');
+
+    // Rào chắn phải hỏi kèm status, không đếm suông theo chủ sở hữu.
+    expect(
+      (prisma as unknown as { graveUsageRight: { count: ReturnType<typeof vi.fn> } })
+        .graveUsageRight.count,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ status: 'Active' }) }),
+    );
+    expect(deleted).toContain('customer');
+  });
+
+  it('phiếu giữ chỗ đã HẾT HẠN thì không chặn, dù trạng thái vẫn Active', async () => {
+    const { svc, prisma } = build();
+
+    await svc.deleteCustomer(CUSTOMER, 'u1');
+
+    const call = (prisma as unknown as { graveHold: { count: ReturnType<typeof vi.fn> } }).graveHold
+      .count.mock.calls[0]?.[0] as { where: Record<string, unknown> };
+    expect(call.where.status).toBe('Active');
+    // Lọc theo NGÀY HẾT HẠN, không chỉ theo trạng thái.
+    expect(call.where.expiresAt).toBeDefined();
+  });
+
+  it('hồ sơ an táng đã HUỶ thì không chặn xoá', async () => {
+    const { svc, prisma } = build();
+
+    await svc.deleteCustomer(CUSTOMER, 'u1');
+
+    expect(
+      (prisma as unknown as { burialRecord: { count: ReturnType<typeof vi.fn> } }).burialRecord
+        .count,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ status: { in: expect.any(Array) } }),
+      }),
+    );
+  });
+
+  it('báo số quyền và phiếu lịch sử đã xoá theo', async () => {
+    const { svc } = build();
+
+    const res = await svc.deleteCustomer(CUSTOMER, 'u1');
+
+    expect(res).toHaveProperty('deletedUsageRights');
+    expect(res).toHaveProperty('deletedHolds');
   });
 });
