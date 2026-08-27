@@ -18,7 +18,7 @@ import {
   searchCustomers,
   type CustomerDetail,
 } from '@/lib/api';
-import { statusOf } from '@/lib/status';
+import { burialNextStep, statusOf } from '@/lib/status';
 import { cn } from '@/lib/utils';
 import { Alert } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -156,6 +156,15 @@ export function CustomerGraveActions({
                                 {oc.slotNumber === null ? 'Chưa rõ cốt' : `Cốt ${oc.slotNumber}`} ·{' '}
                               </span>
                               <span className="font-medium">{oc.fullName}</span>
+                              {/* Hồ sơ CHƯA hoàn tất thì phải nói ra: in một cái tên trơn là
+                                  nói như thể việc đã xong, trong khi phần mộ vẫn chưa chuyển
+                                  sang "Đã có người". Nút đẩy đi tiếp nằm ở tab Nơi an nghỉ của
+                                  chính người đó — nói luôn để không ai phải đi tìm. */}
+                              {burialNextStep(oc.status) !== null ? (
+                                <span className="block text-xs text-warning">
+                                  {statusOf(oc.status).label} · {burialNextStep(oc.status)?.hint}
+                                </span>
+                              ) : null}
                               {relLabel(
                                 oc.relationshipToOwner,
                                 oc.gender,

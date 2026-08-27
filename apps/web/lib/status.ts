@@ -69,3 +69,38 @@ const SENSITIVITY: Record<string, { label: string; variant: Variant }> = {
 export function sensitivityOf(code: string): { label: string; variant: Variant } {
   return SENSITIVITY[code] ?? { label: code, variant: 'neutral' };
 }
+
+/* BƯỚC CÒN LẠI của một hồ sơ an táng.
+ *
+ * VÌ SAO CÓ HÀM NÀY (chủ doanh nghiệp nêu 27/08/2026): an táng xong, màn hình ghi trạng thái
+ * "Nháp" — một từ không nói gì. Nó không cho biết còn hai bước nữa, cũng không cho biết làm ở
+ * đâu. Luồng là `Draft -> verify -> Verified -> complete -> Completed`, và phần mộ CHỈ chuyển
+ * sang `Occupied` ở bước cuối.
+ *
+ * Ba bước là CÓ CHỦ ĐÍCH — an táng không đảo ngược được, nên hệ tách "ghi nhận" khỏi "xác
+ * minh" khỏi "đã xong". Nhưng chủ đích đó phải ĐỌC ĐƯỢC trên màn hình, không nằm trong đầu
+ * người viết mã.
+ *
+ * Khai một lần ở đây vì BA màn hình cần nó (tab Nơi an nghỉ, bảng Phần mộ, trang An táng).
+ * Ba bản sao là ba câu chữ sẽ lệch nhau.
+ */
+export type BurialNextStep = { action: 'verify' | 'complete'; label: string; hint: string } | null;
+
+export function burialNextStep(status: string): BurialNextStep {
+  if (status === 'Draft') {
+    return {
+      action: 'verify',
+      label: 'Xác minh',
+      hint: 'cần xác minh',
+    };
+  }
+  if (status === 'Verified' || status === 'Scheduled') {
+    return {
+      action: 'complete',
+      label: 'Hoàn tất',
+      hint: 'cần hoàn tất — phần mộ chỉ chuyển sang “Đã có người” ở bước này',
+    };
+  }
+  // `Completed` và `Cancelled` là điểm cuối: không còn bước nào, và không nút nào.
+  return null;
+}

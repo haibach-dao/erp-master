@@ -21,6 +21,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   addPersonAddress,
   cancelBurial,
+  completeBurial,
   addPersonBankAccount,
   addPersonEducation,
   addPersonPhone,
@@ -31,10 +32,11 @@ import {
   getCustomerDetail,
   listRelationshipTypes,
   updateCustomer,
+  verifyBurial,
   searchCustomers,
   type CustomerDetail,
 } from '@/lib/api';
-import { customerType, statusOf } from '@/lib/status';
+import { burialNextStep, customerType, statusOf } from '@/lib/status';
 import {
   CustomerFormTabs,
   EMPTY_CUSTOMER_FORM,
@@ -299,6 +301,21 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
       setCancelReason('');
       refresh();
     },
+  });
+
+  /* Đẩy hồ sơ an táng đi TIẾP, ngay tại chỗ nó hiện ra.
+   *
+   * Trước 27/08/2026 hai nút này CHỈ có ở `/cemetery/burials`. Nên người vừa an táng xong ở
+   * hồ sơ khách hàng không có đường đi tiếp — phải tự biết mà sang màn hình khác. Chú thích
+   * của nút Huỷ ngay trên đã nói đúng nguyên tắc ("không bắt người dùng đi sang màn hình
+   * khác") nhưng chỉ áp cho đường GỠ, không áp cho đường TỚI.
+   *
+   * `variables` giữ id dòng đang chạy: dùng `isPending` trần thì MỌI dòng cùng quay vòng khi
+   * bấm một dòng — bẫy đã ghi trong bản ghi giao diện. */
+  const advanceBurial = useMutation({
+    mutationFn: ({ id: recordId, action }: { id: string; action: 'verify' | 'complete' }) =>
+      action === 'verify' ? verifyBurial(recordId) : completeBurial(recordId),
+    onSuccess: refresh,
   });
 
   const endRel = useMutation({
@@ -576,6 +593,8 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
                     c.restingPlaces.map((r) => {
                       const s = statusOf(r.status);
                       const cancelled = r.status === 'Cancelled';
+                      // Bước còn thiếu — luật khai một lần ở `lib/status`, ba màn hình dùng chung.
+                      const next = burialNextStep(r.status);
                       return (
                         <TableRow key={r.burialRecordId}>
                           <TableCell>
@@ -607,6 +626,13 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
                           <TableCell>{r.burialDate?.slice(0, 10) ?? '—'}</TableCell>
                           <TableCell>
                             <Badge variant={s.variant}>{s.label}</Badge>
+                            {/* "Nháp" một mình là một từ không giải thích gì. Nói luôn còn
+                                thiếu bước nào — cùng luật với nút bị chặn phải nói lý do. */}
+                            {next !== null ? (
+                              <span className="block text-xs text-muted-foreground">
+                                {next.hint}
+                              </span>
+                            ) : null}
                             {cancelled && r.cancelReason !== null ? (
                               <span className="block text-xs text-muted-foreground">
                                 {r.cancelReason}
@@ -616,16 +642,36 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
                           <TableCell>
                             {/* Hồ sơ HOÀN TẤT không có nút: người đã nằm trong mộ, và một
                                 nút bấm được rồi mới báo lỗi là mời người dùng va vào luật. */}
-                            {cancelled || r.status === 'Completed' ? null : (
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => setCancelTarget(r.burialRecordId)}
-                                title="Huỷ hồ sơ an táng này — cốt được nhả ra cho người khác"
-                              >
-                                Huỷ hồ sơ
-                              </Button>
-                            )}
+                            <div className="flex flex-wrap justify-end gap-1">
+                              {next !== null ? (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  loading={
+                                    advanceBurial.isPending &&
+                                    advanceBurial.variables?.id === r.burialRecordId
+                                  }
+                                  onClick={() =>
+                                    advanceBurial.mutate({
+                                      id: r.burialRecordId,
+                                      action: next.action,
+                                    })
+                                  }
+                                >
+                                  {next.label}
+                                </Button>
+                              ) : null}
+                              {cancelled || r.status === 'Completed' ? null : (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => setCancelTarget(r.burialRecordId)}
+                                  title="Huỷ hồ sơ an táng này — cốt được nhả ra cho người khác"
+                                >
+                                  Huỷ hồ sơ
+                                </Button>
+                              )}
+                            </div>
                           </TableCell>
                         </TableRow>
                       );

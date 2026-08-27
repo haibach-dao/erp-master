@@ -873,6 +873,8 @@ export interface CustomerPlot {
     gender: string | null;
     dateOfBirth: string | null;
     relationshipToOwner: string | null;
+    /** Draft | Verified | Scheduled | Completed | Cancelled */
+    status: string;
   }[];
 }
 

@@ -581,6 +581,10 @@ export class CustomersService {
             gender: b.deceased.person.gender,
             dateOfBirth: b.deceased.person.dateOfBirth,
             relationshipToOwner: b.relationshipToOwner,
+            /* Trạng thái hồ sơ an táng: `Draft` -> `Verified` -> `Completed`. Bảng phần mộ
+             * phải nói ra được hồ sơ nào còn thiếu bước, nếu không nó in một cái tên như thể
+             * việc đã xong trong khi phần mộ vẫn chưa chuyển sang `Occupied`. */
+            status: b.status,
           })),
         };
       }),
