@@ -5,7 +5,7 @@ import { JwtAuthGuard } from '../iam/guards/jwt-auth.guard';
 import { PermissionGuard } from '../authorization/permission.guard';
 import { RequirePermission } from '../authorization/require-permission.decorator';
 import { BurialsService } from './burials.service';
-import { CreateBurialDto, CreateDeceasedDto } from './burials.dto';
+import { CancelBurialDto, CreateBurialDto, CreateDeceasedDto } from './burials.dto';
 
 @ApiTags('burials')
 @ApiBearerAuth()
@@ -40,6 +40,16 @@ export class BurialsController {
   @RequirePermission('burial.record.complete')
   complete(@Param('id') id: string, @Req() req: Request) {
     return this.svc.complete(id, this.actor(req));
+  }
+
+  /* Huỷ hồ sơ an táng — nhả cốt ra cho người khác, và gỡ rào chắn xoá khách hàng.
+   *
+   * Mã quyền RIÊNG chứ không dùng ké `burial.record.verify`: huỷ và thẩm định là hai việc
+   * ngược chiều nhau, và gộp mã là ép ai được thẩm định thì cũng được huỷ. */
+  @Post(':id/cancel')
+  @RequirePermission('burial.record.cancel')
+  cancel(@Param('id') id: string, @Body() dto: CancelBurialDto, @Req() req: Request) {
+    return this.svc.cancel(id, dto, this.actor(req));
   }
 
   /* AI đủ điều kiện an táng vào phần mộ này: đã mất, có quan hệ đã xác nhận với chủ mộ

@@ -24,3 +24,16 @@ export class CreateBurialDto {
   @ApiPropertyOptional() @IsOptional() @IsString() legalDocFileId?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() notes?: string;
 }
+
+/* Huỷ hồ sơ an táng BẮT BUỘC có lý do.
+ *
+ * Huỷ nhả cốt ra cho người khác nhận — một lần bấm đổi trạng thái một chỗ trong mộ. Sáu
+ * tháng sau nhìn lại mà không có lý do thì không ai nói được vì sao người này từng được
+ * xếp vào cốt đó rồi lại không. Cùng nếp với `CancelContractDto`.
+ */
+export class CancelBurialDto {
+  @ApiProperty({ description: 'Vì sao huỷ hồ sơ an táng' })
+  @IsString()
+  @MinLength(3)
+  reason!: string;
+}

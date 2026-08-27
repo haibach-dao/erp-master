@@ -15,6 +15,7 @@ import { PrismaClient } from '@prisma/client';
 import { BurialsService } from '../src/modules/burials/burials.service';
 import { AuditService } from '../src/modules/audit/audit.service';
 import type { PrismaService } from '../src/prisma/prisma.service';
+import { activeBurial, confirmedRelationship } from '../src/common/lifecycle/active';
 
 const prisma = new PrismaClient();
 
@@ -76,7 +77,7 @@ async function main(): Promise<void> {
 
   const rels = await prisma.familyRelationship.findMany({
     where: {
-      status: 'Confirmed',
+      ...confirmedRelationship,
       OR: [{ sourcePersonId: ownerPersonId }, { targetPersonId: ownerPersonId }],
     },
     select: { sourcePersonId: true, targetPersonId: true, relationshipType: true },
@@ -108,7 +109,11 @@ async function main(): Promise<void> {
       /* `BurialRecord` chỉ có CỘT `gravePlotId`, không có quan hệ `gravePlot` — nên phải
        * tra mã mộ ở một lượt riêng bên dưới. */
       burialRecords: {
-        where: { status: { in: ['Draft', 'Verified', 'Scheduled', 'Completed'] } },
+        /* BẢN SAO THỨ TƯ của danh sách trạng thái, đã gỡ 27/08/2026. Nó sống sót qua CẢ
+         * HAI ratchet: `status-filter-invariants` chỉ quét `src/` nên không thấy `scripts/`,
+         * và biểu thức của nó (`status:\s*'…'`) không khớp dạng `{ in: [...] }`. Một cái
+         * lưới có hai lỗ ở đúng chỗ này thì bản sao nằm đây bao lâu cũng được. */
+        where: { ...activeBurial() },
         select: { slotNumber: true, gravePlotId: true },
       },
     },

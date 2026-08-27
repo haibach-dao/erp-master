@@ -9,11 +9,16 @@ import { ulid } from 'ulid';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PiiService } from '../../common/pii/pii.service';
 import { AuditService } from '../audit/audit.service';
-import { activeBurial, activeSubRecord, activeUsageRight } from '../../common/lifecycle/active';
+import { activeSubRecord, activeUsageRight } from '../../common/lifecycle/active';
 import {
   CUSTOMER_BLOCKING_REFERENCES,
   CUSTOMER_CASCADE_REFERENCES,
+  CUSTOMER_DETACH_REFERENCES,
 } from '../../common/lifecycle/customer-references';
+import {
+  PERSON_BLOCKING_REFERENCES,
+  PERSON_CASCADE_REFERENCES,
+} from '../../common/lifecycle/person-references';
 import type {
   AddPersonAddressDto,
   AddPersonBankAccountDto,
@@ -346,8 +351,78 @@ export class CustomersService {
             orderBy: { createdAt: 'desc' },
           });
 
+    /* NƠI AN NGHỈ — mộ khách này NẰM TRONG, khác hẳn `gravePlots` là mộ khách này ĐỨNG TÊN.
+     *
+     * VÌ SAO KHỐI NÀY PHẢI CÓ (27/08/2026): thiếu nó, hồ sơ an táng đang CHẶN xoá khách
+     * hàng lại VÔ HÌNH trên chính màn hình của họ. Người dùng đọc "đã được an táng (1 hồ
+     * sơ)", mở hết năm tab không thấy hồ sơ nào, và kết luận là hệ báo sai. Đó đúng là cái
+     * "hai chỗ trả lời khác nhau cho cùng một câu hỏi" mà `common/lifecycle/active.ts` sinh
+     * ra để dẹp — chỉ khác là lần này một trong hai chỗ không trả lời gì cả.
+     *
+     * KHÔNG lọc `activeBurial()` — NGOẠI LỆ CÓ CHỦ ĐÍCH theo đúng quy ước ở `active.ts`:
+     * đây là khối LỊCH SỬ, và hồ sơ đã huỷ chính là thứ giải thích vì sao một cốt từng bị
+     * giữ rồi lại trống. Bù lại, `restingPlacesActive` đếm riêng phần CÒN HIỆU LỰC để con
+     * số trên tab khớp với con số trong lời từ chối xoá — hai con số lệch nhau là tái lập
+     * đúng cái bệnh đang chữa.
+     */
+    const burials =
+      customer.personId === null
+        ? []
+        : await this.prisma.burialRecord.findMany({
+            where: { deceased: { personId: customer.personId } },
+            orderBy: { createdAt: 'desc' },
+          });
+    /* `BurialRecord.gravePlotId` và `ownerCustomerId` là con trỏ LỎNG (không có quan hệ
+     * Prisma), nên phải tra hai lượt riêng. Cùng lối `plotById` đã dùng cho `gravePlots`. */
+    const burialPlots =
+      burials.length === 0
+        ? []
+        : await this.prisma.gravePlot.findMany({
+            where: { id: { in: burials.map((b) => b.gravePlotId) } },
+            include: { cemetery: { select: { name: true } } },
+          });
+    const burialPlotById = new Map(burialPlots.map((pl) => [pl.id, pl]));
+    const ownerIds = burials
+      .map((b) => b.ownerCustomerId)
+      .filter((id): id is string => id !== null);
+    const owners =
+      ownerIds.length === 0
+        ? []
+        : await this.prisma.customer.findMany({
+            where: { id: { in: ownerIds } },
+            select: {
+              id: true,
+              customerCode: true,
+              orgName: true,
+              person: { select: { fullName: true } },
+            },
+          });
+    const ownerById = new Map(owners.map((o) => [o.id, o]));
+
     return {
       ...customer,
+      restingPlaces: burials.map((b) => {
+        const plot = burialPlotById.get(b.gravePlotId);
+        const owner = b.ownerCustomerId === null ? undefined : ownerById.get(b.ownerCustomerId);
+        return {
+          burialRecordId: b.id,
+          gravePlotId: b.gravePlotId,
+          plotCode: plot?.plotCode ?? null,
+          cemeteryName: plot?.cemetery.name ?? null,
+          slotNumber: b.slotNumber,
+          status: b.status,
+          burialDate: b.burialDate,
+          cancelledAt: b.cancelledAt,
+          cancelReason: b.cancelReason,
+          /* Chủ mộ và quan hệ là ẢNH CHỤP lúc đặt cốt (xem chú thích ở schema) — trả đúng
+           * cái đã lưu, KHÔNG tính lại từ quan hệ hiện tại. Chủ mộ có thể đã đổi vì kế
+           * thừa, và quan hệ có thể đã chấm dứt; hồ sơ vẫn phải kể đúng căn cứ hồi đó. */
+          ownerCustomerId: b.ownerCustomerId,
+          ownerCustomerCode: owner?.customerCode ?? null,
+          ownerName: owner?.person?.fullName ?? owner?.orgName ?? null,
+          relationshipToOwner: b.relationshipToOwner,
+        };
+      }),
       gravePlots: rights.map((r) => {
         const plot = plotById.get(r.gravePlotId);
         return {
@@ -465,9 +540,16 @@ export class CustomersService {
    * LỎNG — không có khoá ngoại, chỉ `grave_holds` là có — nên CSDL sẽ vui vẻ để lại con
    * trỏ treo nếu không tự kiểm.
    *
-   * Cả hai nhánh (CHẶN và XOÁ THEO) đều SINH RA từ `common/lifecycle/customer-references`,
-   * không viết tay từng lời gọi. Chú thích cũ ở đây từng tả cách làm bằng tay và tả sai
-   * cả số bảng — chú thích tả sai việc mã đang làm còn nguy hơn không có chú thích.
+   * MỌI nhánh đều SINH RA từ sổ đăng ký, không viết tay lời gọi nào. HAI sổ, vì có hai
+   * cách một dòng dữ liệu dính tới người bị xoá:
+   *   - `common/lifecycle/customer-references` — trỏ tới HỒ SƠ KHÁCH HÀNG
+   *       (CHẶN · XOÁ THEO · GỠ CON TRỎ)
+   *   - `common/lifecycle/person-references`   — trỏ tới HỒ SƠ NHÂN THÂN
+   *       (CHẶN · XOÁ THEO, có thứ tự bắt buộc)
+   *
+   * Chú thích cũ ở đây từng tả cách làm bằng tay và tả sai cả số bảng — chú thích tả sai
+   * việc mã đang làm còn nguy hơn không có chú thích. Sổ theo nhân thân ra đời 27/08/2026,
+   * đúng chỗ mà một chú thích cũ trong chính hàm này đã đoán trước là sẽ hỏng.
    *
    * Trả về danh sách CHẶN chứ không phải một câu "không xoá được": người dùng cần biết
    * phải dọn cái gì trước, không phải biết là mình vừa thất bại.
@@ -504,9 +586,20 @@ export class CustomersService {
       }),
     );
 
-    /* Người này đã được an táng thì hồ sơ an táng trỏ vào hồ sơ NGƯỜI MẤT của họ, không
-     * trỏ vào hồ sơ khách hàng — nên nó không nằm trong sổ đăng ký theo cột khách hàng, và
-     * phải hỏi riêng. */
+    /* Tham chiếu theo NHÂN THÂN — sổ đăng ký thứ hai, cùng cách sinh ra như sổ theo khách
+     * hàng. Trước 27/08/2026 chỗ này hỏi tay đúng MỘT câu ("đã được an táng chưa"), và vì
+     * hỏi tay nên nó là mục duy nhất trong lời từ chối không chỉ được đích danh mộ nào. */
+    const countedPerson =
+      personId === null
+        ? []
+        : await Promise.all(
+            PERSON_BLOCKING_REFERENCES.map(async (ref) => {
+              const model = ref.model.charAt(0).toLowerCase() + ref.model.slice(1);
+              const n = await client[model]!.count({ where: ref.where(personId, now) });
+              return { ref, n };
+            }),
+          );
+
     const deceased =
       personId === null
         ? null
@@ -514,34 +607,42 @@ export class CustomersService {
             where: { personId },
             select: { id: true },
           });
-    const burialsAsDeceased =
-      deceased === null
-        ? 0
-        : await this.prisma.burialRecord.count({
-            where: { deceasedPersonId: deceased.id, ...activeBurial() },
-          });
 
     /* Lời từ chối phải chỉ ĐÍCH DANH thứ đang chặn, không chỉ đếm. "còn 2 hợp đồng" bảo
      * có việc phải làm; "còn 2 hợp đồng (HD1, HD2)" bảo làm ở đâu. */
-    const blockers = await Promise.all(
-      counted
-        .filter((c) => c.n > 0)
-        .map(async (c) => {
-          const base = c.ref.message(c.n);
-          if (c.ref.identify === undefined) return base;
-          const labels = await c.ref.identify(
-            client as unknown as Record<string, { findMany: (a: unknown) => Promise<unknown[]> }>,
-            customerId,
-            now,
-          );
-          const shown = labels.slice(0, 3).join(', ');
-          const more = c.n > labels.length ? `, +${c.n - labels.length}` : '';
-          return shown === '' ? base : `${base} (${shown}${more})`;
-        }),
-    );
-    if (burialsAsDeceased > 0) {
-      blockers.push(`đã được an táng (${burialsAsDeceased} hồ sơ)`);
-    }
+    const finder = client as unknown as Record<
+      string,
+      { findMany: (a: unknown) => Promise<unknown[]> }
+    >;
+    /* Một hàm dựng câu cho CẢ HAI sổ. Trước đây chỉ sổ khách hàng đi qua đường này, còn
+     * mục "đã được an táng" được `push` thẳng vào mảng — nên nó bỏ qua luôn bước gọi
+     * `identify`. Hai đường dựng câu là hai chất lượng câu khác nhau, và cái bị bỏ quên
+     * luôn là cái viết tay. */
+    const describe = async (
+      base: string,
+      n: number,
+      identify: undefined | ((c: typeof finder, id: string, now: Date) => Promise<string[]>),
+      id: string,
+    ): Promise<string> => {
+      if (identify === undefined) return base;
+      const labels = await identify(finder, id, now);
+      const shown = labels.slice(0, 3).join(', ');
+      const more = n > labels.length ? `, +${n - labels.length}` : '';
+      return shown === '' ? base : `${base} (${shown}${more})`;
+    };
+
+    const blockers = [
+      ...(await Promise.all(
+        counted
+          .filter((c) => c.n > 0)
+          .map((c) => describe(c.ref.message(c.n), c.n, c.ref.identify, customerId)),
+      )),
+      ...(await Promise.all(
+        countedPerson
+          .filter((c) => c.n > 0)
+          .map((c) => describe(c.ref.message(c.n), c.n, c.ref.identify, personId!)),
+      )),
+    ];
 
     if (blockers.length > 0) {
       throw new ConflictException(
@@ -567,6 +668,14 @@ export class CustomersService {
       this.prisma.graveHold.count({ where: { customerId } }),
     ]);
 
+    /* ĐẾM hai đường ghi mới để audit kể được, chứ không chỉ để trả về.
+     *
+     * Cả hai đều động vào dữ liệu mà người bấm nút KHÔNG nhìn thấy trên màn hình: hồ sơ an
+     * táng đã huỷ của chính họ bị xoá, và hồ sơ an táng đã huỷ CỦA NGƯỜI KHÁC bị gỡ mất con
+     * trỏ chủ mộ. Một lần ghi không ai đếm là một lần ghi không ai rà lại được. */
+    let detached = 0;
+    let cancelledBurials = 0;
+
     await this.prisma.$transaction(async (tx) => {
       /* Xoá theo cũng SINH RA từ sổ đăng ký, cùng nguồn với nhánh chặn. Trước đây chỗ này
        * gọi tay từng bảng, nên `CUSTOMER_CASCADE_REFERENCES` khai ra mà chỉ có test dùng —
@@ -579,19 +688,36 @@ export class CustomersService {
         const model = ref.model.charAt(0).toLowerCase() + ref.model.slice(1);
         await txc[model]!.deleteMany({ where: { [ref.column]: customerId } });
       }
-      /* Các bảng dưới đây khoá theo NHÂN THÂN, không theo khách hàng — nên chúng không nằm
-       * trong sổ đăng ký theo cột khách hàng. Sổ đăng ký cho `Person` vẫn CHƯA có; đây
-       * chính là chỗ sẽ hỏng lần sau nếu thêm bảng trỏ vào `persons`. */
-      if (personId !== null) {
-        await tx.familyRelationship.deleteMany({
-          where: { OR: [{ sourcePersonId: personId }, { targetPersonId: personId }] },
+
+      /* GỠ con trỏ thay vì xoá dòng — nhóm thứ ba của sổ. Dòng thuộc về NGƯỜI KHÁC (hồ sơ
+       * an táng đã huỷ của một người mất), nên xoá theo là xoá lịch sử của họ. */
+      const txu = tx as unknown as Record<
+        string,
+        {
+          updateMany: (a: {
+            where: Record<string, unknown>;
+            data: Record<string, unknown>;
+          }) => Promise<{ count: number }>;
+        }
+      >;
+      for (const ref of CUSTOMER_DETACH_REFERENCES) {
+        const model = ref.model.charAt(0).toLowerCase() + ref.model.slice(1);
+        const r = await txu[model]!.updateMany({
+          where: { [ref.column]: customerId },
+          data: { [ref.column]: null },
         });
-        await tx.personPhone.deleteMany({ where: { personId } });
-        await tx.personAddress.deleteMany({ where: { personId } });
-        await tx.personEducation.deleteMany({ where: { personId } });
-        await tx.personBankAccount.deleteMany({ where: { personId } });
-        if (deceased !== null) {
-          await tx.deceasedPerson.delete({ where: { id: deceased.id } });
+        detached += r.count;
+      }
+
+      /* Các bảng khoá theo NHÂN THÂN đi qua sổ đăng ký RIÊNG của chúng, và theo ĐÚNG thứ
+       * tự khai ở đó — `burial_records` phải đi trước `deceased_persons` vì khoá ngoại
+       * giữa hai bảng là `ON DELETE RESTRICT`. Trước đây bảy lời gọi này viết tay ở đây,
+       * và chú thích cũ đã tự đoán đúng rằng đó là chỗ sẽ hỏng. */
+      if (personId !== null) {
+        for (const ref of PERSON_CASCADE_REFERENCES) {
+          const model = ref.model.charAt(0).toLowerCase() + ref.model.slice(1);
+          const r = await txc[model]!.deleteMany({ where: ref.where(personId) });
+          if (ref.model === 'BurialRecord') cancelledBurials += r.count;
         }
       }
       await tx.customer.delete({ where: { id: customerId } });
@@ -615,6 +741,8 @@ export class CustomersService {
         deletedUsageRights: staleRights,
         deletedHolds: staleHolds,
         deletedDeceasedRecord: deceased !== null,
+        deletedCancelledBurials: cancelledBurials,
+        detachedBurialOwners: detached,
       },
     });
     return {
@@ -622,6 +750,8 @@ export class CustomersService {
       deletedRelationships: relationships,
       deletedUsageRights: staleRights,
       deletedHolds: staleHolds,
+      deletedCancelledBurials: cancelledBurials,
+      detachedBurialOwners: detached,
     };
   }
 

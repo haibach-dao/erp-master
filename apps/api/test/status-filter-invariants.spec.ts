@@ -3,6 +3,9 @@ import { join } from 'node:path';
 import { findDuplicateStatusLists, scanStatusReads } from './status-filter-scan';
 
 const SRC = join(__dirname, '..', 'src');
+/* Quét cả `scripts/`. Script chạy lệnh thật trên CSDL thật, và một bộ lọc sai ở đó nói dối
+ * y hệt — xem chú thích trong `status-filter-scan.ts`. */
+const SCRIPTS = join(__dirname, '..', 'scripts');
 
 /* CÁI RATCHET THỨ HAI của repo (cái thứ nhất là ratchet che dữ liệu cá nhân).
  *
@@ -32,12 +35,12 @@ const SRC = join(__dirname, '..', 'src');
 const REVIEWED_RAW_STATUS_READS: Readonly<Record<string, string>> = {};
 
 describe('lọc trạng thái — một định nghĩa, không nhiều bản', () => {
-  const hits = scanStatusReads(SRC);
+  const hits = scanStatusReads(SRC, SCRIPTS);
 
   it('bộ quét chạy được và đọc ra mã nguồn (tự kiểm cái quét)', () => {
     /* Nếu bộ quét hỏng và trả rỗng thì test dưới sẽ luôn xanh mà chẳng kiểm gì. Neo lại
      * bằng cách khẳng định nó ĐỌC ĐƯỢC file: cái quét từng nói dối hai lần ở ratchet kia. */
-    expect(() => scanStatusReads(SRC)).not.toThrow();
+    expect(() => scanStatusReads(SRC, SCRIPTS)).not.toThrow();
     expect(Array.isArray(hits)).toBe(true);
   });
 

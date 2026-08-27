@@ -725,6 +725,16 @@ model BurialRecord {
   burialDate     DateTime? @map("burial_date") @db.Date
   legalDocFileId String?   @map("legal_doc_file_id")
   notes          String?
+
+  /**
+   * Vì sao hồ sơ bị huỷ, và lúc nào. Ghi thẳng trên bản ghi chứ không chỉ trong nhật ký
+   * kiểm toán: hồ sơ đã huỷ vẫn hiện trên màn hình khách hàng, và một dòng "Đã huỷ" không
+   * kèm lý do là chỗ người đọc phải đi hỏi người khác. Cùng nếp với
+   * `GraveUsageRight.endedReason`. Huỷ cũng NHẢ CỐT: `Cancelled` không nằm trong partial
+   * unique index `burial_records_active_slot`.
+   */
+  cancelledAt  DateTime? @map("cancelled_at") @db.Timestamptz(6)
+  cancelReason String?   @map("cancel_reason")
   version        Int       @default(0)
   createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)

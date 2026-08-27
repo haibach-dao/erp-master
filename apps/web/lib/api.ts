@@ -803,6 +803,40 @@ export interface CustomerPlot {
   effectiveFrom: string | null;
 }
 
+/* NƠI AN NGHỈ — mộ khách hàng này NẰM TRONG.
+ *
+ * Cố ý TÁCH khỏi `CustomerPlot` (mộ khách hàng ĐỨNG TÊN) chứ không nhồi thêm cờ vào đó:
+ * hai thứ trả lời hai câu hỏi khác nhau, và gộp chúng chính là cách hồ sơ an táng đang chặn
+ * xoá khách hàng trở nên vô hình trên màn hình của họ (27/08/2026).
+ */
+export interface CustomerRestingPlace {
+  burialRecordId: string;
+  gravePlotId: string;
+  plotCode: string | null;
+  cemeteryName: string | null;
+  slotNumber: number | null;
+  /** Draft | Verified | Scheduled | Completed | Cancelled */
+  status: string;
+  burialDate: string | null;
+  cancelledAt: string | null;
+  cancelReason: string | null;
+  /* Chủ mộ và quan hệ là ẢNH CHỤP lúc đặt cốt — server trả đúng cái đã lưu, giao diện KHÔNG
+   * được tính lại từ danh sách quan hệ hiện tại. Chủ mộ đổi vì kế thừa, quan hệ chấm dứt về
+   * sau, nhưng hồ sơ vẫn phải kể đúng căn cứ hồi đó. */
+  ownerCustomerId: string | null;
+  ownerCustomerCode: string | null;
+  ownerName: string | null;
+  relationshipToOwner: string | null;
+}
+
+/* Huỷ hồ sơ an táng — NHẢ CỐT ra cho người khác, và gỡ rào chắn xoá khách hàng.
+ * BẮT BUỘC có lý do: server từ chối chuỗi dưới 3 ký tự. */
+export const cancelBurial = (burialRecordId: string, reason: string) =>
+  apiFetch(`/api/v1/burials/${encodeURIComponent(burialRecordId)}/cancel`, {
+    method: 'POST',
+    body: JSON.stringify({ reason }),
+  });
+
 export interface CustomerRelationship {
   id: string;
   relationshipType: string;
@@ -836,6 +870,10 @@ export interface CustomerDetail {
   createdAt: string;
   person: PersonProfile | null;
   gravePlots: CustomerPlot[];
+  /* Gồm CẢ hồ sơ đã huỷ — đây là khối lịch sử, và hồ sơ đã huỷ chính là thứ giải thích vì
+   * sao một cốt từng bị giữ rồi lại trống. Con số trên tab thì chỉ đếm phần CÒN HIỆU LỰC,
+   * để nó khớp với con số trong lời từ chối xoá. */
+  restingPlaces: CustomerRestingPlace[];
   relationships: CustomerRelationship[];
 }
 

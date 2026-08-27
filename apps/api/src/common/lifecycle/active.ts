@@ -33,6 +33,20 @@ export function activeBurial() {
   return { status: { in: [...ACTIVE_BURIAL_STATUSES] } };
 }
 
+/* Hồ sơ an táng HUỶ ĐƯỢC.
+ *
+ * `Completed` cố ý KHÔNG có ở đây: hồ sơ hoàn tất nghĩa là người đã thực sự nằm trong mộ,
+ * và huỷ nó là xoá dấu vết một việc đã xảy ra ngoài đời. Muốn đưa người ra khỏi mộ thì đó
+ * là DI DỜI/CẢI TÁNG — một thủ tục khác, có hồ sơ riêng, chưa dựng trong hệ. Mở `Completed`
+ * cho huỷ là cho phép sửa lịch sử bằng một nút bấm.
+ *
+ * `Cancelled` cũng không có ở đây: huỷ cái đã huỷ không phải một thao tác.
+ *
+ * Đây là danh sách cho vế GHI (được phép đổi sang `Cancelled`), không phải bộ lọc đọc —
+ * nên nó KHÔNG phải tập con của `ACTIVE_BURIAL_STATUSES` theo nghĩa "còn tính", dù trùng
+ * ba phần tử. Hai câu hỏi khác nhau, hai danh sách. */
+export const CANCELLABLE_BURIAL_STATUSES = ['Draft', 'Verified', 'Scheduled'] as const;
+
 /** Hợp đồng đang ràng buộc. `Draft` chưa ràng buộc ai; `Cancelled` thì hết. */
 export const BINDING_CONTRACT_STATUSES = ['Verified', 'Active'] as const;
 

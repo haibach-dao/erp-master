@@ -45,6 +45,7 @@ const ACTION: Record<string, string> = {
   'BURIAL.CREATED': 'Soạn hồ sơ an táng',
   'BURIAL.VERIFIED': 'Thẩm định hồ sơ an táng',
   'BURIAL.COMPLETED': 'Hoàn tất an táng',
+  'BURIAL.CANCELLED': 'Huỷ hồ sơ an táng',
 
   // Thẻ mộ
   'GRAVE_CARD.ISSUED': 'Cấp thẻ quản lý mộ',

@@ -228,6 +228,7 @@ export const PERMISSION_CATALOG: readonly PermissionDef[] = [
   p('burial.record.create', 'S2', 'Soạn hồ sơ an táng'),
   p('burial.record.verify', 'S3', 'Thẩm định hồ sơ an táng'),
   p('burial.record.complete', 'S3', 'Hoàn tất an táng (BẤT KHẢ HỒI)'),
+  p('burial.record.cancel', 'S3', 'Huỷ hồ sơ an táng (nhả cốt ra)'),
 
   // --- service ---
   p('service.catalog.view', 'S1', 'Xem danh mục dịch vụ'),
@@ -570,8 +571,13 @@ export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
     'contract.record.search',
     'contract.record.verify',
     'contract.amount.view_sensitive',
-    'burial.record.view', // đọc dẫn xuất cho verify
+    'burial.record.view', // đọc dẫn xuất cho verify/cancel
     'burial.record.verify',
+    /* Huỷ hồ sơ an táng: ghế THẨM ĐỊNH tác nghiệp là nơi hợp lý nhất — họ đã là người
+     * duyệt hồ sơ, phạm vi SITE bó họ vào nghĩa trang mình phụ trách, và họ KHÔNG có
+     * `burial.record.create` nên không tự soạn rồi tự huỷ được. Cùng nếp với
+     * `service.subscription.cancel` ngay dưới. */
+    'burial.record.cancel',
     'burial.deceased.view',
     'service.subscription.view', // đọc dẫn xuất cho cancel
     'service.subscription.cancel',

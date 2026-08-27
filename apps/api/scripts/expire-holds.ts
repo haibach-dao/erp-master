@@ -11,6 +11,7 @@
  * qua API, có phân quyền; script này dùng khi chưa có tài khoản hoặc đang ở máy CI.
  */
 import { PrismaClient } from '@prisma/client';
+import { holdStale } from '../src/common/lifecycle/active';
 
 const prisma = new PrismaClient();
 
@@ -19,7 +20,7 @@ async function main(): Promise<void> {
   const now = new Date();
 
   const stale = await prisma.graveHold.findMany({
-    where: { status: 'Active', expiresAt: { lt: now } },
+    where: { ...holdStale(now) },
     select: { id: true, gravePlotId: true, expiresAt: true, customerId: true },
     orderBy: { expiresAt: 'asc' },
   });

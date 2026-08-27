@@ -157,6 +157,10 @@ describe('tách nhiệm vụ ở mức vai (doc 16 §E.3)', () => {
     ['contract.record.verify', 'contract.record.activate'],
     ['burial.record.create', 'burial.record.verify'],
     ['burial.record.verify', 'burial.record.complete'],
+    /* Soạn và HUỶ hồ sơ an táng phải tách ghế: người vừa soạn được vừa huỷ được có thể
+     * dựng rồi rút một hồ sơ mà không ai ngoài nhật ký thấy — và huỷ NHẢ CỐT, tức là nó
+     * đổi được ai nằm ở đâu. */
+    ['burial.record.create', 'burial.record.cancel'],
     ['crm.relationship.create', 'crm.relationship.verify'],
     ['cemetery.hold.hold', 'cemetery.hold.release'],
     ['authz.change.submit', 'authz.change.approve'],

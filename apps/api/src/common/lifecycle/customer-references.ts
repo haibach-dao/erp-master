@@ -139,10 +139,38 @@ export const CUSTOMER_CASCADE_REFERENCES = [
   { model: 'GraveHold', column: 'customerId', label: 'phiếu giữ chỗ (lịch sử)' },
 ] as const;
 
-/** Mọi model được khai ở một trong hai nhóm — dùng cho test đối chiếu schema. */
+/* Tham chiếu phải GỠ RA (đặt về NULL), không chặn và cũng không xoá theo.
+ *
+ * Nhóm thứ ba này sinh ra ngày 27/08/2026 cùng lúc với trạng thái `Cancelled` của hồ sơ an
+ * táng, và nó tồn tại vì hai nhóm kia đều trả lời SAI cho một trường hợp thật:
+ *
+ *   Hồ sơ an táng mang `ownerCustomerId` = chủ mộ. Khi hồ sơ đã HUỶ, nó rơi khỏi
+ *   `activeBurial()` nên không còn chặn xoá chủ mộ nữa. Nhưng dòng đó KHÔNG PHẢI hồ sơ của
+ *   chủ mộ — nó là hồ sơ của NGƯỜI MẤT. Xoá theo là xoá lịch sử của người khác; để nguyên
+ *   là để lại con trỏ treo (cột này không có khoá ngoại).
+ *
+ * Nên: giữ dòng, gỡ con trỏ. Cột vốn đã cho phép NULL, và NULL ở đây mang đúng nghĩa "không
+ * còn biết chủ mộ là ai" — hồ sơ khách hàng đó đã bị xoá khỏi hệ. Ai từng là chủ mộ vẫn
+ * đọc được ở nhật ký kiểm toán.
+ *
+ * Trước 27/08/2026 trường hợp này KHÔNG tồn tại: mọi hồ sơ an táng luôn nằm trong bốn trạng
+ * thái còn hiệu lực, nên rào chắn `BurialRecord.ownerCustomerId` giữ lại tất. Thêm một
+ * trạng thái rơi ra ngoài bộ lọc là mở ra một lớp con trỏ treo mới — ghi ra đây để lần sau
+ * ai thêm trạng thái "đã huỷ"/"đã đóng" cho bảng khác thì hỏi luôn câu này.
+ */
+export const CUSTOMER_DETACH_REFERENCES = [
+  {
+    model: 'BurialRecord',
+    column: 'ownerCustomerId',
+    label: 'chủ mộ trong hồ sơ an táng đã huỷ',
+  },
+] as const;
+
+/** Mọi model được khai ở một trong BA nhóm — dùng cho test đối chiếu schema. */
 export function declaredCustomerReferences(): { model: string; column: string }[] {
   return [
     ...CUSTOMER_BLOCKING_REFERENCES.map((r) => ({ model: r.model, column: r.column })),
     ...CUSTOMER_CASCADE_REFERENCES.map((r) => ({ model: r.model, column: r.column })),
+    ...CUSTOMER_DETACH_REFERENCES.map((r) => ({ model: r.model, column: r.column })),
   ];
 }

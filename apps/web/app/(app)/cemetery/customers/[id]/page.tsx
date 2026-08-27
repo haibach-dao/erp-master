@@ -14,11 +14,13 @@ import {
   MapPin,
   Phone,
   Plus,
+  ScrollText,
   Users,
 } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   addPersonAddress,
+  cancelBurial,
   addPersonBankAccount,
   addPersonEducation,
   addPersonPhone,
@@ -32,7 +34,7 @@ import {
   searchCustomers,
   type CustomerDetail,
 } from '@/lib/api';
-import { customerType } from '@/lib/status';
+import { customerType, statusOf } from '@/lib/status';
 import {
   CustomerFormTabs,
   EMPTY_CUSTOMER_FORM,
@@ -125,6 +127,19 @@ function TABS(c: CustomerDetail): TabItem[] {
       count: (p?.phones.length ?? 0) + (p?.addresses.length ?? 0),
     },
     { id: 'phan-mo', label: 'Phần mộ', icon: Landmark, count: c.gravePlots.length },
+    {
+      /* TÁCH khỏi "Phần mộ", không gộp. "Phần mộ" = mộ khách ĐỨNG TÊN; "Nơi an nghỉ" = mộ
+       * khách NẰM TRONG. Gộp hai thứ là dựng lại đúng chỗ mập mờ đã làm hồ sơ an táng chặn
+       * xoá trở nên vô hình.
+       *
+       * Con số chỉ đếm hồ sơ CÒN HIỆU LỰC, dù bảng bên trong liệt kê cả hồ sơ đã huỷ: con
+       * số này phải khớp với con số trong lời từ chối xoá, còn bảng thì phải kể được lịch
+       * sử. Hai câu hỏi khác nhau. */
+      id: 'noi-an-nghi',
+      label: 'Nơi an nghỉ',
+      icon: ScrollText,
+      count: c.restingPlaces.filter((r) => r.status !== 'Cancelled').length,
+    },
     { id: 'quan-he', label: 'Quan hệ', icon: Users, count: c.relationships.length },
     {
       id: 'khac',
@@ -273,6 +288,19 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
   /* Chọn nhầm thì sửa được: chấm dứt quan hệ cũ rồi khai lại. KHÔNG sửa tại chỗ — quan
    * hệ có hiệu lực theo thời gian, và ghi đè là xoá mất việc "trước đây đã từng khai
    * khác". Server đóng cả dòng đối ứng trong cùng giao dịch. */
+  /* Huỷ hồ sơ an táng ngay trên hồ sơ khách hàng. Không bắt người dùng đi sang màn hình
+   * an táng tìm lại: thứ đang CHẶN họ hiện ở đây, nên thao tác gỡ nó cũng phải ở đây. */
+  const [cancelTarget, setCancelTarget] = useState<string | null>(null);
+  const [cancelReason, setCancelReason] = useState('');
+  const cancelBurialRecord = useMutation({
+    mutationFn: () => cancelBurial(cancelTarget!, cancelReason),
+    onSuccess: () => {
+      setCancelTarget(null);
+      setCancelReason('');
+      refresh();
+    },
+  });
+
   const endRel = useMutation({
     mutationFn: (relationshipId: string) => endRelationship(relationshipId),
     onSuccess: refresh,
@@ -339,6 +367,14 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
   const c: CustomerDetail = detail.data;
   const p = c.person;
   const name = p?.fullName ?? c.orgName ?? c.customerCode;
+
+  /* Hồ sơ an táng ĐANG CHẶN xoá — dùng CÙNG một định nghĩa "còn hiệu lực" với server (mọi
+   * thứ không phải `Cancelled`). Hai chỗ trả lời khác nhau cho cùng một câu hỏi nghiệp vụ
+   * chính là bệnh mà `common/lifecycle/active.ts` sinh ra để chữa.
+   *
+   * Là dẫn xuất thường, KHÔNG phải hook — nên nó nằm dưới hai early return được. Thêm
+   * `useQuery`/`useMemo` ở đây thì phải đưa lên trên chúng. */
+  const blockingBurials = c.restingPlaces.filter((r) => r.status !== 'Cancelled');
 
   /* Hai câu xác nhận trước khi lưu. `source` là NGƯỜI VỪA CHỌN, `target` là khách hàng
    * này — đúng chiều sẽ ghi xuống CSDL, nên câu hiện ra chính là điều sắp được lưu, không
@@ -497,6 +533,108 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
 
         <TabPanel id="phan-mo" value={tab}>
           <CustomerGraveActions customer={c} onChanged={refresh} />
+        </TabPanel>
+
+        <TabPanel id="noi-an-nghi" value={tab}>
+          <Card>
+            <CardHeader>
+              <div className="space-y-1">
+                <CardTitle className="flex items-center gap-2">
+                  <ScrollText className="size-4" aria-hidden />
+                  Nơi an nghỉ
+                </CardTitle>
+                {/* Nói rõ khối này KHÁC tab "Phần mộ" ở chỗ nào — hai tab cùng nói về mộ
+                    mà không phân biệt được thì người đọc sẽ tưởng một trong hai sai. */}
+                <p className="text-xs text-muted-foreground">
+                  Mộ mà khách hàng này NẰM TRONG, khác với tab “Phần mộ” là mộ họ đứng tên. Hồ sơ
+                  còn hiệu lực ở đây sẽ CHẶN xoá hồ sơ khách hàng.
+                </p>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Phần mộ</TableHead>
+                    <TableHead>Cốt</TableHead>
+                    <TableHead>Chủ mộ</TableHead>
+                    <TableHead>Ngày an táng</TableHead>
+                    <TableHead>Trạng thái</TableHead>
+                    <TableHead />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {c.restingPlaces.length === 0 ? (
+                    <TableMessage colSpan={6}>
+                      <EmptyState
+                        icon={ScrollText}
+                        title="Chưa an táng ở phần mộ nào"
+                        description="Khách hàng này chưa có hồ sơ an táng nào ghi họ là người mất."
+                      />
+                    </TableMessage>
+                  ) : (
+                    c.restingPlaces.map((r) => {
+                      const s = statusOf(r.status);
+                      const cancelled = r.status === 'Cancelled';
+                      return (
+                        <TableRow key={r.burialRecordId}>
+                          <TableCell>
+                            <span className="block font-medium">{r.plotCode ?? '—'}</span>
+                            <span className="block text-xs text-muted-foreground">
+                              {r.cemeteryName ?? ''}
+                            </span>
+                          </TableCell>
+                          <TableCell>{r.slotNumber ?? '—'}</TableCell>
+                          <TableCell>
+                            {/* Quan hệ hiện NHƯ ĐÃ LƯU lúc đặt cốt, không tính lại từ tab
+                                Quan hệ: chủ mộ có thể đã đổi vì kế thừa, quan hệ có thể đã
+                                chấm dứt, nhưng căn cứ hồi đó thì không đổi. */}
+                            <span className="block">{r.ownerName ?? '—'}</span>
+                            <span className="block text-xs text-muted-foreground">
+                              {r.relationshipToOwner === null
+                                ? ''
+                                : r.relationshipToOwner === 'SELF'
+                                  ? 'chính chủ mộ'
+                                  : /* Giới tính của CHÍNH người này — nhãn là "người này
+                                       LÀ GÌ của chủ mộ", nên "con trai"/"con gái" suy từ
+                                       giới tính của họ. Thứ tự sinh để `null`: so tuổi với
+                                       chủ mộ cần ngày sinh của chủ mộ, mà bản ghi an táng
+                                       không chụp lại thứ đó — đoán bừa "anh" hay "em" là
+                                       sai một điều người ta để ý. */
+                                    relationshipLabel(r.relationshipToOwner, p?.gender ?? null)}
+                            </span>
+                          </TableCell>
+                          <TableCell>{r.burialDate?.slice(0, 10) ?? '—'}</TableCell>
+                          <TableCell>
+                            <Badge variant={s.variant}>{s.label}</Badge>
+                            {cancelled && r.cancelReason !== null ? (
+                              <span className="block text-xs text-muted-foreground">
+                                {r.cancelReason}
+                              </span>
+                            ) : null}
+                          </TableCell>
+                          <TableCell>
+                            {/* Hồ sơ HOÀN TẤT không có nút: người đã nằm trong mộ, và một
+                                nút bấm được rồi mới báo lỗi là mời người dùng va vào luật. */}
+                            {cancelled || r.status === 'Completed' ? null : (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => setCancelTarget(r.burialRecordId)}
+                                title="Huỷ hồ sơ an táng này — cốt được nhả ra cho người khác"
+                              >
+                                Huỷ hồ sơ
+                              </Button>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })
+                  )}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
         </TabPanel>
 
         <TabPanel id="quan-he" value={tab}>
@@ -947,6 +1085,52 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
       </Dialog>
 
       <Dialog
+        open={cancelTarget !== null}
+        onClose={() => setCancelTarget(null)}
+        title="Huỷ hồ sơ an táng"
+        description="Cốt sẽ được nhả ra cho người khác nhận."
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setCancelTarget(null)}>
+              Đóng
+            </Button>
+            <Button
+              variant="destructive"
+              loading={cancelBurialRecord.isPending}
+              disabled={cancelReason.trim().length < 3}
+              onClick={() => cancelBurialRecord.mutate()}
+            >
+              Huỷ hồ sơ
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          {cancelBurialRecord.error !== null ? (
+            <Alert variant="destructive" title="Không huỷ được">
+              {(cancelBurialRecord.error as Error).message}
+            </Alert>
+          ) : null}
+          {/* LÝ DO là bắt buộc ở server, nên phải bắt buộc ở đây luôn — để người dùng biết
+              trước khi bấm, thay vì bấm rồi nhận 400. */}
+          <Field
+            label="Lý do huỷ"
+            hint="Bắt buộc. Sáu tháng sau đây là thứ duy nhất kể được vì sao cốt này từng bị giữ rồi lại trống."
+          >
+            <Input
+              value={cancelReason}
+              onChange={(e) => setCancelReason(e.target.value)}
+              placeholder="ví dụ: nhập nhầm người"
+            />
+          </Field>
+          <p className="text-xs text-muted-foreground">
+            Hồ sơ KHÔNG bị xoá — nó chuyển sang “Đã hủy” và vẫn đọc lại được. Hồ sơ đã HOÀN TẤT thì
+            không huỷ được: đưa người ra khỏi mộ là thủ tục di dời/cải táng.
+          </p>
+        </div>
+      </Dialog>
+
+      <Dialog
         open={deleteOpen}
         onClose={() => setDeleteOpen(false)}
         title="Xoá hồ sơ khách hàng"
@@ -988,6 +1172,27 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
               {p?.deceased != null ? <li>Hồ sơ người mất</li> : null}
             </ul>
           </Alert>
+
+          {/* Nói TRƯỚC cái đang chặn, chỉ đích danh, thay vì để người dùng bấm rồi mới
+              biết. Trước 27/08/2026 chỗ này chỉ có một câu chung chung, còn hồ sơ an táng
+              đang chặn thì không hiện ở đâu trên trang — nên lời từ chối của server đọc
+              lên như một lỗi của hệ. */}
+          {blockingBurials.length > 0 ? (
+            <Alert variant="destructive" title="Đang bị chặn">
+              <p>Khách hàng này đã được an táng — phải huỷ hồ sơ an táng trước khi xoá:</p>
+              <ul className="mt-1 list-disc space-y-0.5 pl-5">
+                {blockingBurials.map((r) => (
+                  <li key={r.burialRecordId}>
+                    mộ {r.plotCode ?? r.gravePlotId}
+                    {r.slotNumber === null ? '' : ` cốt ${r.slotNumber}`} —{' '}
+                    {statusOf(r.status).label}
+                    {r.status === 'Completed' ? ' (không huỷ được)' : ''}
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-1">Xem tab “Nơi an nghỉ”.</p>
+            </Alert>
+          ) : null}
 
           <p className="text-xs text-muted-foreground">
             Hệ sẽ TỪ CHỐI nếu khách hàng còn đứng tên mộ, có hồ sơ an táng, đã cấp thẻ, có hợp đồng
