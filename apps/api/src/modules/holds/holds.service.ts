@@ -3,6 +3,8 @@ import { Prisma } from '@prisma/client';
 import { ulid } from 'ulid';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { ScopeService } from '../authorization/scope.service';
+import type { Caller } from '../authorization/caller';
 import { holdStale } from '../../common/lifecycle/active';
 import type { CreateHoldDto } from './holds.dto';
 
@@ -13,11 +15,36 @@ export class HoldsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly scope: ScopeService,
   ) {}
+
+  /* PHẠM VI CỦA MỘT PHIẾU GIỮ CHỖ = phạm vi của PHẦN MỘ nó giữ.
+   *
+   * `GraveHold` không mang `companyId` lẫn `cemeteryId`; nó chỉ có `gravePlotId`. Nhưng
+   * `gravePlotId` là NOT NULL và CÓ khoá ngoại thật tới `GravePlot`, nên neo luôn quy được
+   * và không có con trỏ treo — khác hẳn `ExternalContract.contractFileId` (id lỏng).
+   *
+   * Kiểm TRƯỚC khi mở giao dịch: hỏi phạm vi là gọi ra ngoài Prisma, giữ một giao dịch mở
+   * trong lúc chờ nó là giữ khoá hàng lâu hơn cần thiết. Hệ quả là phần mộ / phiếu giữ được
+   * đọc hai lần (một lần để hỏi phạm vi, một lần trong giao dịch để khoá) — đổi một truy
+   * vấn rẻ lấy một giao dịch ngắn, và đây đúng khuôn `changeGravePlotStatus` đang dùng.
+   */
+  private async assertPlotInScope(gravePlotId: string, caller: Caller): Promise<void> {
+    const plot = await this.prisma.gravePlot.findUnique({
+      where: { id: gravePlotId },
+      select: { companyId: true, cemeteryId: true },
+    });
+    if (plot === null) {
+      throw new NotFoundException('Không tìm thấy vị trí mộ');
+    }
+    await this.scope.assertCompanyFor(caller.userId, caller.permission, plot.companyId);
+    await this.scope.assertSiteFor(caller.userId, caller.permission, plot.cemeteryId);
+  }
 
   // Create a hold and move the plot Available -> Held atomically. Double-hold is blocked by
   // both the pre-check and the partial unique index (one Active hold per plot).
-  async createHold(dto: CreateHoldDto, actor: string | null) {
+  async createHold(dto: CreateHoldDto, caller: Caller) {
+    await this.assertPlotInScope(dto.gravePlotId, caller);
     const expiresAt =
       dto.expiresAt !== undefined
         ? new Date(dto.expiresAt)
@@ -39,7 +66,7 @@ export class HoldsService {
             id: ulid(),
             gravePlotId: dto.gravePlotId,
             customerId: dto.customerId,
-            createdBy: actor,
+            createdBy: caller.userId,
             status: 'Active',
             reason: dto.reason ?? null,
             expiresAt,
@@ -66,14 +93,26 @@ export class HoldsService {
           fromStatus: plot.status,
           toStatus: 'Held',
           reason: 'hold',
-          changedBy: actor,
+          changedBy: caller.userId,
         },
       });
       return hold;
     });
   }
 
-  async releaseHold(id: string, actor: string | null) {
+  async releaseHold(id: string, caller: Caller) {
+    /* Quy phiếu giữ về phần mộ TRƯỚC giao dịch. Bỏ sót chiều này là người ngoài phạm vi nhả
+     * được chỗ người khác đang giữ — và nhả chỗ thì mộ về `Available`, tức mở đường cho
+     * người khác giữ hoặc mua. Phá hoại chỉ cần một chiều là đủ. */
+    const target = await this.prisma.graveHold.findUnique({
+      where: { id },
+      select: { gravePlotId: true },
+    });
+    if (target === null) {
+      throw new NotFoundException('Không tìm thấy giữ chỗ');
+    }
+    await this.assertPlotInScope(target.gravePlotId, caller);
+
     return this.prisma.$transaction(async (tx) => {
       const hold = await tx.graveHold.findUnique({ where: { id } });
       if (hold === null) {
@@ -99,7 +138,7 @@ export class HoldsService {
             fromStatus: 'Held',
             toStatus: 'Available',
             reason: 'release hold',
-            changedBy: actor,
+            changedBy: caller.userId,
           },
         });
       }
@@ -107,10 +146,34 @@ export class HoldsService {
     });
   }
 
-  listHolds(gravePlotId?: string, status?: string) {
+  /* Danh sách phiếu giữ chỗ — bó theo phạm vi, vì đây là chỗ lấy được ID phiếu để gọi
+   * `release`. Bó ghi mà hở đọc là bó nửa vời.
+   *
+   * `GraveHold` CÓ quan hệ Prisma tới `GravePlot`, nên lọc được thẳng qua quan hệ
+   * (`where: { gravePlot: { ... } }`) — không phải quy ra danh sách id rồi lọc `in` như bên
+   * hợp đồng, nơi hai bảng không có quan hệ nào nối.
+   */
+  async listHolds(caller: Caller, gravePlotId?: string, status?: string) {
     const where: Prisma.GraveHoldWhereInput = {};
-    if (gravePlotId !== undefined) where.gravePlotId = gravePlotId;
     if (status !== undefined) where.status = status;
+
+    if (gravePlotId !== undefined) {
+      // Hỏi đúng MỘT phần mộ: phần mộ đó phải nằm trong phạm vi được gán.
+      await this.assertPlotInScope(gravePlotId, caller);
+      where.gravePlotId = gravePlotId;
+      return this.prisma.graveHold.findMany({ where, orderBy: { createdAt: 'desc' } });
+    }
+
+    const companies = await this.scope.visibleCompanyIdsFor(caller.userId, caller.permission);
+    const sites = await this.scope.listSiteFilterFor(caller.userId, caller.permission);
+    /* `[]` là câu trả lời ĐÚNG, không phải chỗ để bỏ mệnh đề đi: được gán không công ty /
+     * nghĩa trang nào nghĩa là với tới không cái nào, không phải với tới tất cả. */
+    if (companies !== null || sites !== null) {
+      where.gravePlot = {
+        ...(companies === null ? {} : { companyId: { in: companies } }),
+        ...(sites === null ? {} : { cemeteryId: { in: sites } }),
+      };
+    }
     return this.prisma.graveHold.findMany({ where, orderBy: { createdAt: 'desc' } });
   }
 

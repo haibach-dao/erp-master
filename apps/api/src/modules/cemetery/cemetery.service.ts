@@ -142,6 +142,36 @@ export class CemeteryService {
     }));
   }
 
+  /* PHẠM VI CỦA MỘT PHẦN MỘ, khai đúng MỘT lần.
+   *
+   * Cặp `assertCompanyFor` + `assertSiteFor` trên `plot.companyId`/`plot.cemeteryId` trước
+   * đây được gõ lại ở từng chỗ. Hai bản của cùng một luật là hai thứ sẽ lệch nhau — không
+   * phải nếu mà là khi nào — và đó đúng lớp lỗi mà `common/lifecycle/active.ts` sinh ra để
+   * dẹp. Nên: một hàm, mọi chỗ gọi.
+   *
+   * Hai biến thể vì hai tình huống khác nhau, không phải để tiện:
+   *   - `assertPlotScope`  : đã CÓ bản ghi phần mộ trong tay (chỗ nào cũng đọc thêm cột khác)
+   *   - `assertPlotInScope`: chỉ có id, cần đọc phần mộ lên để hỏi
+   */
+  private async assertPlotScope(
+    plot: { companyId: string; cemeteryId: string },
+    caller: Caller,
+  ): Promise<void> {
+    await this.scope.assertCompanyFor(caller.userId, caller.permission, plot.companyId);
+    await this.scope.assertSiteFor(caller.userId, caller.permission, plot.cemeteryId);
+  }
+
+  private async assertPlotInScope(gravePlotId: string, caller: Caller): Promise<void> {
+    const plot = await this.prisma.gravePlot.findUnique({
+      where: { id: gravePlotId },
+      select: { companyId: true, cemeteryId: true },
+    });
+    if (plot === null) {
+      throw new NotFoundException('Không tìm thấy lô mộ');
+    }
+    await this.assertPlotScope(plot, caller);
+  }
+
   /* Change status inside a transaction and append to the status history.
    *
    * Kiểm phạm vi theo phần mộ ĐANG sửa, y như `setPlotPosition` ngay dưới. Cho tới
@@ -161,8 +191,7 @@ export class CemeteryService {
     if (target === null) {
       throw new NotFoundException('Grave plot not found');
     }
-    await this.scope.assertCompanyFor(caller.userId, caller.permission, target.companyId);
-    await this.scope.assertSiteFor(caller.userId, caller.permission, target.cemeteryId);
+    await this.assertPlotScope(target, caller);
 
     return this.prisma.$transaction(async (tx) => {
       const plot = await tx.gravePlot.findUnique({ where: { id } });
@@ -190,7 +219,15 @@ export class CemeteryService {
     });
   }
 
-  getStatusHistory(gravePlotId: string) {
+  /* Lịch sử trạng thái một phần mộ.
+   *
+   * Tới 27/08/2026 hàm này KHÔNG nhận caller và không kiểm phạm vi dòng nào — nên ratchet
+   * `scope-check-invariants` cũng không thấy nó (cái lưới đó soi method NHẬN `Caller`).
+   * Lịch sử này kể ai đổi trạng thái mộ nào, lúc nào, vì lý do gì: đủ để dựng lại nhịp bán
+   * và nhịp an táng của một nghĩa trang mình không phụ trách.
+   */
+  async getStatusHistory(gravePlotId: string, caller: Caller) {
+    await this.assertPlotInScope(gravePlotId, caller);
     return this.prisma.gravePlotStatusHistory.findMany({
       where: { gravePlotId },
       orderBy: { changedAt: 'desc' },
@@ -226,8 +263,7 @@ export class CemeteryService {
     if (plot === null) {
       throw new NotFoundException('Không tìm thấy lô mộ');
     }
-    await this.scope.assertCompanyFor(caller.userId, caller.permission, plot.companyId);
-    await this.scope.assertSiteFor(caller.userId, caller.permission, plot.cemeteryId);
+    await this.assertPlotScope(plot, caller);
 
     const updated = await this.prisma.gravePlot.update({
       where: { id },

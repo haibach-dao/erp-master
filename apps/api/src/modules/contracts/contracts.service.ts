@@ -66,11 +66,15 @@ export class ContractsService {
     }
   }
 
-  async addParty(contractId: string, dto: AddPartyDto) {
+  async addParty(contractId: string, dto: AddPartyDto, caller: Caller) {
     const contract = await this.prisma.externalContract.findUnique({ where: { id: contractId } });
     if (contract === null) {
       throw new NotFoundException('Không tìm thấy hợp đồng');
     }
+    /* Cùng neo, cùng thứ tự với `verify`/`activate`/`cancel`/`get`/`list`: phạm vi TRƯỚC mọi
+     * phép kiểm trạng thái, để câu lỗi 409 không kể cho người ngoài phạm vi biết hợp đồng đó
+     * tồn tại và đang ở trạng thái nào. Thêm bên ký là ghi vào hợp đồng của người khác. */
+    await this.assertContractInScope(contract, caller);
     if (contract.status === 'Active' || contract.status === 'Cancelled') {
       throw new ConflictException('Không sửa bên ký khi hợp đồng đã Active/Cancelled');
     }

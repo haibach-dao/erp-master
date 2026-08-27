@@ -101,8 +101,8 @@ export class CemeteryController {
 
   @Get('grave-plots/:id/status-history')
   @RequirePermission('cemetery.plot.view_history')
-  statusHistory(@Param('id') id: string) {
-    return this.svc.getStatusHistory(id);
+  statusHistory(@Param('id') id: string, @Req() req: Request) {
+    return this.svc.getStatusHistory(id, this.caller(req));
   }
 
   /* Toạ độ sơ đồ mặt bằng — tách khỏi `set_status` vì là hai việc khác nhau: đổi trạng

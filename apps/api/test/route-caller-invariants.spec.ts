@@ -64,10 +64,6 @@ const MEASURED_DEBT: Readonly<Record<string, string>> = {
     'Liệt kê ai phụ trách nghĩa trang nào — đúng tấm bản đồ người muốn leo thang cần. Bó được theo công ty của nghĩa trang; chưa làm vì `assign`/`revoke` cùng file đã bó rồi, còn đường đọc thì cần chốt có cho đọc chéo công ty không.',
   'modules/burials/burials.controller.ts:createDeceased':
     'Đã ghi nợ riêng và nêu để quyết: `Person` là dữ liệu LIÊN CÔNG TY, `Customer.companyId` cho phép NULL nên kiểm có điều kiện là fail-open. Khác `revealNationalId` (đã bó): đó là ĐỌC nên mặc định chặn được, đây là GHI hợp lệ nên chặn hết là chặn nghiệp vụ thật.',
-  'modules/cemetery/cemetery.controller.ts:statusHistory':
-    'Lịch sử trạng thái một phần mộ. Neo RÕ (`GravePlot` có cả `companyId` lẫn `cemeteryId`) và rẻ — `changeGravePlotStatus` đã bó theo đúng neo đó. Chưa làm vì service `getStatusHistory` không nhận caller nào; sửa là đổi cả chữ ký.',
-  'modules/contracts/contracts.controller.ts:addParty':
-    'Thêm bên ký vào hợp đồng. Neo có sẵn: `assertContractInScope` vừa dựng cho `verify`/`activate`/`cancel`/`get`/`list`. Đây là chỗ rẻ nhất trong sổ này.',
   'modules/customers/customers.controller.ts:createPerson':
     'Tạo nhân thân MỚI — cùng câu hỏi neo với `createDeceased`: nhân thân chưa thuộc công ty nào lúc tạo.',
   'modules/customers/customers.controller.ts:createCustomer':
@@ -96,12 +92,6 @@ const MEASURED_DEBT: Readonly<Record<string, string>> = {
     'Cùng nợ với `addPhone`, và là đường nhạy nhất trong năm: số tài khoản ngân hàng.',
   'modules/customers/customers.controller.ts:deactivateSubRecord':
     'Cùng nợ với `addPhone`, bó cùng lượt. Đây là chiều XOÁ MỀM của cả bốn đường trên, nên hở nó là hở toàn bộ nhóm.',
-  'modules/holds/holds.controller.ts:create':
-    'Giữ chỗ một phần mộ. Neo RÕ qua `GravePlot` (công ty + nghĩa trang), rẻ như `changeGravePlotStatus`. Chưa làm vì cả module `holds` chưa tiêm `ScopeService` — làm thì làm cả ba đường một lượt.',
-  'modules/holds/holds.controller.ts:release':
-    'Nhả phiếu giữ. Cùng neo với `create`; bỏ sót chiều này là người ngoài phạm vi nhả được chỗ người khác đang giữ.',
-  'modules/holds/holds.controller.ts:list':
-    'Danh sách phiếu giữ — chỗ lấy được ID phiếu để gọi `release`. Bó ghi mà hở đọc là bó nửa vời.',
   'modules/services/services.controller.ts:createCatalog':
     'Danh mục dịch vụ có `companyId` nên neo rõ; nhưng ba đường `subscribe`/`renew`/`cancel` cùng module đã nằm trong sổ nợ của `scope-check-invariants` vì chưa chốt neo. Quyết một lượt cho cả module.',
   'modules/services/services.controller.ts:listSubscriptions':

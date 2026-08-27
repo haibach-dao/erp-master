@@ -14,6 +14,7 @@ const verifier = (userId: string): Caller => ({ userId, permission: 'contract.re
 const activator = (userId: string): Caller => ({ userId, permission: 'contract.record.activate' });
 const CALLER_CANCEL: Caller = { userId: 'u1', permission: 'contract.record.cancel' };
 const CALLER_VIEW: Caller = { userId: 'u1', permission: 'contract.record.view' };
+const CALLER_ADD_PARTY: Caller = { userId: 'u1', permission: 'contract.party.assign' };
 
 const AUTHOR = 'user-author';
 const MANAGER = 'user-manager';
@@ -64,6 +65,7 @@ function build(row: unknown) {
       update,
     },
     gravePlot: { findUnique: plotFindUnique, findMany: plotFindMany },
+    contractParty: { create: vi.fn().mockResolvedValue({ id: 'p9' }) },
     $transaction: vi.fn().mockImplementation((fn: (t: unknown) => unknown) => fn(tx)),
   } as unknown as PrismaService;
   const assertCompanyFor = vi.fn().mockResolvedValue(undefined);
@@ -523,5 +525,40 @@ describe('phạm vi — đường ĐỌC hợp đồng cũng bó, không chỉ �
     await expect(svc.list('co-1', CALLER_VIEW, undefined, 'plot-9')).rejects.toBeInstanceOf(
       NotFoundException,
     );
+  });
+});
+
+/* Thêm bên ký là GHI vào hợp đồng. Neo đã có sẵn (`assertContractInScope`), nên để hở đường
+ * này trong khi `verify`/`activate`/`cancel`/`get`/`list` đều đã bó là hở đúng một khe.
+ */
+describe('phạm vi — thêm bên ký cũng bó, cùng neo với năm đường kia', () => {
+  it('hỏi CẢ hai trục, kèm mã quyền đang thi hành', async () => {
+    const { svc, assertCompanyFor, assertSiteFor } = build(contract({ status: 'Uploaded' }));
+
+    await svc.addParty('ct-1', { customerId: 'cus-1', role: 'OWNER' }, CALLER_ADD_PARTY);
+
+    expect(assertCompanyFor).toHaveBeenCalledWith('u1', 'contract.party.assign', 'co-1');
+    expect(assertSiteFor).toHaveBeenCalledWith('u1', 'contract.party.assign', SITE);
+  });
+
+  it('ngoài phạm vi thì KHÔNG tạo bên ký nào', async () => {
+    const { svc, prisma, assertSiteFor } = build(contract({ status: 'Uploaded' }));
+    assertSiteFor.mockRejectedValue(new ForbiddenException('không phụ trách nghĩa trang này'));
+
+    await expect(
+      svc.addParty('ct-1', { customerId: 'cus-1', role: 'OWNER' }, CALLER_ADD_PARTY),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.contractParty.create).not.toHaveBeenCalled();
+  });
+
+  /* Cùng thứ tự với năm đường kia: phạm vi TRƯỚC phép kiểm trạng thái, để câu lỗi 409 không
+   * kể cho người ngoài phạm vi biết hợp đồng đó tồn tại và đang ở đâu. */
+  it('ngoài phạm vi thì trả 403 chứ không rò trạng thái qua 409', async () => {
+    const { svc, assertCompanyFor } = build(contract({ status: 'Active' }));
+    assertCompanyFor.mockRejectedValue(new ForbiddenException('Ngoài phạm vi được gán'));
+
+    await expect(
+      svc.addParty('ct-1', { customerId: 'cus-1', role: 'OWNER' }, CALLER_ADD_PARTY),
+    ).rejects.toBeInstanceOf(ForbiddenException);
   });
 });

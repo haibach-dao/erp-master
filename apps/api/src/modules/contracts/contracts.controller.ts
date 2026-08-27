@@ -28,8 +28,8 @@ export class ContractsController {
 
   @Post(':id/parties')
   @RequirePermission('contract.party.assign')
-  addParty(@Param('id') id: string, @Body() dto: AddPartyDto) {
-    return this.svc.addParty(id, dto);
+  addParty(@Param('id') id: string, @Body() dto: AddPartyDto, @Req() req: Request) {
+    return this.svc.addParty(id, dto, this.caller(req));
   }
 
   @Post(':id/verify')

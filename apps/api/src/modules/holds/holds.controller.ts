@@ -4,6 +4,7 @@ import type { Request } from 'express';
 import { JwtAuthGuard } from '../iam/guards/jwt-auth.guard';
 import { PermissionGuard } from '../authorization/permission.guard';
 import { RequirePermission } from '../authorization/require-permission.decorator';
+import { callerOf, type Caller } from '../authorization/caller';
 import { HoldsService } from './holds.service';
 import { CreateHoldDto } from './holds.dto';
 
@@ -14,10 +15,14 @@ import { CreateHoldDto } from './holds.dto';
 export class HoldsController {
   constructor(private readonly svc: HoldsService) {}
 
+  private caller(req: Request): Caller {
+    return callerOf(req);
+  }
+
   @Post()
   @RequirePermission('cemetery.hold.hold')
   create(@Body() dto: CreateHoldDto, @Req() req: Request) {
-    return this.svc.createHold(dto, req.user?.userId ?? null);
+    return this.svc.createHold(dto, this.caller(req));
   }
 
   /* Quét phiếu giữ chỗ hết hạn. Gate bằng `release` — hệ quả giống hệt huỷ giữ chỗ (nhả
@@ -31,12 +36,16 @@ export class HoldsController {
   @Post(':id/release')
   @RequirePermission('cemetery.hold.release')
   release(@Param('id') id: string, @Req() req: Request) {
-    return this.svc.releaseHold(id, req.user?.userId ?? null);
+    return this.svc.releaseHold(id, this.caller(req));
   }
 
   @Get()
   @RequirePermission('cemetery.hold.view')
-  list(@Query('gravePlotId') gravePlotId?: string, @Query('status') status?: string) {
-    return this.svc.listHolds(gravePlotId, status);
+  list(
+    @Req() req: Request,
+    @Query('gravePlotId') gravePlotId?: string,
+    @Query('status') status?: string,
+  ) {
+    return this.svc.listHolds(this.caller(req), gravePlotId, status);
   }
 }
