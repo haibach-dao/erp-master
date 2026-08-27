@@ -1,8 +1,15 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { ulid } from 'ulid';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { isScope } from './scope.enum';
+import type { Caller } from './caller';
+import { ScopeService } from './scope.service';
 
 /* Editing the permission matrix itself, from the admin screen.
  *
@@ -21,6 +28,7 @@ export class AuthzMatrixService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly scope: ScopeService,
   ) {}
 
   /** Every role with the codes it grants — the matrix as it actually is in the database. */
@@ -52,7 +60,38 @@ export class AuthzMatrixService {
     });
   }
 
-  async grant(roleCode: string, permissionCode: string, scope: string, actor: string | null) {
+  /* SỬA NỘI DUNG MỘT VAI thì phải ở mức GROUP — không phải "bó theo công ty".
+   *
+   * `Role` KHÔNG có `companyId`: vai là TOÀN CỤC. Nên thêm/bớt một mã quyền của vai
+   * `QL_NGHIA_TRANG` là đổi thứ mà MỌI người giữ vai đó làm được, ở MỌI công ty. Hỏi "công
+   * ty nào" ở đây là hỏi sai câu: không có công ty nào để hỏi.
+   *
+   * Câu đúng là: người đang sửa có với tới toàn tập đoàn không. Một admin bó ở công ty A
+   * mà sửa được nội dung vai thì họ vừa đổi quyền của người ở công ty B — bằng một đường
+   * không hề nhắc tới công ty B.
+   *
+   * LƯU Ý về quyết định đã chốt: chủ doanh nghiệp đã quyết ADMIN LEO THANG ĐƯỢC (gán ADMIN
+   * cho người khác, sửa nội dung vai trên giao diện), đánh đổi lấy audit đầy đủ. Phép kiểm
+   * này KHÔNG bàn lại điều đó: ADMIN ở mức GROUP đi qua đây y như trước. Nó chỉ chặn người
+   * KHÔNG ở mức GROUP — trường hợp mà quyết định kia không nói tới.
+   */
+  private async assertGroupWide(caller: Caller, what: string): Promise<void> {
+    if (caller.permission === null) {
+      throw new ForbiddenException(
+        'Không xác định được mã quyền đang thi hành — không kiểm được phạm vi',
+      );
+    }
+    const level = await this.scope.levelFor(caller.userId, caller.permission);
+    if (level !== 'GROUP') {
+      throw new ForbiddenException(
+        `Ngoài phạm vi được gán: ${what} tác động tới MỌI công ty, nên cần phạm vi toàn ` +
+          'tập đoàn (GROUP). Vai là dữ liệu toàn cục, không thuộc công ty nào.',
+      );
+    }
+  }
+
+  async grant(roleCode: string, permissionCode: string, scope: string, caller: Caller) {
+    await this.assertGroupWide(caller, 'thêm mã quyền cho một vai');
     if (!isScope(scope)) {
       throw new BadRequestException(`Phạm vi không hợp lệ: ${scope}`);
     }
@@ -67,7 +106,7 @@ export class AuthzMatrixService {
     });
     await this.audit.record({
       actorType: 'USER',
-      actorId: actor,
+      actorId: caller.userId,
       action: 'AUTHZ.PERMISSION_GRANTED',
       entityType: 'role_permission',
       entityId: row.id,
@@ -78,7 +117,8 @@ export class AuthzMatrixService {
     return row;
   }
 
-  async revoke(roleCode: string, permissionCode: string, actor: string | null) {
+  async revoke(roleCode: string, permissionCode: string, caller: Caller) {
+    await this.assertGroupWide(caller, 'bớt mã quyền của một vai');
     const { role, permission } = await this.resolve(roleCode, permissionCode);
     const existing = await this.prisma.rolePermission.findUnique({
       where: { roleId_permissionId: { roleId: role.id, permissionId: permission.id } },
@@ -91,7 +131,7 @@ export class AuthzMatrixService {
     });
     await this.audit.record({
       actorType: 'USER',
-      actorId: actor,
+      actorId: caller.userId,
       action: 'AUTHZ.PERMISSION_REVOKED',
       entityType: 'role_permission',
       entityId: existing.id,
@@ -101,10 +141,22 @@ export class AuthzMatrixService {
     return { revoked: permissionCode };
   }
 
-  /** Roles a person holds, including the ones whose window has closed. */
-  async listAssignments(userId: string) {
+  /* Roles a person holds, including the ones whose window has closed.
+   *
+   * Danh sách này là BẢN ĐỒ quyền: nó cho biết ai với tới đâu, tức đúng thứ người muốn leo
+   * thang cần đọc trước. Nên nó bó theo công ty người gọi thấy được.
+   *
+   * Dòng `companyId = null` là vai gán TOÀN TẬP ĐOÀN. Nó không thuộc công ty nào nên không
+   * lọt qua phép lọc theo công ty được — chỉ người mức GROUP (`visible === null`) thấy. Trả
+   * nó cho người bó ở một công ty là kể rằng người kia giữ một vai vượt trên họ.
+   */
+  async listAssignments(userId: string, caller: Caller) {
+    const visible = await this.scope.visibleCompanyIdsFor(caller.userId, caller.permission);
     const rows = await this.prisma.roleAssignment.findMany({
-      where: { userId },
+      where: {
+        userId,
+        ...(visible === null ? {} : { companyId: { in: visible } }),
+      },
       include: { role: { select: { code: true, name: true } } },
       orderBy: { createdAt: 'asc' },
     });
@@ -135,7 +187,7 @@ export class AuthzMatrixService {
       validTo?: string | null;
       reason: string;
     },
-    actor: string | null,
+    caller: Caller,
   ) {
     const role = await this.prisma.role.findUnique({ where: { code: input.roleCode } });
     if (role === null) {
@@ -152,6 +204,14 @@ export class AuthzMatrixService {
       throw new BadRequestException('Phải ghi lý do cấp vai');
     }
     const companyId = input.companyId ?? null;
+    /* Phạm vi của chính người đang CẤP vai.
+     *
+     * `companyId = null` nghĩa là gán vai cho MỌI công ty, và `assertCompanyFor` chỉ cho
+     * mức GROUP đi qua với `null` — đúng ngữ nghĩa cần ở đây, không phải trùng lặp với
+     * `assertCompanyBindingUsable`: hàm đó hỏi "VAI này bỏ trống công ty có dùng được
+     * không", hàm này hỏi "NGƯỜI ĐANG CẤP có với tới đó không". Hai câu khác nhau, và
+     * thiếu câu thứ hai là admin công ty A phát được vai ở công ty B. */
+    await this.scope.assertCompanyFor(caller.userId, caller.permission, companyId);
     await this.assertCompanyBindingUsable(role.id, input.roleCode, companyId);
     const validTo =
       input.validTo === undefined || input.validTo === null ? null : new Date(input.validTo);
@@ -170,18 +230,18 @@ export class AuthzMatrixService {
               roleId: role.id,
               companyId,
               validTo,
-              grantedBy: actor,
+              grantedBy: caller.userId,
               grantReason: input.reason,
             },
           })
         : await this.prisma.roleAssignment.update({
             where: { id: existing.id },
-            data: { validTo, grantedBy: actor, grantReason: input.reason },
+            data: { validTo, grantedBy: caller.userId, grantReason: input.reason },
           });
     await this.audit.record({
       companyId,
       actorType: 'USER',
-      actorId: actor,
+      actorId: caller.userId,
       action: 'AUTHZ.ROLE_ASSIGNED',
       entityType: 'role_assignment',
       entityId: row.id,
@@ -201,7 +261,7 @@ export class AuthzMatrixService {
   /* Take a role back by closing its window, never by deleting the row — same reason as
    * everywhere else here: the fact that someone once held it is part of the record.
    */
-  async revokeRole(assignmentId: string, actor: string | null) {
+  async revokeRole(assignmentId: string, caller: Caller) {
     const row = await this.prisma.roleAssignment.findUnique({
       where: { id: assignmentId },
       include: { role: { select: { code: true } } },
@@ -209,6 +269,9 @@ export class AuthzMatrixService {
     if (row === null) {
       throw new NotFoundException('Không tìm thấy dòng gán vai');
     }
+    /* Thu hồi cũng phải bó, không chỉ cấp. Bỏ sót chiều này là admin công ty A tước được
+     * vai của người ở công ty B — phá hoại thì cũng chỉ cần một chiều là đủ. */
+    await this.scope.assertCompanyFor(caller.userId, caller.permission, row.companyId);
     const updated = await this.prisma.roleAssignment.update({
       where: { id: assignmentId },
       data: { validTo: new Date() },
@@ -216,7 +279,7 @@ export class AuthzMatrixService {
     await this.audit.record({
       companyId: row.companyId,
       actorType: 'USER',
-      actorId: actor,
+      actorId: caller.userId,
       action: 'AUTHZ.ROLE_REVOKED',
       entityType: 'role_assignment',
       entityId: assignmentId,

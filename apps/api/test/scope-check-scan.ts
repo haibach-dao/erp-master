@@ -25,9 +25,15 @@ import { join, relative, sep } from 'node:path';
  * lần sau miễn trừ thật lọt theo (đúng bài học của ratchet lọc trạng thái).
  */
 
-/** Hỏi phạm vi = gọi một trong bốn hàm này. Chỉ còn bản THEO MÃ QUYỀN tồn tại. */
+/* Hỏi phạm vi = gọi một trong NĂM hàm này. Chỉ còn bản THEO MÃ QUYỀN tồn tại.
+ *
+ * `levelFor` thêm 27/08/2026: nó trả về MỨC phạm vi cấp cho một mã, và có chỗ cần đúng nó
+ * chứ không phải `assertCompanyFor` — `authz-matrix` sửa nội dung VAI, mà vai là dữ liệu
+ * toàn cục không thuộc công ty nào, nên câu phải hỏi là "người này có ở mức GROUP không".
+ * Thiếu `levelFor` trong danh sách thì cái lưới báo nhầm ba method đã bó phạm vi ĐÚNG cách
+ * — và báo nhầm làm hỏng lưới, vì người ta sẽ ghi bừa lý do miễn trừ cho đỡ đỏ. */
 const SCOPE_CALL =
-  /\b(assertCompanyFor|assertSiteFor|visibleCompanyIdsFor|listSiteFilterFor)\s*\(/;
+  /\b(assertCompanyFor|assertSiteFor|visibleCompanyIdsFor|listSiteFilterFor|levelFor)\s*\(/;
 
 /** Bản CŨ, tính phạm vi ở mức rộng nhất của người gọi. Đã xoá — canh để không ai dựng lại. */
 const CALLER_WIDE_SCOPE_DECL =

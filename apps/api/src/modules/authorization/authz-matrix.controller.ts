@@ -6,6 +6,7 @@ import { JwtAuthGuard } from '../iam/guards/jwt-auth.guard';
 import { PermissionGuard } from './permission.guard';
 import { RequirePermission } from './require-permission.decorator';
 import { AuthzMatrixService } from './authz-matrix.service';
+import { callerOf, type Caller } from './caller';
 
 export class GrantDto {
   @ApiProperty() @IsString() @MinLength(1) roleCode!: string;
@@ -36,8 +37,8 @@ export class AssignRoleDto {
 export class AuthzMatrixController {
   constructor(private readonly svc: AuthzMatrixService) {}
 
-  private actor(req: Request): string | null {
-    return req.user?.userId ?? null;
+  private caller(req: Request): Caller {
+    return callerOf(req);
   }
 
   @Get('roles')
@@ -55,7 +56,7 @@ export class AuthzMatrixController {
   @Post('role-permissions')
   @RequirePermission('authz.role_permission.grant')
   grant(@Body() dto: GrantDto, @Req() req: Request) {
-    return this.svc.grant(dto.roleCode, dto.permissionCode, dto.scope, this.actor(req));
+    return this.svc.grant(dto.roleCode, dto.permissionCode, dto.scope, this.caller(req));
   }
 
   @Delete('role-permissions/:roleCode/:permissionCode')
@@ -65,13 +66,13 @@ export class AuthzMatrixController {
     @Param('permissionCode') permissionCode: string,
     @Req() req: Request,
   ) {
-    return this.svc.revoke(roleCode, permissionCode, this.actor(req));
+    return this.svc.revoke(roleCode, permissionCode, this.caller(req));
   }
 
   @Get('role-assignments')
   @RequirePermission('authz.role.view')
-  listAssignments(@Query('userId') userId: string) {
-    return this.svc.listAssignments(userId);
+  listAssignments(@Query('userId') userId: string, @Req() req: Request) {
+    return this.svc.listAssignments(userId, this.caller(req));
   }
 
   @Post('role-assignments')
@@ -85,13 +86,13 @@ export class AuthzMatrixController {
         validTo: dto.validTo ?? null,
         reason: dto.reason,
       },
-      this.actor(req),
+      this.caller(req),
     );
   }
 
   @Delete('role-assignments/:id')
   @RequirePermission('authz.role_assignment.revoke')
   revokeRole(@Param('id') id: string, @Req() req: Request) {
-    return this.svc.revokeRole(id, this.actor(req));
+    return this.svc.revokeRole(id, this.caller(req));
   }
 }

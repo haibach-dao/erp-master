@@ -56,7 +56,7 @@ describe('phạm vi — method nhận Caller thì phải HỎI phạm vi', () =>
       .filter((k) => !(k in MEASURED_UNGUARDED));
     expect(
       unexpected,
-      'Method này nhận `Caller` nhưng không gọi assertCompanyFor/assertSiteFor/visibleCompanyIdsFor/listSiteFilterFor (kể cả qua helper). Gate quyền không gate BẢN GHI: hãy bó phạm vi, hoặc thêm vào MEASURED_UNGUARDED kèm lý do.',
+      'Method này nhận `Caller` nhưng không gọi assertCompanyFor/assertSiteFor/visibleCompanyIdsFor/listSiteFilterFor/levelFor (kể cả qua helper). Gate quyền không gate BẢN GHI: hãy bó phạm vi, hoặc thêm vào MEASURED_UNGUARDED kèm lý do.',
     ).toEqual([]);
   });
 
