@@ -16,8 +16,20 @@ import { join, relative } from 'node:path';
  */
 
 const STATUS_LITERAL = /status:\s*'([A-Za-z_]+)'/;
+/* Dạng thứ hai: `status: { in: ['Draft', 'Verified'] }`.
+ *
+ * Thêm 27/08/2026. Cái lưới cũ chỉ bắt `status: 'X'`, nên một bản sao ĐẦY ĐỦ của
+ * `ACTIVE_BURIAL_STATUSES` nằm trong `scripts/check-burial-candidates.ts` sống sót suốt —
+ * đúng dạng nguy hiểm nhất, vì nó là cả một DANH SÁCH chứ không phải một giá trị lẻ. Cái
+ * lưới bắt được giá trị lẻ mà để lọt cả danh sách là cái lưới bắt nhầm con. */
+const STATUS_IN_LIST = /status:\s*\{\s*in:\s*\[\s*'([A-Za-z_]+)'/;
 const READ_HINT = /\bwhere\b|\bcount\(|\bfindMany\(|\bfindFirst\(|\bfindUnique\(/;
-const WRITE_HINT = /\bdata:|\bcreate\(|\bupdate\(|\bupsert\(/;
+/* `update:` và `create:` (có DẤU HAI CHẤM) là KHOÁ trong thân `upsert`, và thân đó là vế
+ * GHI. Thêm 27/08/2026: thiếu hai dạng này thì `upsert({ where, update, create })` bị nhìn
+ * ngược lên thấy `where` trước và cả hai payload ghi bị báo nhầm thành đọc — đúng hai dòng
+ * `seed-dev-user.ts` đã báo nhầm ngay lần đầu nới lưới. Báo nhầm cũng làm hỏng cái lưới:
+ * người ta sẽ ghi bừa lý do miễn trừ cho đỡ đỏ, và lần sau miễn trừ thật lọt theo. */
+const WRITE_HINT = /\bdata:|\bcreate\(|\bupdate\(|\bupsert\(|\bupdate:|\bcreate:/;
 
 export interface StatusRead {
   file: string;
@@ -48,7 +60,17 @@ function isReadContext(lines: string[], index: number): boolean {
   return false;
 }
 
-export function scanStatusReads(srcRoot: string): StatusRead[] {
+/* Quét NHIỀU gốc, không chỉ `src/`.
+ *
+ * `scripts/` cũng chạy lệnh thật trên CSDL thật, nên một bộ lọc sai ở đó nói dối y hệt một
+ * bộ lọc sai trong `src/` — và còn nguy hơn, vì script hay là thứ người ta dùng để ĐI TÌM
+ * LỖI. Trước 27/08/2026 cái lưới chỉ nhìn `src/`; đó là lý do bản sao thứ tư nằm yên ở
+ * `scripts/check-burial-candidates.ts` mà không ai biết. */
+export function scanStatusReads(...roots: string[]): StatusRead[] {
+  return roots.flatMap((r) => scanOneRoot(r));
+}
+
+function scanOneRoot(srcRoot: string): StatusRead[] {
   const out: StatusRead[] = [];
   for (const file of walk(srcRoot)) {
     const rel = relative(srcRoot, file).replace(/\\/g, '/');
@@ -61,7 +83,7 @@ export function scanStatusReads(srcRoot: string): StatusRead[] {
       const trimmed = text.trim();
       if (trimmed.startsWith('*') || trimmed.startsWith('//')) return;
 
-      const m = STATUS_LITERAL.exec(text);
+      const m = STATUS_IN_LIST.exec(text) ?? STATUS_LITERAL.exec(text);
       if (m?.[1] === undefined) return;
       if (!isReadContext(lines, i)) return;
       out.push({ file: rel, line: i + 1, value: m[1], text: trimmed });

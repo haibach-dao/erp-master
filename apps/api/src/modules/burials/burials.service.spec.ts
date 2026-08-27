@@ -684,3 +684,108 @@ describe('danh sách ứng viên an táng', () => {
     expect(r.blocked).toMatch(/tổ chức/);
   });
 });
+
+/* ---- Huỷ hồ sơ an táng ----
+ *
+ * VÌ SAO NHÓM TEST NÀY TỒN TẠI (27/08/2026): trước đây KHÔNG có thao tác huỷ. Hai chỗ trong
+ * hệ bảo người dùng đi huỷ — `assertNotAlreadyBuried` và rào chắn xoá khách hàng — mà thao
+ * tác đó không tồn tại. Một hồ sơ nháp nhập sai khoá vĩnh viễn cả một cốt trong mộ lẫn hồ
+ * sơ khách hàng.
+ */
+describe('huỷ hồ sơ an táng', () => {
+  function buildCancel(status: string | null) {
+    const record = vi.fn().mockResolvedValue(undefined);
+    /* `update` trả `{ id, ...data }` chứ không trả cứng: test phải đọc được TRẠNG THÁI đã
+     * ghi. Trả cứng thì service ghi nhầm trạng thái mà test vẫn xanh. */
+    const update = vi
+      .fn()
+      .mockImplementation((args: { data: Record<string, unknown> }) =>
+        Promise.resolve({ id: 'br-1', ...args.data }),
+      );
+    const prisma = {
+      burialRecord: {
+        findUnique: vi
+          .fn()
+          .mockResolvedValue(
+            status === null
+              ? null
+              : { id: 'br-1', status, gravePlotId: PLOT, slotNumber: 2, version: 0 },
+          ),
+        update,
+      },
+    } as unknown as PrismaService;
+    const svc = new BurialsService(prisma, { record } as unknown as AuditService);
+    return { svc, update, record };
+  }
+
+  const dtoCancel = { reason: 'nhập nhầm người' };
+
+  it.each(['Draft', 'Verified', 'Scheduled'])('huỷ được hồ sơ đang %s', async (status) => {
+    const { svc, update } = buildCancel(status);
+
+    const res = (await svc.cancel('br-1', dtoCancel, 'u1')) as Record<string, unknown>;
+
+    expect(res.status).toBe('Cancelled');
+    expect(res.cancelReason).toBe('nhập nhầm người');
+    expect(res.cancelledAt).toBeInstanceOf(Date);
+    // `version` tăng: hồ sơ có khoá lạc quan, bỏ qua là mở đường cho ghi đè im lặng.
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ version: { increment: 1 } }) }),
+    );
+  });
+
+  /* Đây là ranh giới nghiệp vụ, không phải một điều kiện kỹ thuật: hồ sơ HOÀN TẤT nghĩa là
+   * người đã thực sự nằm trong mộ. Huỷ nó là sửa lịch sử bằng một nút bấm. */
+  it('KHÔNG huỷ được hồ sơ đã HOÀN TẤT, và nói rõ phải làm thủ tục gì', async () => {
+    const { svc, update } = buildCancel('Completed');
+
+    await expect(svc.cancel('br-1', dtoCancel, 'u1')).rejects.toThrow(/DI DỜI\/CẢI TÁNG/);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('huỷ cái đã huỷ thì từ chối, không ghi đè lý do cũ', async () => {
+    const { svc, update } = buildCancel('Cancelled');
+
+    await expect(svc.cancel('br-1', dtoCancel, 'u1')).rejects.toThrow(ConflictException);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  /* Neo lại QUYẾT ĐỊNH "chặn theo danh sách, không theo phép loại trừ".
+   *
+   * Viết `!== 'Completed'` thì mọi trạng thái thêm về sau mặc nhiên huỷ được mà không ai
+   * quyết định điều đó. Test này hỏng đúng vào ngày ai đó đổi ngược lại — và đó là mục đích
+   * duy nhất của nó. */
+  it('trạng thái LẠ thì từ chối, không mặc nhiên cho huỷ', async () => {
+    const { svc, update } = buildCancel('Exhumed');
+
+    await expect(svc.cancel('br-1', dtoCancel, 'u1')).rejects.toThrow(ConflictException);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('không tìm thấy hồ sơ thì 404, không phải 409', async () => {
+    const { svc } = buildCancel(null);
+    await expect(svc.cancel('br-1', dtoCancel, 'u1')).rejects.toThrow(NotFoundException);
+  });
+
+  /* Huỷ NHẢ CỐT ra cho người khác, nên nhật ký phải giữ được cốt nào vừa được nhả — nếu
+   * không thì sáu tháng sau không ai lần lại được vì sao cốt đó trống. */
+  it('nhật ký giữ đủ cốt vừa nhả, trạng thái cũ, và lý do', async () => {
+    const { svc, record } = buildCancel('Verified');
+
+    await svc.cancel('br-1', dtoCancel, 'u1');
+
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'BURIAL.CANCELLED',
+        entityType: 'burial_record',
+        entityId: 'br-1',
+        beforeData: expect.objectContaining({
+          status: 'Verified',
+          slotNumber: 2,
+          gravePlotId: PLOT,
+        }),
+        afterData: expect.objectContaining({ reason: 'nhập nhầm người' }),
+      }),
+    );
+  });
+});

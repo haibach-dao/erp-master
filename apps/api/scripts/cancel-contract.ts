@@ -15,6 +15,7 @@
  * Mặc định CHỈ XEM. Phải thêm `--apply` mới ghi.
  */
 import { PrismaClient } from '@prisma/client';
+import { activeUsageRight } from '../src/common/lifecycle/active';
 import { ContractsService } from '../src/modules/contracts/contracts.service';
 import { AuditService } from '../src/modules/audit/audit.service';
 import type { PrismaService } from '../src/prisma/prisma.service';
@@ -48,7 +49,7 @@ async function main(): Promise<void> {
     select: { plotCode: true, status: true },
   });
   const rights = await prisma.graveUsageRight.count({
-    where: { sourceContractId: contract.id, status: 'Active' },
+    where: { sourceContractId: contract.id, ...activeUsageRight },
   });
 
   console.log(`Hợp đồng ${contract.contractNo}: ${contract.status}`);
@@ -79,7 +80,7 @@ async function main(): Promise<void> {
     select: { plotCode: true, status: true },
   });
   const rightsAfter = await prisma.graveUsageRight.count({
-    where: { sourceContractId: contract.id, status: 'Active' },
+    where: { sourceContractId: contract.id, ...activeUsageRight },
   });
 
   console.log(`\nSAU KHI HUỶ:`);

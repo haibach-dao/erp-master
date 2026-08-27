@@ -6,11 +6,12 @@ import { AuditService } from '../audit/audit.service';
 import {
   activeBurial,
   activeUsageRight,
+  CANCELLABLE_BURIAL_STATUSES,
   completedBurial,
   confirmedRelationship,
   inEffect,
 } from '../../common/lifecycle/active';
-import type { CreateBurialDto, CreateDeceasedDto } from './burials.dto';
+import type { CancelBurialDto, CreateBurialDto, CreateDeceasedDto } from './burials.dto';
 
 /* Chủ mộ tự an táng vào chính phần mộ mình đứng tên. Không phải một mã trong
  * `relationship_types` — ở đó không có "quan hệ với chính mình" — nên dùng một hằng
@@ -378,7 +379,7 @@ export class BurialsService {
   private async assertNotAlreadyBuried(deceasedPersonId: string): Promise<void> {
     const existing = await this.prisma.burialRecord.findFirst({
       where: { deceasedPersonId, ...activeBurial() },
-      select: { id: true, slotNumber: true, gravePlotId: true },
+      select: { id: true, slotNumber: true, gravePlotId: true, status: true },
     });
     if (existing === null) {
       return;
@@ -387,9 +388,16 @@ export class BurialsService {
       where: { id: existing.gravePlotId },
       select: { plotCode: true },
     });
+    /* Lời khuyên phải khớp với thao tác THỰC SỰ làm được ở trạng thái đó. Câu cũ luôn bảo
+     * "Huỷ hồ sơ an táng cũ trước" — với hồ sơ đã HOÀN TẤT thì đó là một lối đi hệ sẽ từ
+     * chối, và mách một lối đi cụt còn tệ hơn không mách gì. */
+    const where =
+      `phần mộ ${plot?.plotCode ?? existing.gravePlotId}` +
+      `${existing.slotNumber === null ? '' : ` (cốt ${existing.slotNumber})`}`;
     throw new ConflictException(
-      `Người này đã được an táng ở phần mộ ${plot?.plotCode ?? existing.gravePlotId}` +
-        `${existing.slotNumber === null ? '' : ` (cốt ${existing.slotNumber})`}. Huỷ hồ sơ an táng cũ trước nếu muốn chuyển.`,
+      existing.status === 'Completed'
+        ? `Người này đã được an táng ở ${where} và hồ sơ đã HOÀN TẤT — không chuyển bằng cách huỷ hồ sơ được. Chuyển chỗ người đã nằm là thủ tục DI DỜI/CẢI TÁNG, chưa có trong hệ.`
+        : `Người này đã được an táng ở ${where}. Huỷ hồ sơ an táng cũ trước nếu muốn chuyển.`,
     );
   }
 
@@ -537,6 +545,66 @@ export class BurialsService {
       afterData: { gravePlotId: result.plotId },
     });
     return result.updated;
+  }
+
+  /* ---- Huỷ hồ sơ an táng ----
+   *
+   * VÌ SAO THAO TÁC NÀY PHẢI TỒN TẠI (27/08/2026): trước đây không có. Hậu quả đo được —
+   * `assertNotAlreadyBuried` bảo người dùng "Huỷ hồ sơ an táng cũ trước nếu muốn chuyển",
+   * và rào chắn xoá khách hàng bảo "Dọn các mục này trước", nhưng CẢ HAI đều trỏ tới một
+   * thao tác không tồn tại. Một hồ sơ nháp nhập sai khoá vĩnh viễn cả một cốt trong mộ lẫn
+   * hồ sơ khách hàng, không đường nào gỡ trừ khi sửa tay CSDL.
+   *
+   * Huỷ là ĐỔI TRẠNG THÁI, không phải xoá dòng: hồ sơ từng tồn tại vẫn phải đọc lại được
+   * khi đối chiếu về sau, và `Cancelled` tự rơi khỏi mọi bộ lọc "còn hiệu lực" — kể cả
+   * partial unique index giữ cốt. Nhả cốt là HỆ QUẢ của trạng thái, không phải một lệnh
+   * riêng; làm bằng lệnh riêng là mở đường cho hai chỗ nói khác nhau về cùng một cốt.
+   */
+  async cancel(id: string, dto: CancelBurialDto, actor: string | null) {
+    const burial = await this.prisma.burialRecord.findUnique({ where: { id } });
+    if (burial === null) {
+      throw new NotFoundException('Không tìm thấy hồ sơ an táng');
+    }
+    /* Chặn theo DANH SÁCH trạng thái huỷ được, không theo phép loại trừ từng cái. Viết
+     * `!== 'Completed'` là bỏ ngỏ mọi trạng thái được thêm về sau — chúng sẽ mặc nhiên huỷ
+     * được mà không ai quyết định điều đó. */
+    /* Ép về `readonly string[]` chứ KHÔNG ép `burial.status as 'Draft'`: cái sau nói với
+     * trình biên dịch một điều sai (rằng giá trị này chắc chắn là 'Draft') để đổi lấy một
+     * lời gọi hợp lệ. Nới kiểu của DANH SÁCH là nói đúng — ta đang hỏi một chuỗi bất kỳ có
+     * nằm trong danh sách không. */
+    if (!(CANCELLABLE_BURIAL_STATUSES as readonly string[]).includes(burial.status)) {
+      throw new ConflictException(
+        burial.status === 'Completed'
+          ? 'Hồ sơ đã HOÀN TẤT — người đã nằm trong mộ, không huỷ hồ sơ được. Đưa người ra khỏi mộ là thủ tục DI DỜI/CẢI TÁNG, chưa có trong hệ.'
+          : `Không huỷ được hồ sơ ở trạng thái ${burial.status}`,
+      );
+    }
+    const updated = await this.prisma.burialRecord.update({
+      where: { id },
+      data: {
+        status: 'Cancelled',
+        cancelledAt: new Date(),
+        cancelReason: dto.reason,
+        version: { increment: 1 },
+      },
+    });
+    /* KHÔNG đụng tới trạng thái phần mộ. Mộ thành `Occupied` là do hồ sơ HOÀN TẤT, mà hồ
+     * sơ hoàn tất thì không huỷ được — nên ở đây không có gì để nhả. Tự ý hạ mộ về
+     * `Available` là dựa vào một suy luận sai và sẽ xoá mất trạng thái do hợp đồng đặt. */
+    await this.audit.record({
+      actorType: 'USER',
+      actorId: actor,
+      action: 'BURIAL.CANCELLED',
+      entityType: 'burial_record',
+      entityId: id,
+      beforeData: {
+        status: burial.status,
+        gravePlotId: burial.gravePlotId,
+        slotNumber: burial.slotNumber,
+      },
+      afterData: { reason: dto.reason },
+    });
+    return updated;
   }
 
   get(id: string) {

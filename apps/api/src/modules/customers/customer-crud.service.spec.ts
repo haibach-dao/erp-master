@@ -28,21 +28,37 @@ function build(
 
   const record = vi.fn().mockResolvedValue(undefined);
   const deleted: string[] = [];
+  /* Trả `{ count: 1 }` chứ không trả `{}`: `deleteMany` của Prisma LUÔN trả số dòng, và
+   * service dùng con số đó để ghi nhật ký. Mock trả sai hình dạng thì service tính ra `NaN`
+   * mà không có gì nổ — nhật ký ghi `NaN` là mất luôn con số cần rà. */
   const del = (name: string) =>
     vi.fn().mockImplementation(() => {
       deleted.push(name);
-      return Promise.resolve({});
+      return Promise.resolve({ count: 1 });
+    });
+
+  /* GỠ con trỏ (nhóm thứ ba của sổ) là `updateMany`, không phải `deleteMany` — nên nó KHÔNG
+   * vào mảng `deleted`. Ghi riêng để test khẳng định được là dòng đó còn sống và chỉ mất con
+   * trỏ; gộp vào `deleted` là xoá mất chính điều đang cần chứng minh. */
+  const detached: { model: string; where: unknown; data: unknown }[] = [];
+  const detach = (name: string) =>
+    vi.fn().mockImplementation((args: { where: unknown; data: unknown }) => {
+      detached.push({ model: name, where: args.where, data: args.data });
+      return Promise.resolve({ count: 1 });
     });
 
   const tx = {
     graveUsageRight: { deleteMany: del('graveUsageRight') },
     graveHold: { deleteMany: del('graveHold') },
+    /* Hồ sơ an táng đứng ở CẢ HAI nhóm: `deleteMany` dọn hồ sơ ĐÃ HUỶ của người mất này,
+     * `updateMany` gỡ con trỏ chủ mộ khỏi hồ sơ đã huỷ của NGƯỜI KHÁC. */
+    burialRecord: { deleteMany: del('burialRecord'), updateMany: detach('burialRecord') },
     familyRelationship: { deleteMany: del('familyRelationship') },
     personPhone: { deleteMany: del('personPhone') },
     personAddress: { deleteMany: del('personAddress') },
     personEducation: { deleteMany: del('personEducation') },
     personBankAccount: { deleteMany: del('personBankAccount') },
-    deceasedPerson: { delete: del('deceasedPerson') },
+    deceasedPerson: { deleteMany: del('deceasedPerson') },
     customer: { delete: del('customer'), update: vi.fn().mockResolvedValue({}) },
     person: { delete: del('person'), update: vi.fn().mockResolvedValue({}) },
   };
@@ -76,11 +92,44 @@ function build(
     },
     graveHold: { count: vi.fn().mockResolvedValue(n('holds')) },
     burialRecord: {
-      count: vi
+      /* Hai câu hỏi khác nhau đi qua cùng một `count`, phân biệt bằng hình dạng `where`:
+       *   - `ownerCustomerId` -> khách này là CHỦ MỘ trong hồ sơ của người khác
+       *   - `deceased`        -> chính khách này ĐÃ ĐƯỢC AN TÁNG (đi qua hồ sơ người mất)
+       * Trả cứng một giá trị thì một trong hai câu bị trả lời sai mà test vẫn xanh. */
+      count: vi.fn().mockImplementation((args: { where: Record<string, unknown> }) =>
+        Promise.resolve(
+          'ownerCustomerId' in args.where
+            ? n('ownerBurials')
+            : 'deceased' in args.where
+              ? n('burialsAsDeceased')
+              : /* Nhánh thứ ba KHÔNG được im lặng trả 0: một `where` hình dạng lạ nghĩa
+                 * là service đã hỏi một câu mock chưa nghĩ tới, và trả 0 là để rào chắn
+                 * đó biến mất mà test vẫn xanh. */
+                Promise.reject(
+                  new Error(`burialRecord.count nhận where lạ: ${JSON.stringify(args.where)}`),
+                ),
+        ),
+      ),
+      /* `identify` của sổ theo nhân thân. Trả dữ liệu THẬT về hình dạng (id mộ lỏng, số
+       * cốt, trạng thái) để test kiểm được rằng lời từ chối nêu MÃ MỘ và SỐ CỐT — chính là
+       * thứ đã thiếu ngày 27/08/2026. */
+      findMany: vi.fn().mockResolvedValue(
+        Array.from({ length: Math.min(n('burialsAsDeceased'), 3) }, (_, i) => ({
+          gravePlotId: `plot-${i + 1}`,
+          slotNumber: i + 2,
+          status: 'Draft',
+        })),
+      ),
+    },
+    /* `BurialRecord.gravePlotId` là con trỏ LỎNG (không có quan hệ Prisma), nên `identify`
+     * phải hỏi bảng mộ một lượt nữa. Mock tra theo đúng danh sách id được truyền vào —
+     * trả cứng thì test vẫn xanh khi service hỏi nhầm id. */
+    gravePlot: {
+      findMany: vi
         .fn()
-        .mockImplementation((args: { where: Record<string, unknown> }) =>
+        .mockImplementation((args: { where: { id: { in: string[] } } }) =>
           Promise.resolve(
-            'ownerCustomerId' in args.where ? n('ownerBurials') : n('burialsAsDeceased'),
+            args.where.id.in.map((id) => ({ id, plotCode: `A-${id.replace('plot-', '0')}` })),
           ),
         ),
     },
@@ -112,7 +161,7 @@ function build(
     } as unknown as PiiService,
     { record } as unknown as AuditService,
   );
-  return { svc, record, deleted, tx, prisma };
+  return { svc, record, deleted, detached, tx, prisma };
 }
 
 /* Các bảng trỏ tới khách hàng bằng id LỎNG — chỉ `grave_holds` có khoá ngoại. Nghĩa là
@@ -124,7 +173,14 @@ describe('xoá khách hàng — chặn khi đã phát sinh nghiệp vụ', () =>
     ['đang đứng tên phần mộ', { rights: 1 }, /đang đứng tên 1 phần mộ \(A-01\)/],
     ['có phiếu giữ chỗ', { holds: 2 }, /2 phiếu giữ chỗ còn hiệu lực/],
     ['là chủ mộ trong hồ sơ an táng', { ownerBurials: 1 }, /chủ mộ trong 1 hồ sơ an táng/],
-    ['đã được an táng', { burialsAsDeceased: 1 }, /đã được an táng/],
+    /* Siết chặt hơn ngày 27/08/2026: biểu thức cũ `/đã được an táng/` xanh cả khi lời từ
+     * chối KHÔNG nói mộ nào — mà đúng chỗ đó là lỗi phải chữa. Nêu đích danh mã mộ, số cốt
+     * và trạng thái, vì trạng thái mới cho biết hồ sơ đó có huỷ được hay không. */
+    [
+      'đã được an táng',
+      { burialsAsDeceased: 1 },
+      /đã được an táng \(1 hồ sơ\) \(mộ A-01 cốt 2, Draft\)/,
+    ],
     ['đã cấp thẻ mộ', { cards: 3 }, /được cấp 3 thẻ quản lý mộ/],
     ['đang dùng dịch vụ', { subscriptions: 1 }, /1 dịch vụ đang dùng/],
     ['có giao dịch thu tiền', { transactions: 2 }, /2 giao dịch thu tiền/],
@@ -168,6 +224,13 @@ describe('xoá khách hàng — khi sạch thì dọn hết, không để lại 
          cùng — để lại thì thành con trỏ treo, vì hai bảng đó không có khoá ngoại. */
       'graveUsageRight',
       'graveHold',
+      /* Hồ sơ an táng ĐÃ HUỶ của chính người này. PHẢI đứng trước `deceasedPerson`: khoá
+         ngoại giữa hai bảng là ON DELETE RESTRICT, sai thứ tự là `P2003`. Đây là thứ tự
+         khai trong `PERSON_CASCADE_REFERENCES`, và test này khoá nó lại. */
+      'burialRecord',
+      /* HAI lần: sổ khai riêng cột `sourcePersonId` và cột `targetPersonId`, mỗi cột một
+         mệnh đề chính xác thay vì một `OR` — để đổi tên một cột là đỏ test đối chiếu. */
+      'familyRelationship',
       'familyRelationship',
       'personPhone',
       'personAddress',
@@ -209,6 +272,63 @@ describe('xoá khách hàng — khi sạch thì dọn hết, không để lại 
       expect.objectContaining({
         action: 'CUSTOMER.DELETED',
         beforeData: expect.objectContaining({ deletedRelationships: 3 }),
+      }),
+    );
+  });
+});
+
+/* Hai đường ghi SINH RA ngày 27/08/2026 cùng với trạng thái `Cancelled` của hồ sơ an táng.
+ *
+ * Cả hai đều động vào dữ liệu người bấm nút KHÔNG nhìn thấy, nên cả hai đều phải có test
+ * riêng — không có test thì lần refactor sau chúng biến mất trong im lặng.
+ */
+describe('xoá khách hàng — hệ quả của việc HUỶ hồ sơ an táng', () => {
+  /* Hồ sơ an táng đã huỷ KHÔNG chặn xoá (nó rơi khỏi `activeBurial()`), nhưng nếu để lại
+   * thì `deceased_persons` không xoá được: khoá ngoại là ON DELETE RESTRICT. Trước khi có
+   * trạng thái `Cancelled`, tình huống này KHÔNG tồn tại — mọi hồ sơ luôn còn hiệu lực nên
+   * rào chắn giữ hết. Thêm một trạng thái rơi ra ngoài bộ lọc là mở đúng ngõ cụt này. */
+  it('hồ sơ an táng đã huỷ được dọn TRƯỚC hồ sơ người mất, không để nổ khoá ngoại', async () => {
+    const { svc, deleted } = build({ deceased: true });
+
+    await svc.deleteCustomer(CUSTOMER, 'u1');
+
+    expect(deleted).toContain('burialRecord');
+    expect(deleted.indexOf('burialRecord')).toBeLessThan(deleted.indexOf('deceasedPerson'));
+  });
+
+  /* Hồ sơ an táng đã huỷ của NGƯỜI KHÁC, mà khách đang bị xoá từng là chủ mộ: dòng đó
+   * KHÔNG phải của họ, nên gỡ con trỏ chứ không xoá. Xoá là xoá lịch sử của người khác;
+   * để nguyên là để lại con trỏ treo (cột này không có khoá ngoại). */
+  it('con trỏ chủ mộ trên hồ sơ của NGƯỜI KHÁC bị GỠ, không bị xoá', async () => {
+    const { svc, deleted, detached } = build();
+
+    await svc.deleteCustomer(CUSTOMER, 'u1');
+
+    expect(detached).toContainEqual({
+      model: 'burialRecord',
+      where: { ownerCustomerId: CUSTOMER },
+      data: { ownerCustomerId: null },
+    });
+    // Và đúng là GỠ chứ không phải xoá: không có lần `deleteMany` nào cho cùng mục đích.
+    expect(deleted.filter((d) => d === 'burialRecord')).toHaveLength(1);
+  });
+
+  /* Ghi mà không đếm là ghi không rà lại được. Hai con số này là bằng chứng duy nhất cho
+   * thấy một lần xoá khách hàng đã động tới hồ sơ an táng nào. */
+  it('nhật ký đếm cả hồ sơ an táng đã dọn lẫn con trỏ đã gỡ', async () => {
+    const { svc, record } = build({ deceased: true });
+
+    const res = await svc.deleteCustomer(CUSTOMER, 'u1');
+
+    expect(res.deletedCancelledBurials).toBe(1);
+    expect(res.detachedBurialOwners).toBe(1);
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'CUSTOMER.DELETED',
+        beforeData: expect.objectContaining({
+          deletedCancelledBurials: 1,
+          detachedBurialOwners: 1,
+        }),
       }),
     );
   });

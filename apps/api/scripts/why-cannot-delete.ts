@@ -12,7 +12,7 @@
  */
 import { PrismaClient } from '@prisma/client';
 import { CUSTOMER_BLOCKING_REFERENCES } from '../src/common/lifecycle/customer-references';
-import { activeBurial } from '../src/common/lifecycle/active';
+import { PERSON_BLOCKING_REFERENCES } from '../src/common/lifecycle/person-references';
 
 const prisma = new PrismaClient();
 
@@ -56,25 +56,32 @@ async function main(): Promise<void> {
     );
   }
 
-  /* Hồ sơ an táng trỏ vào hồ sơ NGƯỜI MẤT, không trỏ vào hồ sơ khách hàng — nên nó nằm
-   * ngoài sổ đăng ký theo cột khách hàng và phải hỏi riêng. */
-  const deceased =
-    customer.personId === null
-      ? null
-      : await prisma.deceasedPerson.findUnique({
-          where: { personId: customer.personId },
-          select: { id: true },
-        });
-  const asDeceased =
-    deceased === null
-      ? 0
-      : await prisma.burialRecord.count({
-          where: { deceasedPersonId: deceased.id, ...activeBurial() },
-        });
-  if (asDeceased > 0) blocking += 1;
-  console.log(
-    `${'(đã được an táng)'.padEnd(24)}| ${String(asDeceased).padEnd(10)}| hồ sơ còn hiệu lực`,
-  );
+  /* Sổ thứ hai: tham chiếu theo HỒ SƠ NHÂN THÂN. Hồ sơ an táng trỏ vào hồ sơ NGƯỜI MẤT,
+   * không trỏ vào hồ sơ khách hàng — nên nó nằm ngoài sổ theo cột khách hàng. In cùng một
+   * bảng vì với người đi tìm lỗi thì đây là MỘT câu hỏi ("vì sao không xoá được"), không
+   * phải hai. */
+  const finder = prisma as unknown as Record<
+    string,
+    { findMany: (a: unknown) => Promise<unknown[]> }
+  >;
+  for (const ref of PERSON_BLOCKING_REFERENCES) {
+    if (customer.personId === null) {
+      console.log(
+        `${`${ref.model} (nhân thân)`.padEnd(24)}| ${'-'.padEnd(10)}| khách hàng tổ chức`,
+      );
+      continue;
+    }
+    const model = ref.model.charAt(0).toLowerCase() + ref.model.slice(1);
+    const where = ref.where(customer.personId, now);
+    const n = await client[model]!.count({ where });
+    if (n > 0) blocking += 1;
+    /* In luôn NHÃN, không chỉ số đếm — chính chỗ này là thứ đã thiếu ngày 27/08/2026: rào
+     * chắn nói "1 hồ sơ" và không ai biết hồ sơ đó ở mộ nào. */
+    const labels =
+      n > 0 && ref.identify !== undefined ? await ref.identify(finder, customer.personId, now) : [];
+    const shown = labels.length === 0 ? JSON.stringify(where) : labels.join(' · ');
+    console.log(`${`${ref.model} (nhân thân)`.padEnd(24)}| ${String(n).padEnd(10)}| ${shown}`);
+  }
 
   console.log(
     blocking === 0 ? '\n=> KHÔNG có gì chặn. Xoá được.' : `\n=> ${blocking} mục đang chặn.`,
