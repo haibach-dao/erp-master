@@ -25,6 +25,12 @@
 import { PrismaClient } from '@prisma/client';
 import { PiiService } from '../src/common/pii/pii.service';
 import { ConfigService } from '@nestjs/config';
+import { requireEncryptionKey } from './_env';
+
+/* PHẢI nạp `.env` TRƯỚC khi dựng `PiiService`. Script chạy bằng `tsx` không tự nạp gì, nên
+ * trước 27/08/2026 chỗ này mã hoá CCCD bằng khoá dev — dữ liệu vào được CSDL nhưng API
+ * (nạp `.env` qua ConfigModule) không giải mã nổi. Xem chú thích trong `_env.ts`. */
+requireEncryptionKey();
 
 const prisma = new PrismaClient();
 const pii = new PiiService(new ConfigService());
