@@ -55,8 +55,8 @@ export class ContractsController {
   @Get(':id')
   @RequirePermission('contract.record.view')
   @MaskUnless({ field: 'totalAmount', permission: 'contract.amount.view_sensitive' })
-  get(@Param('id') id: string) {
-    return this.svc.get(id);
+  get(@Param('id') id: string, @Req() req: Request) {
+    return this.svc.get(id, this.caller(req));
   }
 
   @Get()

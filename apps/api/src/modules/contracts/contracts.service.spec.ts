@@ -13,9 +13,11 @@ import type { Caller } from '../authorization/caller';
 const verifier = (userId: string): Caller => ({ userId, permission: 'contract.record.verify' });
 const activator = (userId: string): Caller => ({ userId, permission: 'contract.record.activate' });
 const CALLER_CANCEL: Caller = { userId: 'u1', permission: 'contract.record.cancel' };
+const CALLER_VIEW: Caller = { userId: 'u1', permission: 'contract.record.view' };
 
 const AUTHOR = 'user-author';
 const MANAGER = 'user-manager';
+const SITE = 'nt-1';
 
 function contract(over: Record<string, unknown> = {}) {
   return {
@@ -51,17 +53,39 @@ function build(row: unknown) {
     gravePlotStatusHistory: { create: vi.fn().mockResolvedValue({}) },
     graveUsageRight: { create: vi.fn().mockResolvedValue({ id: 'ur-1' }) },
   };
+  /* Phần mộ của hợp đồng, NGOÀI giao dịch: `assertContractInScope` quy nghĩa trang trước
+   * khi mở giao dịch, nên nó đọc `prisma.gravePlot` chứ không phải `tx.gravePlot`. */
+  const plotFindUnique = vi.fn().mockResolvedValue({ cemeteryId: SITE });
+  const plotFindMany = vi.fn().mockResolvedValue([{ id: 'plot-1' }]);
   const prisma = {
-    externalContract: { findUnique: vi.fn().mockResolvedValue(row), update },
+    externalContract: {
+      findUnique: vi.fn().mockResolvedValue(row),
+      findMany: vi.fn().mockResolvedValue([]),
+      update,
+    },
+    gravePlot: { findUnique: plotFindUnique, findMany: plotFindMany },
     $transaction: vi.fn().mockImplementation((fn: (t: unknown) => unknown) => fn(tx)),
   } as unknown as PrismaService;
   const assertCompanyFor = vi.fn().mockResolvedValue(undefined);
+  const assertSiteFor = vi.fn().mockResolvedValue(undefined);
+  const listSiteFilterFor = vi.fn().mockResolvedValue(null);
   const svc = new ContractsService(
     prisma,
     { record } as unknown as AuditService,
-    { assertCompanyFor } as unknown as ScopeService,
+    { assertCompanyFor, assertSiteFor, listSiteFilterFor } as unknown as ScopeService,
   );
-  return { svc, record, update, tx, assertCompanyFor };
+  return {
+    svc,
+    record,
+    update,
+    tx,
+    prisma,
+    assertCompanyFor,
+    assertSiteFor,
+    listSiteFilterFor,
+    plotFindUnique,
+    plotFindMany,
+  };
 }
 
 /* Số bước phụ thuộc NGƯỜI LÀM, không phụ thuộc bản ghi (G0-Q10). Ai cầm quyền cho hiệu
@@ -199,15 +223,28 @@ describe('huỷ hợp đồng — đảo đúng hệ quả của activate', () =
         }),
       },
       burialRecord: { count: vi.fn().mockResolvedValue(burials) },
+      /* NGOÀI giao dịch: `assertContractInScope` quy nghĩa trang trước khi mở giao dịch. */
+      gravePlot: { findUnique: vi.fn().mockResolvedValue({ cemeteryId: SITE }) },
       $transaction: vi.fn().mockImplementation((fn: (t: unknown) => unknown) => fn(tx)),
     } as unknown as PrismaService;
 
+    const assertCompanyFor = vi.fn().mockResolvedValue(undefined);
+    const assertSiteFor = vi.fn().mockResolvedValue(undefined);
     const svc = new ContractsService(
       prisma,
       { record } as unknown as AuditService,
-      { assertCompanyFor: vi.fn() } as unknown as ScopeService,
+      { assertCompanyFor, assertSiteFor } as unknown as ScopeService,
     );
-    return { svc, record, updateContract, updateRight, updatePlot, createHistory };
+    return {
+      svc,
+      record,
+      updateContract,
+      updateRight,
+      updatePlot,
+      createHistory,
+      assertCompanyFor,
+      assertSiteFor,
+    };
   }
 
   it('huỷ được: hợp đồng Cancelled, quyền sử dụng Ended, mộ về Available', async () => {
@@ -271,6 +308,14 @@ describe('huỷ hợp đồng — đảo đúng hệ quả của activate', () =
       }),
     );
   });
+  it('cancel hỏi nghĩa trang của phần mộ — ba đường nói CÙNG một điều', async () => {
+    const { svc, assertSiteFor } = buildCancel();
+
+    await svc.cancel('ct-1', { reason: 'khách đổi ý' }, CALLER_CANCEL);
+
+    expect(assertSiteFor).toHaveBeenCalledWith('u1', 'contract.record.cancel', SITE);
+  });
+
 });
 
 /* Gate mã quyền trả lời "có được làm việc này hay không". Nó KHÔNG trả lời "lên hợp đồng
@@ -335,5 +380,148 @@ describe('phạm vi — verify và activate chỉ chạm hợp đồng trong ph�
 
     await expect(svc.verify('ct-1', verifier(MANAGER))).rejects.toBeInstanceOf(NotFoundException);
     expect(assertCompanyFor).not.toHaveBeenCalled();
+  });
+});
+
+/* TRỤC THỨ HAI: nghĩa trang.
+ *
+ * Bó theo công ty thôi thì người phụ trách nghĩa trang A vẫn chạm được hợp đồng ở nghĩa
+ * trang B CÙNG công ty — và hợp đồng là căn cứ sinh quyền sử dụng phần mộ, nên đó là chạm
+ * vào mộ của nghĩa trang khác. `ExternalContract.gravePlotId` là NOT NULL nên neo này luôn
+ * quy được, không có nhánh nào để fail-open.
+ */
+describe('phạm vi — hợp đồng bó theo CẢ nghĩa trang, không chỉ công ty', () => {
+  it('verify hỏi nghĩa trang của phần mộ, kèm mã quyền đang thi hành', async () => {
+    const { svc, assertSiteFor, plotFindUnique } = build(contract({ status: 'Uploaded' }));
+
+    await svc.verify('ct-1', verifier(MANAGER));
+
+    expect(plotFindUnique).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'plot-1' } }),
+    );
+    expect(assertSiteFor).toHaveBeenCalledWith(MANAGER, 'contract.record.verify', SITE);
+  });
+
+  it('activate hỏi nghĩa trang của phần mộ, kèm mã quyền đang thi hành', async () => {
+    const { svc, assertSiteFor } = build(contract({ status: 'Verified' }));
+
+    await svc.activate('ct-1', activator(MANAGER));
+
+    expect(assertSiteFor).toHaveBeenCalledWith(MANAGER, 'contract.record.activate', SITE);
+  });
+
+  it('ngoài nghĩa trang thì activate BỊ CHẶN, phần mộ không bị phân bổ', async () => {
+    const { svc, tx, assertSiteFor } = build(contract({ status: 'Verified' }));
+    assertSiteFor.mockRejectedValue(new ForbiddenException('không phụ trách nghĩa trang này'));
+
+    await expect(svc.activate('ct-1', activator(MANAGER))).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+    expect(tx.graveUsageRight.create).not.toHaveBeenCalled();
+    expect(tx.gravePlot.update).not.toHaveBeenCalled();
+  });
+
+  /* Hợp đồng và phần mộ ở hai schema và KHÔNG có khoá ngoại nối, nên hợp đồng trỏ vào phần
+   * mộ đã biến mất là chuyện xảy ra được. Lúc đó không quy được nghĩa trang — và "không
+   * kiểm được" phải dẫn tới CHẶN. Cho qua ở đây là fail-open, đúng lớp lỗi đang chặn
+   * `createDeceased`. */
+  it('không quy được phần mộ thì TỪ CHỐI, không phải bỏ qua phép kiểm', async () => {
+    const { svc, update, plotFindUnique, assertSiteFor } = build(
+      contract({ status: 'Uploaded' }),
+    );
+    plotFindUnique.mockResolvedValue(null);
+
+    await expect(svc.verify('ct-1', verifier(MANAGER))).rejects.toThrow(
+      /không kiểm được phạm vi/,
+    );
+    expect(assertSiteFor).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+  });
+});
+
+/* Bó ba đường GHI mà để hở đường ĐỌC là bó nửa vời: đọc là chỗ lấy được id, và id là tất
+ * cả những gì cần để gọi ba đường kia.
+ */
+describe('phạm vi — đường ĐỌC hợp đồng cũng bó, không chỉ đường ghi', () => {
+  it('get hỏi CẢ hai trục — trước đây không nhận caller nào cả', async () => {
+    const { svc, assertCompanyFor, assertSiteFor } = build(contract());
+
+    await svc.get('ct-1', CALLER_VIEW);
+
+    expect(assertCompanyFor).toHaveBeenCalledWith('u1', 'contract.record.view', 'co-1');
+    expect(assertSiteFor).toHaveBeenCalledWith('u1', 'contract.record.view', SITE);
+  });
+
+  it('get ngoài phạm vi thì 403, không trả bản ghi', async () => {
+    const { svc, assertSiteFor } = build(contract());
+    assertSiteFor.mockRejectedValue(new ForbiddenException('không phụ trách nghĩa trang này'));
+
+    await expect(svc.get('ct-1', CALLER_VIEW)).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('get không tìm thấy thì 404, không trả null kèm 200', async () => {
+    const { svc } = build(null);
+
+    await expect(svc.get('ct-1', CALLER_VIEW)).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('list của người mức SITE bị BÓ theo id phần mộ trong nghĩa trang họ phụ trách', async () => {
+    const { svc, prisma, listSiteFilterFor, plotFindMany } = build(contract());
+    listSiteFilterFor.mockResolvedValue([SITE]);
+    plotFindMany.mockResolvedValue([{ id: 'plot-1' }, { id: 'plot-2' }]);
+
+    await svc.list('co-1', CALLER_VIEW);
+
+    expect(plotFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { companyId: 'co-1', cemeteryId: { in: [SITE] } } }),
+    );
+    expect(prisma.externalContract.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { companyId: 'co-1', gravePlotId: { in: ['plot-1', 'plot-2'] } },
+      }),
+    );
+  });
+
+  /* Được gán KHÔNG nghĩa trang nào nghĩa là với tới không cái nào, không phải với tới tất
+   * cả. `in: []` là câu trả lời đúng ở đây — bỏ mệnh đề đi mới là sai. */
+  it('người mức SITE chưa được gán nghĩa trang nào thì danh sách RỖNG, không phải tất cả', async () => {
+    const { svc, prisma, listSiteFilterFor, plotFindMany } = build(contract());
+    listSiteFilterFor.mockResolvedValue([]);
+    plotFindMany.mockResolvedValue([]);
+
+    await svc.list('co-1', CALLER_VIEW);
+
+    expect(prisma.externalContract.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { companyId: 'co-1', gravePlotId: { in: [] } } }),
+    );
+  });
+
+  it('người mức COMPANY/GROUP thì KHÔNG bị bó theo nghĩa trang', async () => {
+    const { svc, prisma, listSiteFilterFor, plotFindMany } = build(contract());
+    listSiteFilterFor.mockResolvedValue(null);
+
+    await svc.list('co-1', CALLER_VIEW);
+
+    expect(plotFindMany).not.toHaveBeenCalled();
+    expect(prisma.externalContract.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { companyId: 'co-1' } }),
+    );
+  });
+
+  it('lọc theo MỘT phần mộ thì phần mộ đó phải trong nghĩa trang được gán', async () => {
+    const { svc, assertSiteFor } = build(contract());
+
+    await svc.list('co-1', CALLER_VIEW, undefined, 'plot-9');
+
+    expect(assertSiteFor).toHaveBeenCalledWith('u1', 'contract.record.view', SITE);
+  });
+
+  it('lọc theo phần mộ không tồn tại thì 404, không lặng lẽ trả cả công ty', async () => {
+    const { svc, plotFindUnique } = build(contract());
+    plotFindUnique.mockResolvedValue(null);
+
+    await expect(svc.list('co-1', CALLER_VIEW, undefined, 'plot-9')).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
   });
 });

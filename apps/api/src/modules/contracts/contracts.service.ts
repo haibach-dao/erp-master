@@ -1,4 +1,9 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { ulid } from 'ulid';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -74,6 +79,38 @@ export class ContractsService {
     });
   }
 
+  /* PHẠM VI CỦA MỘT HỢP ĐỒNG: công ty của nó, VÀ nghĩa trang của phần mộ nó gắn vào.
+   *
+   * Hai trục, không một. Bó theo công ty thôi thì người phụ trách nghĩa trang A vẫn thẩm
+   * định / cho hiệu lực / huỷ được hợp đồng ở nghĩa trang B cùng công ty — và hợp đồng là
+   * căn cứ sinh quyền sử dụng phần mộ, nên đó là chạm vào mộ của nghĩa trang khác.
+   *
+   * `ExternalContract.gravePlotId` là NOT NULL trong lược đồ, nên neo nghĩa trang LUÔN quy
+   * được. Không có nhánh "chỉ kiểm khi khác null" — tức không có chỗ nào để fail-open, đúng
+   * cái bẫy đang chặn `createDeceased` (ở đó `Customer.companyId` cho phép NULL).
+   *
+   * Không tìm thấy phần mộ thì TỪ CHỐI, không bỏ qua. Hợp đồng và phần mộ nằm ở hai schema
+   * và KHÔNG có khoá ngoại nối (chỉ `@@index([gravePlotId])`), nên một hợp đồng trỏ vào
+   * phần mộ đã biến mất là chuyện xảy ra được. Lúc đó không kiểm được nghĩa trang, và
+   * "không kiểm được" phải dẫn tới chặn chứ không phải cho qua.
+   */
+  private async assertContractInScope(
+    contract: { companyId: string; gravePlotId: string },
+    caller: Caller,
+  ): Promise<void> {
+    await this.scope.assertCompanyFor(caller.userId, caller.permission, contract.companyId);
+    const plot = await this.prisma.gravePlot.findUnique({
+      where: { id: contract.gravePlotId },
+      select: { cemeteryId: true },
+    });
+    if (plot === null) {
+      throw new ForbiddenException(
+        'Không quy được phần mộ của hợp đồng về nghĩa trang nào — không kiểm được phạm vi',
+      );
+    }
+    await this.scope.assertSiteFor(caller.userId, caller.permission, plot.cemeteryId);
+  }
+
   async verify(id: string, caller: Caller) {
     const contract = await this.prisma.externalContract.findUnique({
       where: { id },
@@ -90,7 +127,7 @@ export class ContractsService {
      * Đặt trước phép kiểm trạng thái là có chủ đích: kiểm trạng thái trước rồi mới kiểm
      * phạm vi thì câu lỗi "Không thể xác minh ở trạng thái Active" đã kể cho người ngoài
      * phạm vi biết hợp đồng đó TỒN TẠI và đang ở trạng thái nào. */
-    await this.scope.assertCompanyFor(caller.userId, caller.permission, contract.companyId);
+    await this.assertContractInScope(contract, caller);
     if (contract.status !== 'Uploaded' && contract.status !== 'PendingVerification') {
       throw new ConflictException(`Không thể xác minh ở trạng thái ${contract.status}`);
     }
@@ -142,7 +179,7 @@ export class ContractsService {
     if (contract === null) {
       throw new NotFoundException('Không tìm thấy hợp đồng');
     }
-    await this.scope.assertCompanyFor(caller.userId, caller.permission, contract.companyId);
+    await this.assertContractInScope(contract, caller);
     if (contract.status === 'Cancelled') {
       throw new ConflictException('Hợp đồng đã huỷ rồi');
     }
@@ -230,7 +267,7 @@ export class ContractsService {
     }
     // Cùng lý do như `verify`: gate mã quyền không gate BẢN GHI. Cho hiệu lực là bước
     // PHÂN BỔ phần mộ và sinh quyền sử dụng, nên đây là chỗ đắt nhất để để hở.
-    await this.scope.assertCompanyFor(caller.userId, caller.permission, contract.companyId);
+    await this.assertContractInScope(contract, caller);
     if (!ACTIVATABLE_FROM.includes(contract.status)) {
       throw new ConflictException(`Không thể cho hiệu lực ở trạng thái ${contract.status}`);
     }
@@ -332,15 +369,63 @@ export class ContractsService {
     }
   }
 
-  get(id: string) {
-    return this.prisma.externalContract.findUnique({ where: { id }, include: { parties: true } });
+  /* Đọc một hợp đồng theo id.
+   *
+   * Tới 27/08/2026 hàm này KHÔNG nhận `caller` và không kiểm phạm vi dòng nào: gate
+   * `contract.record.view` trả lời "có được xem hợp đồng hay không", nên ai cầm mã đó đọc
+   * được hợp đồng của MỌI công ty chỉ cần biết id. Ratchet phạm vi cũng không thấy, vì cái
+   * lưới đó soi method NHẬN `Caller` — hàm không nhận thì nằm ngoài tầm nó.
+   *
+   * Không tìm thấy thì 404 thay vì trả `null`: trả `null` là đáp 200 với thân rỗng, và màn
+   * hình phải tự đoán đó là "không có" hay "có mà rỗng". */
+  async get(id: string, caller: Caller) {
+    const contract = await this.prisma.externalContract.findUnique({
+      where: { id },
+      include: { parties: true },
+    });
+    if (contract === null) {
+      throw new NotFoundException('Không tìm thấy hợp đồng');
+    }
+    await this.assertContractInScope(contract, caller);
+    return contract;
   }
 
+  /* Danh sách hợp đồng — bó CẢ HAI trục, y như ba đường ghi.
+   *
+   * Bó ghi mà để hở đọc là bó nửa vời: danh sách này chính là chỗ lấy được ID hợp đồng của
+   * nghĩa trang khác, và id là tất cả những gì cần để gọi ba đường kia.
+   */
   async list(companyId: string, caller: Caller, status?: string, gravePlotId?: string) {
     await this.scope.assertCompanyFor(caller.userId, caller.permission, companyId);
     const where: Prisma.ExternalContractWhereInput = { companyId };
     if (status !== undefined) where.status = status;
-    if (gravePlotId !== undefined) where.gravePlotId = gravePlotId;
+    if (gravePlotId !== undefined) {
+      // Hỏi đúng MỘT phần mộ: phần mộ đó phải nằm trong nghĩa trang người gọi phụ trách.
+      const plot = await this.prisma.gravePlot.findUnique({
+        where: { id: gravePlotId },
+        select: { cemeteryId: true },
+      });
+      if (plot === null) {
+        throw new NotFoundException('Không tìm thấy phần mộ');
+      }
+      await this.scope.assertSiteFor(caller.userId, caller.permission, plot.cemeteryId);
+      where.gravePlotId = gravePlotId;
+    } else {
+      const sites = await this.scope.listSiteFilterFor(caller.userId, caller.permission);
+      if (sites !== null) {
+        /* Không có quan hệ Prisma giữa hợp đồng và phần mộ (hai schema, không khoá ngoại
+         * nối), nên không viết được `where: { gravePlot: { cemeteryId: ... } }` — phải quy
+         * ra id phần mộ trước rồi lọc theo `in`.
+         *
+         * `sites` rỗng thì `in: []` và danh sách rỗng — ĐÚNG: được gán không nghĩa trang
+         * nào nghĩa là với tới không cái nào, không phải với tới tất cả. */
+        const plots = await this.prisma.gravePlot.findMany({
+          where: { companyId, cemeteryId: { in: sites } },
+          select: { id: true },
+        });
+        where.gravePlotId = { in: plots.map((p) => p.id) };
+      }
+    }
     return this.prisma.externalContract.findMany({ where, orderBy: { createdAt: 'desc' } });
   }
 }
