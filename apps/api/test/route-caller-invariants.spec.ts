@@ -42,6 +42,21 @@ const NO_RECORD_SCOPE: Readonly<Record<string, string>> = {
  *
  * Mỗi dòng phải nói ra vì sao chưa làm. Bó lại là ĐỔI HÀNH VI (người đang làm được sẽ nhận
  * 403), nên phần lớn chờ quyết định nghiệp vụ về NEO: bó theo cái gì.
+ *
+ * QUYẾT ĐỊNH CỦA CHỦ DOANH NGHIỆP, 27/08/2026 — `Customer.companyId` GIỮ NGUYÊN cho phép
+ * NULL. Lý do ông ấy nêu: ma trận phân quyền đã chặn ở CỬA VÀO — quyền view / edit / delete
+ * của phần khách hàng và phần mộ không cấp cho mọi vai, nên không phải ai cũng vào được tới
+ * đây. Chốt chặn đó được coi là đủ cho hiện tại.
+ *
+ * HỆ QUẢ ĐANG CHẤP NHẬN, ghi ra để không ai đọc thành "đã bó": ai ĐÃ có quyền vào phần khách
+ * hàng thì với tới khách hàng của MỌI công ty, không chỉ công ty mình phụ trách. Gate quyền
+ * lọc theo VAI; nó không lọc theo BẢN GHI. Hai tầng khác nhau, và hiện chỉ có tầng thứ nhất.
+ *
+ * Nên các dòng `customers` dưới đây KHÔNG còn chờ câu hỏi NULL nữa — câu đó đã trả lời. Chúng
+ * chờ một quyết định khác: có bó theo `companyId` và cho NULL ĐI QUA (bó người có công ty,
+ * miễn người chưa có) hay không. Đó là phương án giữ được quyết định trên mà vẫn thu hẹp
+ * được phần lớn bề mặt — nhưng nó là fail-open có chủ ý, nên phải do người quyết, không phải
+ * do tôi suy ra.
  */
 const MEASURED_DEBT: Readonly<Record<string, string>> = {
   'modules/audit/audit.controller.ts:list':
@@ -67,13 +82,13 @@ const MEASURED_DEBT: Readonly<Record<string, string>> = {
   'modules/customers/customers.controller.ts:createPerson':
     'Tạo nhân thân MỚI — cùng câu hỏi neo với `createDeceased`: nhân thân chưa thuộc công ty nào lúc tạo.',
   'modules/customers/customers.controller.ts:createCustomer':
-    'Tạo khách hàng. `Customer.companyId` cho phép NULL theo lược đồ, nên chưa chốt được: bắt buộc phải có công ty lúc tạo, hay cho phép tạo rồi gán sau.',
+    'Tạo khách hàng. Chủ doanh nghiệp đã chốt 27/08/2026: `companyId` GIỮ cho phép NULL, nên không bắt buộc công ty lúc tạo. Còn lại: có kiểm phạm vi khi companyId ĐƯỢC gửi lên hay không.',
   'modules/customers/customers.controller.ts:customerDetail':
-    'Hồ sơ khách 360: gom quan hệ nhân thân, phần mộ đứng tên, hồ sơ an táng. Neo RÕ (`Customer.companyId`) nhưng cho phép NULL — bó là chặn luôn khách chưa gán công ty, cần quyết.',
+    'Hồ sơ khách 360: gom quan hệ nhân thân, phần mộ đứng tên, hồ sơ an táng. Chốt 27/08/2026 GIỮ NULL, dựa vào gate quyền ở cửa vào. Còn lại: bó theo companyId và cho NULL đi qua hay không — xem chú thích đầu sổ.',
   'modules/customers/customers.controller.ts:updateCustomer':
-    'Cùng neo và cùng câu hỏi NULL với `customerDetail`. Chiều GHI nên nguy hiểm hơn.',
+    'Cùng neo với `customerDetail`, chiều GHI nên nguy hiểm hơn. Cùng chịu quyết định GIỮ NULL ngày 27/08/2026.',
   'modules/customers/customers.controller.ts:deleteCustomer':
-    'Xoá khách hàng. Cùng neo; đây là chiều KHÔNG ĐẢO NGƯỢC nên đáng làm trước trong nhóm `customers`.',
+    'Xoá khách hàng — chiều KHÔNG ĐẢO NGƯỢC, nên nếu nhóm `customers` được bó thì đây là đường làm trước. Cùng chịu quyết định GIỮ NULL ngày 27/08/2026.',
   'modules/customers/customers.controller.ts:createRelationship':
     'Quan hệ nhân thân nối HAI người, có thể thuộc hai công ty khác nhau — neo phải chốt là bên nào, hay cả hai.',
   'modules/customers/customers.controller.ts:endRelationship':
