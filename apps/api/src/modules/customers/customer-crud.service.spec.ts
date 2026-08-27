@@ -4,6 +4,7 @@ import { CustomersService } from './customers.service';
 import type { PrismaService } from '../../prisma/prisma.service';
 import type { PiiService } from '../../common/pii/pii.service';
 import type { AuditService } from '../audit/audit.service';
+import type { ScopeService } from '../authorization/scope.service';
 
 const CUSTOMER = 'cus-1';
 const PERSON = 'p1';
@@ -160,6 +161,7 @@ function build(
       encrypt: () => 'c',
     } as unknown as PiiService,
     { record } as unknown as AuditService,
+    {} as unknown as ScopeService,
   );
   return { svc, record, deleted, detached, tx, prisma };
 }
@@ -491,6 +493,7 @@ function buildRel(status: string, reciprocalId: string | null = 'rel-b') {
     prisma,
     {} as unknown as PiiService,
     { record: vi.fn().mockResolvedValue(undefined) } as unknown as AuditService,
+    {} as unknown as ScopeService,
   );
   return { svc, updates };
 }

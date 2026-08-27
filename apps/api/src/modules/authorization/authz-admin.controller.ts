@@ -6,6 +6,7 @@ import { JwtAuthGuard } from '../iam/guards/jwt-auth.guard';
 import { PermissionGuard } from './permission.guard';
 import { RequirePermission } from './require-permission.decorator';
 import { AuthzAdminService } from './authz-admin.service';
+import { callerOf, type Caller } from './caller';
 
 export class AssignScopeDto {
   @ApiProperty() @IsString() @MinLength(1) userId!: string;
@@ -25,8 +26,8 @@ export class AssignScopeDto {
 export class AuthzAdminController {
   constructor(private readonly svc: AuthzAdminService) {}
 
-  private actor(req: Request): string | null {
-    return req.user?.userId ?? null;
+  private caller(req: Request): Caller {
+    return callerOf(req);
   }
 
   @Get()
@@ -38,7 +39,7 @@ export class AuthzAdminController {
   @Post()
   @RequirePermission('authz.scope.assign')
   assign(@Body() dto: AssignScopeDto, @Req() req: Request) {
-    return this.svc.assign(dto.userId, dto.cemeteryId, this.actor(req));
+    return this.svc.assign(dto.userId, dto.cemeteryId, this.caller(req));
   }
 
   @Delete(':userId/:cemeteryId')
@@ -48,6 +49,6 @@ export class AuthzAdminController {
     @Param('cemeteryId') cemeteryId: string,
     @Req() req: Request,
   ) {
-    return this.svc.revoke(userId, cemeteryId, this.actor(req));
+    return this.svc.revoke(userId, cemeteryId, this.caller(req));
   }
 }

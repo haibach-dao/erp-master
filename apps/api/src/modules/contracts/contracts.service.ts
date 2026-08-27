@@ -2,6 +2,7 @@ import { ConflictException, Injectable, NotFoundException } from '@nestjs/common
 import { Prisma } from '@prisma/client';
 import { ulid } from 'ulid';
 import { PrismaService } from '../../prisma/prisma.service';
+import type { Caller } from '../authorization/caller';
 import { ScopeService } from '../authorization/scope.service';
 import { AuditService } from '../audit/audit.service';
 import { activeBurial, activeUsageRight } from '../../common/lifecycle/active';
@@ -28,7 +29,7 @@ export class ContractsService {
     private readonly scope: ScopeService,
   ) {}
 
-  async create(dto: CreateContractDto, actor: string | null) {
+  async create(dto: CreateContractDto, caller: Caller) {
     try {
       const contract = await this.prisma.externalContract.create({
         data: {
@@ -41,12 +42,12 @@ export class ContractsService {
           signedAt: dto.signedAt !== undefined ? new Date(dto.signedAt) : null,
           validTo: dto.validTo !== undefined ? new Date(dto.validTo) : null,
           totalAmount: dto.totalAmount ?? null,
-          createdBy: actor,
+          createdBy: caller.userId,
         },
       });
       await this.audit.record({
         actorType: 'USER',
-        actorId: actor,
+        actorId: caller.userId,
         action: 'CONTRACT.CREATED',
         entityType: 'external_contract',
         entityId: contract.id,
@@ -73,7 +74,7 @@ export class ContractsService {
     });
   }
 
-  async verify(id: string, actor: string | null) {
+  async verify(id: string, caller: Caller) {
     const contract = await this.prisma.externalContract.findUnique({
       where: { id },
       include: { parties: true },
@@ -95,18 +96,18 @@ export class ContractsService {
      * trên giao diện, nên bất biến phải sống ở chỗ không ai sửa qua màn hình được.
      * `createdBy = null` (hợp đồng cũ trước khi có cột này) thì không chặn — không biết
      * ai soạn thì không khẳng định được là trùng người. */
-    if (contract.createdBy !== null && contract.createdBy === actor) {
+    if (contract.createdBy !== null && contract.createdBy === caller.userId) {
       throw new ConflictException(
         'Người soạn hợp đồng không được tự thẩm định. Cần người thứ hai xác minh.',
       );
     }
     const updated = await this.prisma.externalContract.update({
       where: { id },
-      data: { status: 'Verified', verifiedBy: actor, verifiedAt: new Date() },
+      data: { status: 'Verified', verifiedBy: caller.userId, verifiedAt: new Date() },
     });
     await this.audit.record({
       actorType: 'USER',
-      actorId: actor,
+      actorId: caller.userId,
       action: 'CONTRACT.VERIFIED',
       entityType: 'external_contract',
       entityId: id,
@@ -127,7 +128,7 @@ export class ContractsService {
    * Bỏ sót một trong hai là để lại một chủ mộ không có hợp đồng, hoặc một phần mộ mang
    * trạng thái `Allocated` mà không ai đứng tên.
    */
-  async cancel(id: string, dto: CancelContractDto, actor: string | null) {
+  async cancel(id: string, dto: CancelContractDto, caller: Caller) {
     const contract = await this.prisma.externalContract.findUnique({ where: { id } });
     if (contract === null) {
       throw new NotFoundException('Không tìm thấy hợp đồng');
@@ -135,7 +136,7 @@ export class ContractsService {
     if (contract.status === 'Cancelled') {
       throw new ConflictException('Hợp đồng đã huỷ rồi');
     }
-    await this.scope.assertCompany(actor, contract.companyId);
+    await this.scope.assertCompanyFor(caller.userId, caller.permission, contract.companyId);
 
     /* CHẶN khi phần mộ đã có người an táng. Huỷ hợp đồng lúc đó là rút căn cứ pháp lý của
      * một việc đã không đảo ngược được — người đã nằm dưới đất rồi. Muốn đổi người chịu
@@ -188,7 +189,7 @@ export class ContractsService {
             fromStatus: plot.status,
             toStatus: 'Available',
             reason: `huỷ hợp đồng ${contract.contractNo}`,
-            changedBy: actor,
+            changedBy: caller.userId,
           },
         });
       }
@@ -198,7 +199,7 @@ export class ContractsService {
     await this.audit.record({
       companyId: contract.companyId,
       actorType: 'USER',
-      actorId: actor,
+      actorId: caller.userId,
       action: 'CONTRACT.CANCELLED',
       entityType: 'external_contract',
       entityId: id,
@@ -210,7 +211,7 @@ export class ContractsService {
 
   // Activate → allocate the plot (G0-G3.1). Blocks if required data missing or another
   // Active contract/usage-right already exists on the plot (partial unique indexes).
-  async activate(id: string, actor: string | null) {
+  async activate(id: string, caller: Caller) {
     const contract = await this.prisma.externalContract.findUnique({
       where: { id },
       include: { parties: true },
@@ -251,7 +252,7 @@ export class ContractsService {
           where: { id },
           data: {
             status: 'Active',
-            activatedBy: actor,
+            activatedBy: caller.userId,
             activatedAt: new Date(),
             version: { increment: 1 },
           },
@@ -267,7 +268,7 @@ export class ContractsService {
             fromStatus: plot.status,
             toStatus: 'Allocated',
             reason: `contract ${contract.contractNo} activated`,
-            changedBy: actor,
+            changedBy: caller.userId,
           },
         });
         const usageRight = await tx.graveUsageRight.create({
@@ -286,7 +287,7 @@ export class ContractsService {
       await this.audit.record({
         companyId: contract.companyId,
         actorType: 'USER',
-        actorId: actor,
+        actorId: caller.userId,
         action: 'CONTRACT.ACTIVATED',
         entityType: 'external_contract',
         entityId: id,
@@ -298,13 +299,13 @@ export class ContractsService {
           skippedVerification,
           createdBy: contract.createdBy,
           verifiedBy: contract.verifiedBy,
-          activatedBy: actor,
+          activatedBy: caller.userId,
         },
         changedFields: ['status'],
       });
       await this.audit.record({
         actorType: 'USER',
-        actorId: actor,
+        actorId: caller.userId,
         action: 'GRAVE.ALLOCATED',
         entityType: 'grave_plot',
         entityId: contract.gravePlotId,
@@ -323,8 +324,8 @@ export class ContractsService {
     return this.prisma.externalContract.findUnique({ where: { id }, include: { parties: true } });
   }
 
-  async list(companyId: string, actor: string | null, status?: string, gravePlotId?: string) {
-    await this.scope.assertCompany(actor, companyId);
+  async list(companyId: string, caller: Caller, status?: string, gravePlotId?: string) {
+    await this.scope.assertCompanyFor(caller.userId, caller.permission, companyId);
     const where: Prisma.ExternalContractWhereInput = { companyId };
     if (status !== undefined) where.status = status;
     if (gravePlotId !== undefined) where.gravePlotId = gravePlotId;

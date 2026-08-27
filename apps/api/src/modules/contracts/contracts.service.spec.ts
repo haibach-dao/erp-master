@@ -4,6 +4,15 @@ import { ContractsService } from './contracts.service';
 import type { PrismaService } from '../../prisma/prisma.service';
 import type { AuditService } from '../audit/audit.service';
 import type { ScopeService } from '../authorization/scope.service';
+import type { Caller } from '../authorization/caller';
+
+/* Caller mang theo MÃ QUYỀN đang thi hành, không chỉ userId — phạm vi được tính theo
+ * TỪNG mã, nên truyền thiếu mã là kiểm phạm vi trên một câu hỏi khác câu đang chạy. */
+/* `verify` và `activate` nhận HÀM chứ không phải hằng: nhóm test "người soạn không tự thẩm
+ * định" chỉ có nghĩa khi truyền được hai người KHÁC nhau, nên userId phải là tham số. */
+const verifier = (userId: string): Caller => ({ userId, permission: 'contract.record.verify' });
+const activator = (userId: string): Caller => ({ userId, permission: 'contract.record.activate' });
+const CALLER_CANCEL: Caller = { userId: 'u1', permission: 'contract.record.cancel' };
 
 const AUTHOR = 'user-author';
 const MANAGER = 'user-manager';
@@ -49,7 +58,7 @@ function build(row: unknown) {
   const svc = new ContractsService(
     prisma,
     { record } as unknown as AuditService,
-    { assertCompany: vi.fn() } as unknown as ScopeService,
+    { assertCompanyFor: vi.fn() } as unknown as ScopeService,
   );
   return { svc, record, update, tx };
 }
@@ -60,18 +69,18 @@ function build(row: unknown) {
 describe('verify — người soạn không tự thẩm định hợp đồng của mình', () => {
   it('CHẶN khi người thẩm định chính là người soạn', async () => {
     const { svc, update } = build(contract({ status: 'Uploaded', createdBy: AUTHOR }));
-    await expect(svc.verify('ct-1', AUTHOR)).rejects.toBeInstanceOf(ConflictException);
+    await expect(svc.verify('ct-1', verifier(AUTHOR))).rejects.toBeInstanceOf(ConflictException);
     expect(update).not.toHaveBeenCalled();
   });
 
   it('nói rõ vì sao chặn, không chỉ báo lỗi trạng thái', async () => {
     const { svc } = build(contract({ status: 'Uploaded', createdBy: AUTHOR }));
-    await expect(svc.verify('ct-1', AUTHOR)).rejects.toThrow(/không được tự thẩm định/);
+    await expect(svc.verify('ct-1', verifier(AUTHOR))).rejects.toThrow(/không được tự thẩm định/);
   });
 
   it('cho qua khi là người khác', async () => {
     const { svc, update } = build(contract({ status: 'Uploaded', createdBy: AUTHOR }));
-    await svc.verify('ct-1', MANAGER);
+    await svc.verify('ct-1', verifier(MANAGER));
     expect(update).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ status: 'Verified', verifiedBy: MANAGER }),
@@ -81,7 +90,7 @@ describe('verify — người soạn không tự thẩm định hợp đồng c�
 
   it('không chặn hợp đồng cũ chưa biết ai soạn — không biết thì không khẳng định trùng người', async () => {
     const { svc, update } = build(contract({ status: 'Uploaded', createdBy: null }));
-    await svc.verify('ct-1', AUTHOR);
+    await svc.verify('ct-1', verifier(AUTHOR));
     expect(update).toHaveBeenCalled();
   });
 });
@@ -89,7 +98,7 @@ describe('verify — người soạn không tự thẩm định hợp đồng c�
 describe('activate — đi thẳng được, nhưng phải để lại vết', () => {
   it('cho hiệu lực THẲNG từ Uploaded, bỏ bước thẩm định', async () => {
     const { svc, tx } = build(contract({ status: 'Uploaded' }));
-    await svc.activate('ct-1', MANAGER);
+    await svc.activate('ct-1', activator(MANAGER));
     expect(tx.externalContract.update).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ status: 'Active', activatedBy: MANAGER }),
@@ -99,7 +108,7 @@ describe('activate — đi thẳng được, nhưng phải để lại vết', (
 
   it('ghi audit nói RÕ là đã bỏ bước thẩm định', async () => {
     const { svc, record } = build(contract({ status: 'Uploaded' }));
-    await svc.activate('ct-1', MANAGER);
+    await svc.activate('ct-1', activator(MANAGER));
     expect(record).toHaveBeenCalledWith(
       expect.objectContaining({
         action: 'CONTRACT.ACTIVATED',
@@ -111,7 +120,7 @@ describe('activate — đi thẳng được, nhưng phải để lại vết', (
 
   it('đường đi đủ bốn bước thì KHÔNG bị đánh dấu là bỏ bước', async () => {
     const { svc, record } = build(contract({ status: 'Verified', verifiedBy: MANAGER }));
-    await svc.activate('ct-1', 'user-director');
+    await svc.activate('ct-1', activator('user-director'));
     expect(record).toHaveBeenCalledWith(
       expect.objectContaining({
         reason: null,
@@ -122,26 +131,26 @@ describe('activate — đi thẳng được, nhưng phải để lại vết', (
 
   it('người soạn tự cho hiệu lực là ĐƯỢC PHÉP — chủ doanh nghiệp đã quyết', async () => {
     const { svc, tx } = build(contract({ status: 'Uploaded', createdBy: AUTHOR }));
-    await svc.activate('ct-1', AUTHOR);
+    await svc.activate('ct-1', activator(AUTHOR));
     expect(tx.externalContract.update).toHaveBeenCalled();
   });
 
   it('vẫn CHẶN trạng thái không thể cho hiệu lực', async () => {
     const { svc, tx } = build(contract({ status: 'Cancelled' }));
-    await expect(svc.activate('ct-1', MANAGER)).rejects.toThrow(/Không thể cho hiệu lực/);
+    await expect(svc.activate('ct-1', activator(MANAGER))).rejects.toThrow(/Không thể cho hiệu lực/);
     expect(tx.externalContract.update).not.toHaveBeenCalled();
   });
 
   it('vẫn CHẶN khi thiếu dữ liệu bắt buộc, dù người gọi có quyền', async () => {
     const { svc, tx } = build(contract({ status: 'Uploaded', totalAmount: null, validTo: null }));
-    await expect(svc.activate('ct-1', MANAGER)).rejects.toThrow(/Thiếu/);
+    await expect(svc.activate('ct-1', activator(MANAGER))).rejects.toThrow(/Thiếu/);
     expect(tx.externalContract.update).not.toHaveBeenCalled();
   });
 
   it('vẫn CHẶN khi lô mộ đã được phân bổ cho hợp đồng khác', async () => {
     const { svc, tx } = build(contract({ status: 'Uploaded' }));
     tx.gravePlot.findUnique.mockResolvedValue({ id: 'plot-1', status: 'Allocated' });
-    await expect(svc.activate('ct-1', MANAGER)).rejects.toThrow(/không phân bổ được/);
+    await expect(svc.activate('ct-1', activator(MANAGER))).rejects.toThrow(/không phân bổ được/);
   });
 });
 
@@ -195,7 +204,7 @@ describe('huỷ hợp đồng — đảo đúng hệ quả của activate', () =
     const svc = new ContractsService(
       prisma,
       { record } as unknown as AuditService,
-      { assertCompany: vi.fn() } as unknown as ScopeService,
+      { assertCompanyFor: vi.fn() } as unknown as ScopeService,
     );
     return { svc, record, updateContract, updateRight, updatePlot, createHistory };
   }
@@ -203,7 +212,7 @@ describe('huỷ hợp đồng — đảo đúng hệ quả của activate', () =
   it('huỷ được: hợp đồng Cancelled, quyền sử dụng Ended, mộ về Available', async () => {
     const { svc, updateContract, updateRight, updatePlot } = buildCancel();
 
-    await svc.cancel('ct-1', { reason: 'khách đổi ý' }, 'u1');
+    await svc.cancel('ct-1', { reason: 'khách đổi ý' }, CALLER_CANCEL);
 
     expect(updateContract).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ status: 'Cancelled' }) }),
@@ -221,7 +230,7 @@ describe('huỷ hợp đồng — đảo đúng hệ quả của activate', () =
   it('mộ đã có hồ sơ an táng thì CHẶN, và chỉ sang SANG TÊN', async () => {
     const { svc, updateContract } = buildCancel({ burials: 1 });
 
-    await expect(svc.cancel('ct-1', { reason: 'x' }, 'u1')).rejects.toThrow(
+    await expect(svc.cancel('ct-1', { reason: 'x' }, CALLER_CANCEL)).rejects.toThrow(
       /đã có 1 hồ sơ an táng.*SANG TÊN/s,
     );
     expect(updateContract).not.toHaveBeenCalled();
@@ -230,7 +239,7 @@ describe('huỷ hợp đồng — đảo đúng hệ quả của activate', () =
   it('hợp đồng đã huỷ rồi thì không huỷ lại', async () => {
     const { svc } = buildCancel({ status: 'Cancelled' });
 
-    await expect(svc.cancel('ct-1', { reason: 'x' }, 'u1')).rejects.toThrow(/đã huỷ rồi/);
+    await expect(svc.cancel('ct-1', { reason: 'x' }, CALLER_CANCEL)).rejects.toThrow(/đã huỷ rồi/);
   });
 
   it('huỷ hợp đồng NHÁP thì không có quyền nào để chấm dứt, mộ không đổi', async () => {
@@ -240,7 +249,7 @@ describe('huỷ hợp đồng — đảo đúng hệ quả của activate', () =
       plotStatus: 'Available',
     });
 
-    await svc.cancel('ct-1', { reason: 'bỏ bản nháp' }, 'u1');
+    await svc.cancel('ct-1', { reason: 'bỏ bản nháp' }, CALLER_CANCEL);
 
     expect(updateRight).not.toHaveBeenCalled();
     expect(updatePlot).not.toHaveBeenCalled();
@@ -249,7 +258,7 @@ describe('huỷ hợp đồng — đảo đúng hệ quả của activate', () =
   it('audit ghi lý do và số quyền đã chấm dứt theo', async () => {
     const { svc, record } = buildCancel({ rights: 2 });
 
-    await svc.cancel('ct-1', { reason: 'khách trả lại mộ' }, 'u1');
+    await svc.cancel('ct-1', { reason: 'khách trả lại mộ' }, CALLER_CANCEL);
 
     expect(record).toHaveBeenCalledWith(
       expect.objectContaining({

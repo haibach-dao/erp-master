@@ -2,9 +2,9 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { ChevronRight, Plus, Search, Users } from 'lucide-react';
+import { ChevronRight, Plus, Users } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { createCustomer, searchCustomers, type DedupWarning } from '@/lib/api';
+import { createCustomer, listCustomers, type CustomerFilters, type DedupWarning } from '@/lib/api';
 import { customerType } from '@/lib/status';
 import {
   CustomerFormTabs,
@@ -12,13 +12,17 @@ import {
   pickFilled as pick,
   type CustomerFormValue,
 } from '@/components/customer-form';
+import {
+  CustomerFiltersBar,
+  EMPTY_CUSTOMER_FILTERS,
+  activeFilterCount,
+} from '@/components/customer-filters';
 import { PageHeader } from '@/components/ui/page-header';
 import { Alert } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Dialog } from '@/components/ui/dialog';
 import { EmptyState } from '@/components/ui/empty-state';
-import { Input } from '@/components/ui/input';
 import { TableSkeleton } from '@/components/ui/skeleton';
 import {
   Table,
@@ -33,13 +37,22 @@ import {
 export default function CustomersPage() {
   const qc = useQueryClient();
   const router = useRouter();
-  const [q, setQ] = useState('');
+  const [filters, setFilters] = useState<CustomerFilters>(EMPTY_CUSTOMER_FILTERS);
   const [open, setOpen] = useState(false);
   const [warnings, setWarnings] = useState<DedupWarning[]>([]);
   const [form, setForm] = useState(EMPTY_CUSTOMER_FORM);
   const [formTab, setFormTab] = useState('chung');
 
-  const list = useQuery({ queryKey: ['customers', q], queryFn: () => searchCustomers(q) });
+  /* `queryKey` mang TRỌN bộ lọc. Chỉ đặt `['customers', q]` thì react-query coi hai bộ lọc
+   * khác nhau là cùng một truy vấn và phục vụ lại kết quả cũ — người dùng đổi tiêu chí, bảng
+   * không đổi, và không có gì báo lỗi. */
+  const list = useQuery({
+    queryKey: ['customers', filters],
+    queryFn: () => listCustomers(filters),
+  });
+
+  const q = filters.q ?? '';
+  const filtering = activeFilterCount(filters) > 0;
 
   const individual = form.type === 'INDIVIDUAL';
 
@@ -104,19 +117,17 @@ export default function CustomersPage() {
         </Alert>
       ) : null}
 
-      <div className="relative max-w-md">
-        <Search
-          className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
-          aria-hidden
-        />
-        <Input
-          className="pl-9"
-          placeholder="Tìm theo tên, mã KH, điện thoại, email…"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          aria-label="Tìm khách hàng"
-        />
-      </div>
+      <CustomerFiltersBar value={filters} onChange={setFilters} />
+
+      {/* NÓI RA khi danh sách bị cắt. Im lặng ở đây là chỗ người dùng đếm 50 dòng rồi kết
+          luận công ty có 50 khách. `total` đến từ server và đếm trên TOÀN BỘ tập đã lọc. */}
+      {list.data !== undefined ? (
+        <p className="text-sm text-muted-foreground" aria-live="polite">
+          {list.data.truncated
+            ? `Hiện ${list.data.items.length} / ${list.data.total} khách hàng — thu hẹp bộ lọc để thấy phần còn lại.`
+            : `${list.data.total} khách hàng`}
+        </p>
+      ) : null}
 
       <Table>
         <TableHeader>
@@ -135,17 +146,32 @@ export default function CustomersPage() {
         <TableBody>
           {list.isPending ? <TableSkeleton rows={6} cols={8} /> : null}
 
-          {list.data?.length === 0 ? (
+          {list.data?.items.length === 0 ? (
             <TableMessage colSpan={8}>
+              {/* Ba câu khác nhau cho ba tình huống khác nhau. Gộp thành "không có dữ liệu"
+                  là bắt người dùng tự đoán họ đang gặp cái nào — và việc phải làm để thoát
+                  ra thì mỗi cái một khác: tạo mới / sửa từ khoá / nới bộ lọc. */}
               <EmptyState
                 icon={Users}
-                title={q === '' ? 'Chưa có khách hàng nào' : `Không tìm thấy khách khớp “${q}”`}
-                description={q === '' ? 'Bấm "Thêm khách hàng" để tạo hồ sơ đầu tiên.' : undefined}
+                title={
+                  filtering
+                    ? 'Không có khách hàng nào khớp bộ lọc'
+                    : q === ''
+                      ? 'Chưa có khách hàng nào'
+                      : `Không tìm thấy khách khớp “${q}”`
+                }
+                description={
+                  filtering
+                    ? 'Nới một tiêu chí, hoặc bấm "Xoá lọc" để xem lại toàn bộ.'
+                    : q === ''
+                      ? 'Bấm "Thêm khách hàng" để tạo hồ sơ đầu tiên.'
+                      : undefined
+                }
               />
             </TableMessage>
           ) : null}
 
-          {list.data?.map((c) => (
+          {list.data?.items.map((c) => (
             /* Cả dòng bấm được. Dùng `<tr>` có onClick kèm onKeyDown thay vì bọc mỗi ô
              * trong thẻ <a> — bọc <a> trong <td> làm hỏng cấu trúc bảng và trình đọc màn
              * hình đọc lại tên khách bảy lần cho bảy cột. */

@@ -154,12 +154,68 @@ export interface CreateCustomerInput {
   email?: string;
 }
 
-export function searchCustomers(q: string, deceasedOnly = false): Promise<Customer360[]> {
-  /* `deceasedOnly` lọc ở SERVER: truy vấn cắt ở 50 dòng, nên lọc phía client sẽ bỏ sót
-   * người đã mất khi danh sách có nhiều khách còn sống đứng trước. */
-  return apiFetch<Customer360[]>(
-    `/api/v1/crm/customers/search?q=${encodeURIComponent(q)}${deceasedOnly ? '&deceasedOnly=true' : ''}`,
-  );
+/* Bộ lọc danh sách khách hàng. MỌI trục đều lọc ở SERVER.
+ *
+ * VÌ SAO KHÔNG LỌC Ở ĐÂY: truy vấn cắt ở `limit` dòng. Lọc sau khi nhận về là lọc trên
+ * MỘT LÁT CẮT — "còn 3 người đã mất" có thể ra 0 chỉ vì 50 khách còn sống đứng trước họ,
+ * và màn hình không có cách nào biết mình vừa hiện một câu trả lời sai.
+ */
+export type LifeStatus = 'all' | 'alive' | 'deceased';
+export type GraveOwnerFilter = 'all' | 'yes' | 'no';
+
+export interface CustomerFilters {
+  q?: string;
+  lifeStatus?: LifeStatus;
+  graveOwner?: GraveOwnerFilter;
+  cemeteryId?: string;
+  companyId?: string;
+  type?: string;
+  status?: string;
+  limit?: number;
+}
+
+/* Bao ngoài của danh sách. `total` đếm trên TOÀN BỘ tập đã lọc, `items` chỉ là lát cắt —
+ * `truncated` nói thẳng rằng hai con số đó khác nhau, để màn hình không im lặng cho người
+ * dùng đếm nhầm. */
+export interface CustomerList {
+  items: Customer360[];
+  total: number;
+  limit: number;
+  truncated: boolean;
+}
+
+/* Giá trị mặc định KHÔNG được gửi lên. `all` nghĩa là "không lọc trục này", nên gửi nó chỉ
+ * làm URL dài ra và làm `queryKey` của react-query khác nhau cho hai truy vấn giống hệt. */
+function filterParams(f: CustomerFilters): string {
+  const p = new URLSearchParams();
+  if (f.q !== undefined && f.q !== '') p.set('q', f.q);
+  if (f.lifeStatus !== undefined && f.lifeStatus !== 'all') p.set('lifeStatus', f.lifeStatus);
+  if (f.graveOwner !== undefined && f.graveOwner !== 'all') p.set('graveOwner', f.graveOwner);
+  if (f.cemeteryId !== undefined && f.cemeteryId !== '') p.set('cemeteryId', f.cemeteryId);
+  if (f.companyId !== undefined && f.companyId !== '') p.set('companyId', f.companyId);
+  if (f.type !== undefined && f.type !== '') p.set('type', f.type);
+  if (f.status !== undefined && f.status !== '') p.set('status', f.status);
+  if (f.limit !== undefined) p.set('limit', String(f.limit));
+  return p.toString();
+}
+
+/** Danh sách khách hàng kèm bộ lọc — dùng cho MÀN HÌNH DANH SÁCH, nơi cần biết tổng số. */
+export function listCustomers(filters: CustomerFilters): Promise<CustomerList> {
+  return apiFetch<CustomerList>(`/api/v1/crm/customers/search?${filterParams(filters)}`);
+}
+
+/* Tìm nhanh cho các Ô CHỌN KHÁCH (hộp thoại an táng, hợp đồng, cấp thẻ…).
+ *
+ * Cùng MỘT endpoint với `listCustomers`, chỉ bóc lấy `items`. Cố ý không tách thành
+ * endpoint thứ hai: hai endpoint cho cùng một câu hỏi là hai chỗ để luật lọc lệch nhau —
+ * và luật ở đây gồm cả phép bó phạm vi, nên lệch nghĩa là một trong hai chỗ rò dữ liệu.
+ */
+export async function searchCustomers(
+  q: string,
+  filters: Omit<CustomerFilters, 'q'> = {},
+): Promise<Customer360[]> {
+  const res = await listCustomers({ ...filters, q });
+  return res.items;
 }
 
 export function createCustomer(

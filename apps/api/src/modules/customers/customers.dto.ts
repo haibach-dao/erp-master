@@ -11,6 +11,7 @@ import {
   Min,
   MinLength,
 } from 'class-validator';
+import { Type } from 'class-transformer';
 
 export class CreatePersonDto {
   @ApiProperty() @IsString() @MinLength(1) fullName!: string;
@@ -178,4 +179,55 @@ export class UpdateCustomerDto {
   @ApiPropertyOptional() @IsOptional() @IsString() phone?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() email?: string;
   @ApiPropertyOptional() @IsOptional() person?: UpdatePersonDto;
+}
+
+/* Bộ lọc danh sách khách hàng — đọc từ QUERY STRING.
+ *
+ * Query string đến từ client dưới dạng CHUỖI, kể cả `limit`. Nên có `@Type(() => Number)`
+ * cho `limit`: thiếu nó thì `@IsInt()` từ chối `"50"` và bộ lọc gãy ngay lần bấm đầu tiên.
+ *
+ * Mọi trục có tập giá trị hữu hạn đều dùng `@IsIn` với DANH SÁCH ĐÓNG. Giá trị lạ bị TỪ
+ * CHỐI (400), không bị bỏ qua âm thầm — bỏ qua âm thầm là cách một bộ lọc gõ sai trả về
+ * đúng dữ liệu chưa lọc mà người dùng tưởng là đã lọc.
+ */
+export class SearchCustomersDto {
+  @ApiPropertyOptional({ description: 'Tìm tự do: mã KH, họ tên, điện thoại, email, tên tổ chức' })
+  @IsOptional()
+  @IsString()
+  q?: string;
+
+  @ApiPropertyOptional({ enum: ['all', 'alive', 'deceased'] })
+  @IsOptional()
+  @IsIn(['all', 'alive', 'deceased'])
+  lifeStatus?: 'all' | 'alive' | 'deceased';
+
+  @ApiPropertyOptional({ enum: ['all', 'yes', 'no'], description: 'Đang đứng tên phần mộ' })
+  @IsOptional()
+  @IsIn(['all', 'yes', 'no'])
+  graveOwner?: 'all' | 'yes' | 'no';
+
+  @ApiPropertyOptional({ description: 'Đứng tên mộ ở nghĩa trang này' })
+  @IsOptional()
+  @IsString()
+  cemeteryId?: string;
+
+  @ApiPropertyOptional() @IsOptional() @IsString() companyId?: string;
+
+  @ApiPropertyOptional({ enum: ['INDIVIDUAL', 'ORGANIZATION', 'AGENT', 'PROSPECT'] })
+  @IsOptional()
+  @IsIn(['INDIVIDUAL', 'ORGANIZATION', 'AGENT', 'PROSPECT'])
+  type?: string;
+
+  @ApiPropertyOptional({ enum: ['active', 'inactive'] })
+  @IsOptional()
+  @IsIn(['active', 'inactive'])
+  status?: string;
+
+  @ApiPropertyOptional({ minimum: 1, maximum: 200, default: 50 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(200)
+  limit?: number;
 }

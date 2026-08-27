@@ -4,6 +4,12 @@ import { CemeteryService } from './cemetery.service';
 import type { PrismaService } from '../../prisma/prisma.service';
 import type { AuditService } from '../audit/audit.service';
 import type { ScopeService } from '../authorization/scope.service';
+import type { Caller } from '../authorization/caller';
+
+/* Caller mang theo MÃ QUYỀN đang thi hành, không chỉ userId — phạm vi được tính theo
+ * TỪNG mã, nên truyền thiếu mã là kiểm phạm vi trên một câu hỏi khác câu đang chạy. */
+const CALLER_RELEASE: Caller = { userId: 'u1', permission: 'cemetery.usage_right.release' };
+const CALLER_TRANSFER: Caller = { userId: 'u1', permission: 'cemetery.usage_right.transfer' };
 
 const RIGHT = 'ur-1';
 const PLOT = 'plot-1';
@@ -88,7 +94,7 @@ function build(
 
   const svc = new CemeteryService(
     prisma,
-    { assertCompany: vi.fn(), assertSite: vi.fn() } as unknown as ScopeService,
+    { assertCompanyFor: vi.fn(), assertSiteFor: vi.fn() } as unknown as ScopeService,
     { record } as unknown as AuditService,
   );
   return { svc, record, order, updateRight, createRight, updatePlot, createHistory };
@@ -101,7 +107,7 @@ describe('thu hồi quyền sử dụng', () => {
   it('mộ trống thì thu hồi được, và mộ về Available', async () => {
     const { svc, updatePlot, createHistory } = build({ burials: 0 });
 
-    await svc.releaseUsageRight(RIGHT, { reason: 'nhập nhầm chủ' }, 'u1');
+    await svc.releaseUsageRight(RIGHT, { reason: 'nhập nhầm chủ' }, CALLER_RELEASE);
 
     expect(updatePlot).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ status: 'Available' }) }),
@@ -112,7 +118,7 @@ describe('thu hồi quyền sử dụng', () => {
   it('mộ CÒN người an táng thì chặn, và chỉ sang SANG TÊN', async () => {
     const { svc, updatePlot } = build({ burials: 2 });
 
-    await expect(svc.releaseUsageRight(RIGHT, { reason: 'x' }, 'u1')).rejects.toThrow(
+    await expect(svc.releaseUsageRight(RIGHT, { reason: 'x' }, CALLER_RELEASE)).rejects.toThrow(
       /còn 2 hồ sơ an táng.*SANG TÊN/s,
     );
     expect(updatePlot).not.toHaveBeenCalled();
@@ -121,7 +127,7 @@ describe('thu hồi quyền sử dụng', () => {
   it('quyền đã chấm dứt rồi thì không thao tác lại được', async () => {
     const { svc } = build({ rightStatus: 'Ended' });
 
-    await expect(svc.releaseUsageRight(RIGHT, { reason: 'x' }, 'u1')).rejects.toThrow(
+    await expect(svc.releaseUsageRight(RIGHT, { reason: 'x' }, CALLER_RELEASE)).rejects.toThrow(
       /đã chấm dứt/,
     );
   });
@@ -129,7 +135,7 @@ describe('thu hồi quyền sử dụng', () => {
   it('quyền đã sang tên thì báo đúng chữ "sang tên", không nói "chấm dứt"', async () => {
     const { svc } = build({ rightStatus: 'Transferred' });
 
-    await expect(svc.releaseUsageRight(RIGHT, { reason: 'x' }, 'u1')).rejects.toThrow(
+    await expect(svc.releaseUsageRight(RIGHT, { reason: 'x' }, CALLER_RELEASE)).rejects.toThrow(
       /đã sang tên/,
     );
   });
@@ -137,7 +143,7 @@ describe('thu hồi quyền sử dụng', () => {
   it('không tìm thấy quyền thì 404', async () => {
     const { svc } = build({ rightMissing: true });
 
-    await expect(svc.releaseUsageRight(RIGHT, { reason: 'x' }, 'u1')).rejects.toThrow(
+    await expect(svc.releaseUsageRight(RIGHT, { reason: 'x' }, CALLER_RELEASE)).rejects.toThrow(
       NotFoundException,
     );
   });
@@ -145,7 +151,7 @@ describe('thu hồi quyền sử dụng', () => {
   it('ghi audit kèm lý do — thu hồi là tước quyền của một người', async () => {
     const { svc, record } = build();
 
-    await svc.releaseUsageRight(RIGHT, { reason: 'khách trả lại mộ' }, 'u1');
+    await svc.releaseUsageRight(RIGHT, { reason: 'khách trả lại mộ' }, CALLER_RELEASE);
 
     expect(record).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -166,7 +172,7 @@ describe('sang tên phần mộ', () => {
     await svc.transferUsageRight(
       RIGHT,
       { toCustomerId: NEW_HOLDER, reason: 'thừa kế sau khi chủ mộ mất' },
-      'u1',
+      CALLER_TRANSFER,
     );
 
     expect(createRight).toHaveBeenCalledOnce();
@@ -177,7 +183,7 @@ describe('sang tên phần mộ', () => {
   it('ĐÓNG quyền cũ trước rồi mới tạo quyền mới', async () => {
     const { svc, order } = build();
 
-    await svc.transferUsageRight(RIGHT, { toCustomerId: NEW_HOLDER, reason: 'thừa kế' }, 'u1');
+    await svc.transferUsageRight(RIGHT, { toCustomerId: NEW_HOLDER, reason: 'thừa kế' }, CALLER_TRANSFER);
 
     expect(order).toEqual(['update:Transferred', 'create']);
   });
@@ -185,7 +191,7 @@ describe('sang tên phần mộ', () => {
   it('nối chuỗi previousRightId để đọc ngược được lịch sử chủ mộ', async () => {
     const { svc, createRight } = build();
 
-    await svc.transferUsageRight(RIGHT, { toCustomerId: NEW_HOLDER, reason: 'thừa kế' }, 'u1');
+    await svc.transferUsageRight(RIGHT, { toCustomerId: NEW_HOLDER, reason: 'thừa kế' }, CALLER_TRANSFER);
 
     expect(createRight).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -198,7 +204,7 @@ describe('sang tên phần mộ', () => {
     const { svc, createRight } = build({ newHolderDeceased: true });
 
     await expect(
-      svc.transferUsageRight(RIGHT, { toCustomerId: NEW_HOLDER, reason: 'thừa kế' }, 'u1'),
+      svc.transferUsageRight(RIGHT, { toCustomerId: NEW_HOLDER, reason: 'thừa kế' }, CALLER_TRANSFER),
     ).rejects.toThrow(/đã mất.*thừa kế còn sống/s);
     expect(createRight).not.toHaveBeenCalled();
   });
@@ -207,7 +213,7 @@ describe('sang tên phần mộ', () => {
     const { svc, createRight } = build();
 
     await expect(
-      svc.transferUsageRight(RIGHT, { toCustomerId: OLD_HOLDER, reason: 'x' }, 'u1'),
+      svc.transferUsageRight(RIGHT, { toCustomerId: OLD_HOLDER, reason: 'x' }, CALLER_TRANSFER),
     ).rejects.toThrow(/trùng chủ hiện tại/);
     expect(createRight).not.toHaveBeenCalled();
   });
@@ -216,7 +222,7 @@ describe('sang tên phần mộ', () => {
     const { svc } = build({ newHolderMissing: true });
 
     await expect(
-      svc.transferUsageRight(RIGHT, { toCustomerId: NEW_HOLDER, reason: 'x' }, 'u1'),
+      svc.transferUsageRight(RIGHT, { toCustomerId: NEW_HOLDER, reason: 'x' }, CALLER_TRANSFER),
     ).rejects.toThrow(NotFoundException);
   });
 
@@ -225,7 +231,7 @@ describe('sang tên phần mộ', () => {
   it('KHÔNG đụng trạng thái phần mộ', async () => {
     const { svc, updatePlot, createHistory } = build({ burials: 1 });
 
-    await svc.transferUsageRight(RIGHT, { toCustomerId: NEW_HOLDER, reason: 'thừa kế' }, 'u1');
+    await svc.transferUsageRight(RIGHT, { toCustomerId: NEW_HOLDER, reason: 'thừa kế' }, CALLER_TRANSFER);
 
     expect(updatePlot).not.toHaveBeenCalled();
     expect(createHistory).not.toHaveBeenCalled();
@@ -234,7 +240,7 @@ describe('sang tên phần mộ', () => {
   it('audit ghi cả chủ cũ lẫn chủ mới', async () => {
     const { svc, record } = build();
 
-    await svc.transferUsageRight(RIGHT, { toCustomerId: NEW_HOLDER, reason: 'thừa kế' }, 'u1');
+    await svc.transferUsageRight(RIGHT, { toCustomerId: NEW_HOLDER, reason: 'thừa kế' }, CALLER_TRANSFER);
 
     expect(record).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -248,7 +254,7 @@ describe('sang tên phần mộ', () => {
   it('mọi trường hợp chặn đều là 409', async () => {
     for (const opts of [{ newHolderDeceased: true }, { rightStatus: 'Ended' }]) {
       await expect(
-        build(opts).svc.transferUsageRight(RIGHT, { toCustomerId: NEW_HOLDER, reason: 'x' }, 'u1'),
+        build(opts).svc.transferUsageRight(RIGHT, { toCustomerId: NEW_HOLDER, reason: 'x' }, CALLER_TRANSFER),
       ).rejects.toThrow(ConflictException);
     }
   });

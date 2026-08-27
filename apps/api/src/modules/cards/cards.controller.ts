@@ -4,6 +4,7 @@ import type { Request } from 'express';
 import { JwtAuthGuard } from '../iam/guards/jwt-auth.guard';
 import { PermissionGuard } from '../authorization/permission.guard';
 import { RequirePermission } from '../authorization/require-permission.decorator';
+import { callerOf, type Caller } from '../authorization/caller';
 import { CardsService } from './cards.service';
 import { IssueCardDto } from './cards.dto';
 
@@ -14,8 +15,8 @@ import { IssueCardDto } from './cards.dto';
 export class CardsController {
   constructor(private readonly svc: CardsService) {}
 
-  private actor(req: Request): string | null {
-    return req.user?.userId ?? null;
+  private caller(req: Request): Caller {
+    return callerOf(req);
   }
 
   /* Xem trước KHÔNG cấp số, nên gate bằng mã đọc. Đây là chỗ hệ cũ làm sai: bên đó mở
@@ -23,13 +24,13 @@ export class CardsController {
   @Get(':customerId/preview')
   @RequirePermission('cemetery.card.view')
   preview(@Param('customerId') customerId: string, @Req() req: Request) {
-    return this.svc.preview(customerId, this.actor(req));
+    return this.svc.preview(customerId, this.caller(req));
   }
 
   @Post(':customerId/issue')
   @RequirePermission('cemetery.card.print')
   issue(@Param('customerId') customerId: string, @Body() dto: IssueCardDto, @Req() req: Request) {
-    return this.svc.issue(customerId, dto, this.actor(req));
+    return this.svc.issue(customerId, dto, this.caller(req));
   }
 
   /* In lại gate bằng mã ĐỌC, không phải mã cấp: nó không sinh số mới. Bắt phải có quyền
@@ -37,12 +38,12 @@ export class CardsController {
   @Get('reprint/:cardPrintLogId')
   @RequirePermission('cemetery.card.view')
   reprint(@Param('cardPrintLogId') cardPrintLogId: string, @Req() req: Request) {
-    return this.svc.reprint(cardPrintLogId, this.actor(req));
+    return this.svc.reprint(cardPrintLogId, this.caller(req));
   }
 
   @Get(':customerId/issuances')
   @RequirePermission('cemetery.card.view')
   issuances(@Param('customerId') customerId: string, @Req() req: Request) {
-    return this.svc.listIssuances(customerId, this.actor(req));
+    return this.svc.listIssuances(customerId, this.caller(req));
   }
 }

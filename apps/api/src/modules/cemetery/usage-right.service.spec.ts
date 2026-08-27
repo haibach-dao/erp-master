@@ -4,6 +4,11 @@ import { CemeteryService } from './cemetery.service';
 import type { PrismaService } from '../../prisma/prisma.service';
 import type { AuditService } from '../audit/audit.service';
 import type { ScopeService } from '../authorization/scope.service';
+import type { Caller } from '../authorization/caller';
+
+/* Caller mang theo MÃ QUYỀN đang thi hành, không chỉ userId — phạm vi được tính theo
+ * TỪNG mã, nên truyền thiếu mã là kiểm phạm vi trên một câu hỏi khác câu đang chạy. */
+const CALLER_ASSIGN: Caller = { userId: 'u1', permission: 'cemetery.usage_right.assign' };
 
 const PLOT = 'plot-1';
 const CUSTOMER = 'cus-1';
@@ -76,7 +81,7 @@ function build(
 
   const svc = new CemeteryService(
     prisma,
-    { assertCompany: vi.fn(), assertSite: vi.fn() } as unknown as ScopeService,
+    { assertCompanyFor: vi.fn(), assertSiteFor: vi.fn() } as unknown as ScopeService,
     { record } as unknown as AuditService,
   );
   return { svc, record, createRight, updatePlot, createHistory };
@@ -92,7 +97,7 @@ describe('gán mộ — chủ mộ phải còn sống', () => {
   it('khách còn sống thì gán được', async () => {
     const { svc, createRight } = build();
 
-    await svc.assignUsageRight(dto, 'u1');
+    await svc.assignUsageRight(dto, CALLER_ASSIGN);
 
     expect(createRight).toHaveBeenCalledOnce();
   });
@@ -100,7 +105,7 @@ describe('gán mộ — chủ mộ phải còn sống', () => {
   it('khách ĐÃ MẤT thì chặn, và câu lỗi nói rõ phải đi đường thừa kế', async () => {
     const { svc, createRight } = build({ ownerDeceased: true });
 
-    await expect(svc.assignUsageRight(dto, 'u1')).rejects.toThrow(/đã mất|kế thừa/);
+    await expect(svc.assignUsageRight(dto, CALLER_ASSIGN)).rejects.toThrow(/đã mất|kế thừa/);
     expect(createRight).not.toHaveBeenCalled();
   });
 });
@@ -111,7 +116,7 @@ describe('gán mộ — một mộ một chủ', () => {
       existingRight: { id: 'ur-old', holderCustomerId: 'cus-khac' },
     });
 
-    await expect(svc.assignUsageRight(dto, 'u1')).rejects.toThrow(/đã có chủ khác/);
+    await expect(svc.assignUsageRight(dto, CALLER_ASSIGN)).rejects.toThrow(/đã có chủ khác/);
     expect(createRight).not.toHaveBeenCalled();
   });
 
@@ -120,7 +125,7 @@ describe('gán mộ — một mộ một chủ', () => {
       existingRight: { id: 'ur-old', holderCustomerId: CUSTOMER },
     });
 
-    await expect(svc.assignUsageRight(dto, 'u1')).rejects.toThrow(/chính khách hàng này/);
+    await expect(svc.assignUsageRight(dto, CALLER_ASSIGN)).rejects.toThrow(/chính khách hàng này/);
     expect(createRight).not.toHaveBeenCalled();
   });
 
@@ -129,7 +134,7 @@ describe('gán mộ — một mộ một chủ', () => {
   it('mộ đang có người an táng mà không có chủ thì bắt rà soát, không gán đè', async () => {
     const { svc, createRight } = build({ plotStatus: 'Occupied' });
 
-    await expect(svc.assignUsageRight(dto, 'u1')).rejects.toThrow(/rà soát/);
+    await expect(svc.assignUsageRight(dto, CALLER_ASSIGN)).rejects.toThrow(/rà soát/);
     expect(createRight).not.toHaveBeenCalled();
   });
 });
@@ -138,7 +143,7 @@ describe('gán mộ — hệ quả kèm theo', () => {
   it('mộ trống chuyển sang Đã phân bổ và ghi lịch sử trạng thái', async () => {
     const { svc, updatePlot, createHistory } = build({ plotStatus: 'Available' });
 
-    await svc.assignUsageRight(dto, 'u1');
+    await svc.assignUsageRight(dto, CALLER_ASSIGN);
 
     expect(updatePlot).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ status: 'Allocated' }) }),
@@ -149,7 +154,7 @@ describe('gán mộ — hệ quả kèm theo', () => {
   it('mộ vốn đã Allocated thì không ghi thêm dòng lịch sử thừa', async () => {
     const { svc, updatePlot, createHistory } = build({ plotStatus: 'Allocated' });
 
-    await svc.assignUsageRight(dto, 'u1');
+    await svc.assignUsageRight(dto, CALLER_ASSIGN);
 
     expect(updatePlot).not.toHaveBeenCalled();
     expect(createHistory).not.toHaveBeenCalled();
@@ -160,7 +165,7 @@ describe('gán mộ — hệ quả kèm theo', () => {
   it('ghi audit nói rõ quyền này không đi qua hợp đồng', async () => {
     const { svc, record, createRight } = build();
 
-    await svc.assignUsageRight({ ...dto, note: 'chuyển từ hệ cũ' }, 'u1');
+    await svc.assignUsageRight({ ...dto, note: 'chuyển từ hệ cũ' }, CALLER_ASSIGN);
 
     expect(createRight).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -176,10 +181,10 @@ describe('gán mộ — hệ quả kèm theo', () => {
   });
 
   it('không tìm thấy mộ hoặc khách thì 404', async () => {
-    await expect(build({ plotMissing: true }).svc.assignUsageRight(dto, 'u1')).rejects.toThrow(
+    await expect(build({ plotMissing: true }).svc.assignUsageRight(dto, CALLER_ASSIGN)).rejects.toThrow(
       NotFoundException,
     );
-    await expect(build({ customerMissing: true }).svc.assignUsageRight(dto, 'u1')).rejects.toThrow(
+    await expect(build({ customerMissing: true }).svc.assignUsageRight(dto, CALLER_ASSIGN)).rejects.toThrow(
       NotFoundException,
     );
   });
@@ -190,7 +195,7 @@ describe('gán mộ — hệ quả kèm theo', () => {
       { existingRight: { id: 'x', holderCustomerId: 'y' } },
       { plotStatus: 'Occupied' },
     ]) {
-      await expect(build(opts).svc.assignUsageRight(dto, 'u1')).rejects.toThrow(ConflictException);
+      await expect(build(opts).svc.assignUsageRight(dto, CALLER_ASSIGN)).rejects.toThrow(ConflictException);
     }
   });
 });

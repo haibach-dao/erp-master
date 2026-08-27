@@ -4,6 +4,12 @@ import { CardsService } from './cards.service';
 import type { PrismaService } from '../../prisma/prisma.service';
 import type { AuditService } from '../audit/audit.service';
 import type { ScopeService } from '../authorization/scope.service';
+import type { Caller } from '../authorization/caller';
+
+/* Caller mang theo MÃ QUYỀN đang thi hành, không chỉ userId — phạm vi được tính theo
+ * TỪNG mã, nên truyền thiếu mã là kiểm phạm vi trên một câu hỏi khác câu đang chạy. */
+const CALLER_PRINT: Caller = { userId: 'u1', permission: 'cemetery.card.print' };
+const CALLER_VIEW: Caller = { userId: 'u1', permission: 'cemetery.card.view' };
 
 const CUSTOMER = 'cus-1';
 const PLOT = 'plot-1';
@@ -115,13 +121,13 @@ function build(
       ),
   } as unknown as PrismaService;
 
-  const assertCompany = vi.fn().mockResolvedValue(undefined);
+  const assertCompanyFor = vi.fn().mockResolvedValue(undefined);
   const svc = new CardsService(
     prisma,
     { record } as unknown as AuditService,
-    { assertCompany } as unknown as ScopeService,
+    { assertCompanyFor } as unknown as ScopeService,
   );
-  return { svc, record, createLog, assertCompany };
+  return { svc, record, createLog, assertCompanyFor };
 }
 
 /* Lỗi đắt nhất của bản hệ cũ: mở thẻ ra xem cũng ghi một dòng nhật ký, nên bấm Hủy ở hộp
@@ -132,7 +138,7 @@ describe('thẻ mộ — xem trước KHÔNG phải là cấp thẻ', () => {
   it('xem trước không ghi dòng nhật ký nào', async () => {
     const { svc, createLog, record } = build();
 
-    const card = (await svc.preview(CUSTOMER, 'u1')) as Record<string, unknown>;
+    const card = (await svc.preview(CUSTOMER, CALLER_VIEW)) as Record<string, unknown>;
 
     expect(createLog).not.toHaveBeenCalled();
     expect(record).not.toHaveBeenCalled();
@@ -142,7 +148,7 @@ describe('thẻ mộ — xem trước KHÔNG phải là cấp thẻ', () => {
   it('xem trước báo số DỰ KIẾN, không phải số đã cấp', async () => {
     const { svc } = build({ lastPrintNumber: 2 });
 
-    const card = (await svc.preview(CUSTOMER, 'u1')) as Record<string, unknown>;
+    const card = (await svc.preview(CUSTOMER, CALLER_VIEW)) as Record<string, unknown>;
 
     expect(card.nextPrintNumber).toBe(3);
     expect(card.printNumber).toBeUndefined();
@@ -151,7 +157,7 @@ describe('thẻ mộ — xem trước KHÔNG phải là cấp thẻ', () => {
   it('cấp thẻ mới ghi nhật ký và phát audit', async () => {
     const { svc, createLog, record } = build({ lastPrintNumber: 1 });
 
-    const card = (await svc.issue(CUSTOMER, { printReason: 'Đổi thông tin' }, 'u1')) as Record<
+    const card = (await svc.issue(CUSTOMER, { printReason: 'Đổi thông tin' }, CALLER_PRINT)) as Record<
       string,
       unknown
     >;
@@ -165,7 +171,7 @@ describe('thẻ mộ — xem trước KHÔNG phải là cấp thẻ', () => {
   it('lần cấp đầu tiên là 1', async () => {
     const { svc } = build({ lastPrintNumber: null });
 
-    const card = (await svc.issue(CUSTOMER, {}, 'u1')) as Record<string, unknown>;
+    const card = (await svc.issue(CUSTOMER, {}, CALLER_PRINT)) as Record<string, unknown>;
 
     expect(card.printNumber).toBe(1);
   });
@@ -182,7 +188,7 @@ describe('thẻ mộ — xem trước KHÔNG phải là cấp thẻ', () => {
       },
     });
 
-    const card = (await svc.reprint('log-7', 'u1')) as Record<string, unknown>;
+    const card = (await svc.reprint('log-7', CALLER_VIEW)) as Record<string, unknown>;
 
     expect(card.printNumber).toBe(2);
     expect(card.reprint).toBe(true);
@@ -193,7 +199,7 @@ describe('thẻ mộ — xem trước KHÔNG phải là cấp thẻ', () => {
   it('in lại một lần cấp không tồn tại thì 404', async () => {
     const { svc } = build({ log: null });
 
-    await expect(svc.reprint('khong-co', 'u1')).rejects.toThrow(NotFoundException);
+    await expect(svc.reprint('khong-co', CALLER_VIEW)).rejects.toThrow(NotFoundException);
   });
 });
 
@@ -202,7 +208,7 @@ describe('thẻ mộ — nội dung in ra', () => {
     // Sức chứa 4, đã an táng 1 => thẻ phải chừa 3 dòng trống.
     const { svc } = build({ capacity: 4, burials: [burial()] });
 
-    const card = (await svc.preview(CUSTOMER, 'u1')) as { plots: Record<string, unknown>[] };
+    const card = (await svc.preview(CUSTOMER, CALLER_VIEW)) as { plots: Record<string, unknown>[] };
 
     expect(card.plots[0].capacity).toBe(4);
     expect(card.plots[0].emptySlots).toBe(3);
@@ -211,7 +217,7 @@ describe('thẻ mộ — nội dung in ra', () => {
   it('sức chứa ghi đè trên phần mộ thắng mặc định của loại mộ', async () => {
     const { svc } = build({ capacity: 4, capacityOverride: 2, burials: [burial()] });
 
-    const card = (await svc.preview(CUSTOMER, 'u1')) as { plots: Record<string, unknown>[] };
+    const card = (await svc.preview(CUSTOMER, CALLER_VIEW)) as { plots: Record<string, unknown>[] };
 
     expect(card.plots[0].capacity).toBe(2);
     expect(card.plots[0].emptySlots).toBe(1);
@@ -223,7 +229,7 @@ describe('thẻ mộ — nội dung in ra', () => {
       burials: [burial(), burial({ id: 'br-2' })],
     });
 
-    const card = (await svc.preview(CUSTOMER, 'u1')) as { plots: Record<string, unknown>[] };
+    const card = (await svc.preview(CUSTOMER, CALLER_VIEW)) as { plots: Record<string, unknown>[] };
 
     expect(card.plots[0].emptySlots).toBe(0);
   });
@@ -231,7 +237,7 @@ describe('thẻ mộ — nội dung in ra', () => {
   it('in quan hệ đã CHỤP LẠI lúc an táng, không tra lại quan hệ hiện tại', async () => {
     const { svc } = build({ burials: [burial({ relationshipToOwner: 'SPOUSE' })] });
 
-    const card = (await svc.preview(CUSTOMER, 'u1')) as {
+    const card = (await svc.preview(CUSTOMER, CALLER_VIEW)) as {
       plots: { occupants: Record<string, unknown>[] }[];
     };
 
@@ -241,7 +247,7 @@ describe('thẻ mộ — nội dung in ra', () => {
   it('trả CCCD dạng đã che sẵn — bản đầy đủ không đi qua đường này', async () => {
     const { svc } = build();
 
-    const card = (await svc.preview(CUSTOMER, 'u1')) as { owner: Record<string, unknown> };
+    const card = (await svc.preview(CUSTOMER, CALLER_VIEW)) as { owner: Record<string, unknown> };
 
     expect(card.owner.nationalIdMasked).toBe('079***123');
     expect(card.owner).not.toHaveProperty('nationalId');
@@ -253,28 +259,30 @@ describe('thẻ mộ — chặn trước khi cấp', () => {
   it('khách chưa đứng tên mộ nào thì không cấp thẻ', async () => {
     const { svc, createLog } = build({ rights: [] });
 
-    await expect(svc.issue(CUSTOMER, {}, 'u1')).rejects.toThrow(ConflictException);
+    await expect(svc.issue(CUSTOMER, {}, CALLER_PRINT)).rejects.toThrow(ConflictException);
     expect(createLog).not.toHaveBeenCalled();
   });
 
   it('khách chưa gắn công ty quản lý thì không cấp thẻ', async () => {
     const { svc, createLog } = build({ companyId: null });
 
-    await expect(svc.issue(CUSTOMER, {}, 'u1')).rejects.toThrow(ConflictException);
+    await expect(svc.issue(CUSTOMER, {}, CALLER_PRINT)).rejects.toThrow(ConflictException);
     expect(createLog).not.toHaveBeenCalled();
   });
 
   it('không tìm thấy khách thì 404', async () => {
     const { svc } = build({ customerMissing: true });
 
-    await expect(svc.preview(CUSTOMER, 'u1')).rejects.toThrow(NotFoundException);
+    await expect(svc.preview(CUSTOMER, CALLER_VIEW)).rejects.toThrow(NotFoundException);
   });
 
   it('kiểm phạm vi công ty TRƯỚC khi dựng thẻ', async () => {
-    const { svc, assertCompany } = build();
+    const { svc, assertCompanyFor } = build();
 
-    await svc.preview(CUSTOMER, 'u1');
+    await svc.preview(CUSTOMER, CALLER_VIEW);
 
-    expect(assertCompany).toHaveBeenCalledWith('u1', 'co-1');
+    /* Ba tham số, và tham số GIỮA là thứ đáng kiểm nhất: mã quyền đang thi hành. Thiếu nó
+     * thì phạm vi được tính ở mức rộng nhất của người gọi — đúng lớp lỗi vừa vá. */
+    expect(assertCompanyFor).toHaveBeenCalledWith('u1', 'cemetery.card.view', 'co-1');
   });
 });

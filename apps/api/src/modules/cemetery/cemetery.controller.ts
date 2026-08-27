@@ -4,6 +4,7 @@ import type { Request } from 'express';
 import { JwtAuthGuard } from '../iam/guards/jwt-auth.guard';
 import { PermissionGuard } from '../authorization/permission.guard';
 import { RequirePermission } from '../authorization/require-permission.decorator';
+import { callerOf, type Caller } from '../authorization/caller';
 import { MaskUnless } from '../../common/masking/mask.decorator';
 import { CemeteryService } from './cemetery.service';
 import {
@@ -28,8 +29,8 @@ import {
 export class CemeteryController {
   constructor(private readonly svc: CemeteryService) {}
 
-  private actor(req: Request): string | null {
-    return req.user?.userId ?? null;
+  private caller(req: Request): Caller {
+    return callerOf(req);
   }
 
   @Get('relationship-types')
@@ -47,38 +48,38 @@ export class CemeteryController {
   @Get('companies')
   @RequirePermission('org.company.view')
   listCompanies(@Req() req: Request) {
-    return this.svc.listCompanies(this.actor(req));
+    return this.svc.listCompanies(this.caller(req));
   }
 
   @Post('cemeteries')
   @RequirePermission('cemetery.site.create')
   createCemetery(@Body() dto: CreateCemeteryDto, @Req() req: Request) {
-    return this.svc.createCemetery(dto, this.actor(req));
+    return this.svc.createCemetery(dto, this.caller(req));
   }
 
   @Get('cemeteries')
   @RequirePermission('cemetery.site.view')
   listCemeteries(@Query('companyId') companyId: string, @Req() req: Request) {
-    return this.svc.listCemeteries(companyId, this.actor(req));
+    return this.svc.listCemeteries(companyId, this.caller(req));
   }
 
   @Post('grave-types')
   @RequirePermission('cemetery.grave_type.create')
   createGraveType(@Body() dto: CreateGraveTypeDto, @Req() req: Request) {
-    return this.svc.createGraveType(dto, this.actor(req));
+    return this.svc.createGraveType(dto, this.caller(req));
   }
 
   @Get('grave-types')
   @RequirePermission('cemetery.grave_type.view')
   @MaskUnless({ field: 'referencePrice', permission: 'cemetery.price.view' })
   listGraveTypes(@Query('companyId') companyId: string, @Req() req: Request) {
-    return this.svc.listGraveTypes(companyId, this.actor(req));
+    return this.svc.listGraveTypes(companyId, this.caller(req));
   }
 
   @Post('grave-plots')
   @RequirePermission('cemetery.plot.create')
   createGravePlot(@Body() dto: CreateGravePlotDto, @Req() req: Request) {
-    return this.svc.createGravePlot(dto, this.actor(req));
+    return this.svc.createGravePlot(dto, this.caller(req));
   }
 
   @Get('grave-plots')
@@ -89,13 +90,13 @@ export class CemeteryController {
     @Query('status') status?: string,
     @Query('cemeteryId') cemeteryId?: string,
   ) {
-    return this.svc.listGravePlots(companyId, this.actor(req), status, cemeteryId);
+    return this.svc.listGravePlots(companyId, this.caller(req), status, cemeteryId);
   }
 
   @Post('grave-plots/:id/status')
   @RequirePermission('cemetery.plot.set_status')
   changeStatus(@Param('id') id: string, @Body() dto: ChangeStatusDto, @Req() req: Request) {
-    return this.svc.changeGravePlotStatus(id, dto, this.actor(req));
+    return this.svc.changeGravePlotStatus(id, dto, this.caller(req));
   }
 
   @Get('grave-plots/:id/status-history')
@@ -110,13 +111,13 @@ export class CemeteryController {
   @Post('grave-plots/:id/position')
   @RequirePermission('cemetery.plot.update')
   setPosition(@Param('id') id: string, @Body() dto: SetPlotPositionDto, @Req() req: Request) {
-    return this.svc.setPlotPosition(id, dto, req.user?.userId ?? null);
+    return this.svc.setPlotPosition(id, dto, this.caller(req));
   }
 
   @Get('cemeteries/:id/plot-map')
   @RequirePermission('cemetery.plot.view')
   plotMap(@Param('id') id: string, @Req() req: Request) {
-    return this.svc.plotMap(id, req.user?.userId ?? null);
+    return this.svc.plotMap(id, this.caller(req));
   }
 
   /* ---- Quyền sử dụng phần mộ ---- */
@@ -126,13 +127,13 @@ export class CemeteryController {
   @Post('usage-rights')
   @RequirePermission('cemetery.usage_right.assign')
   assignUsageRight(@Body() dto: AssignUsageRightDto, @Req() req: Request) {
-    return this.svc.assignUsageRight(dto, req.user?.userId ?? null);
+    return this.svc.assignUsageRight(dto, this.caller(req));
   }
 
   @Get('grave-plots/:id/ownership')
   @RequirePermission('cemetery.usage_right.view')
   plotOwnership(@Param('id') id: string, @Req() req: Request) {
-    return this.svc.plotOwnership(id, req.user?.userId ?? null);
+    return this.svc.plotOwnership(id, this.caller(req));
   }
 
   /* Thu hồi: mộ trở về TRỐNG. Service chặn khi mộ còn hồ sơ an táng — muốn đổi người chịu
@@ -144,7 +145,7 @@ export class CemeteryController {
     @Body() dto: ReleaseUsageRightDto,
     @Req() req: Request,
   ) {
-    return this.svc.releaseUsageRight(id, dto, req.user?.userId ?? null);
+    return this.svc.releaseUsageRight(id, dto, this.caller(req));
   }
 
   /* Sang tên — đây là đường THỪA KẾ. Gán mộ chặn người đã mất đứng tên, nên không có
@@ -156,12 +157,12 @@ export class CemeteryController {
     @Body() dto: TransferUsageRightDto,
     @Req() req: Request,
   ) {
-    return this.svc.transferUsageRight(id, dto, req.user?.userId ?? null);
+    return this.svc.transferUsageRight(id, dto, this.caller(req));
   }
 
   @Get('grave-plots/:id/usage-right-history')
   @RequirePermission('cemetery.usage_right.view')
   usageRightHistory(@Param('id') id: string, @Req() req: Request) {
-    return this.svc.usageRightHistory(id, req.user?.userId ?? null);
+    return this.svc.usageRightHistory(id, this.caller(req));
   }
 }

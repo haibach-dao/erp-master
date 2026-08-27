@@ -2,6 +2,7 @@ import { ConflictException, Injectable, NotFoundException } from '@nestjs/common
 import { Prisma } from '@prisma/client';
 import { ulid } from 'ulid';
 import { PrismaService } from '../../prisma/prisma.service';
+import type { Caller } from '../authorization/caller';
 import { ScopeService } from '../authorization/scope.service';
 import { AuditService } from '../audit/audit.service';
 import type { CreateCatalogDto, RenewDto, SubscribeDto } from './services.dto';
@@ -43,8 +44,8 @@ export class ServicesService {
       });
   }
 
-  async listCatalog(companyId: string, actor: string | null) {
-    await this.scope.assertCompany(actor, companyId);
+  async listCatalog(companyId: string, caller: Caller) {
+    await this.scope.assertCompanyFor(caller.userId, caller.permission, companyId);
     return this.prisma.serviceCatalog.findMany({
       where: { companyId },
       orderBy: { code: 'asc' },
@@ -52,7 +53,7 @@ export class ServicesService {
   }
 
   // Subscribe = pay in full now (A5). Creates the subscription and one revenue transaction.
-  async subscribe(dto: SubscribeDto, actor: string | null) {
+  async subscribe(dto: SubscribeDto, caller: Caller) {
     const catalog = await this.prisma.serviceCatalog.findUnique({
       where: { id: dto.serviceCatalogId },
     });
@@ -95,7 +96,7 @@ export class ServicesService {
 
     await this.audit.record({
       actorType: 'USER',
-      actorId: actor,
+      actorId: caller.userId,
       action: 'SERVICE.SUBSCRIBED',
       entityType: 'service_subscription',
       entityId: result.subscription.id,
@@ -105,7 +106,7 @@ export class ServicesService {
   }
 
   // Renewal creates a new period (never edits the old one); old → Renewed.
-  async renew(subscriptionId: string, dto: RenewDto, actor: string | null) {
+  async renew(subscriptionId: string, dto: RenewDto, caller: Caller) {
     const prev = await this.prisma.serviceSubscription.findUnique({
       where: { id: subscriptionId },
       include: { catalog: true },
@@ -154,7 +155,7 @@ export class ServicesService {
 
     await this.audit.record({
       actorType: 'USER',
-      actorId: actor,
+      actorId: caller.userId,
       action: 'SERVICE.RENEWED',
       entityType: 'service_subscription',
       entityId: result.subscription.id,
@@ -163,7 +164,7 @@ export class ServicesService {
     return result;
   }
 
-  async cancel(subscriptionId: string, actor: string | null) {
+  async cancel(subscriptionId: string, caller: Caller) {
     const sub = await this.prisma.serviceSubscription.findUnique({ where: { id: subscriptionId } });
     if (sub === null) {
       throw new NotFoundException('Không tìm thấy đăng ký');
@@ -174,7 +175,7 @@ export class ServicesService {
     });
     await this.audit.record({
       actorType: 'USER',
-      actorId: actor,
+      actorId: caller.userId,
       action: 'SERVICE.CANCELLED',
       entityType: 'service_subscription',
       entityId: subscriptionId,
@@ -193,8 +194,8 @@ export class ServicesService {
   }
 
   // Revenue = sum of collected transactions (A5: everything is paid-in-full).
-  async revenue(companyId: string, actor: string | null, from?: string, to?: string) {
-    await this.scope.assertCompany(actor, companyId);
+  async revenue(companyId: string, caller: Caller, from?: string, to?: string) {
+    await this.scope.assertCompanyFor(caller.userId, caller.permission, companyId);
     const paidAt: Prisma.DateTimeFilter = {};
     if (from !== undefined) paidAt.gte = new Date(from);
     if (to !== undefined) paidAt.lte = new Date(to);

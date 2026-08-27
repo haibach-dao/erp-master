@@ -2,6 +2,7 @@ import { ConflictException, Injectable, NotFoundException } from '@nestjs/common
 import { Prisma } from '@prisma/client';
 import { ulid } from 'ulid';
 import { PrismaService } from '../../prisma/prisma.service';
+import type { Caller } from '../authorization/caller';
 import { ScopeService } from '../authorization/scope.service';
 import { AuditService } from '../audit/audit.service';
 import { activeBurial, activeUsageRight } from '../../common/lifecycle/active';
@@ -34,16 +35,16 @@ export class CemeteryService {
 
   // The company picker is built from this list, so it must already be the caller's
   // scope: returning every company invites them to pick one they cannot use.
-  async listCompanies(actor: string | null) {
-    const allowed = await this.scope.visibleCompanyIds(actor);
+  async listCompanies(caller: Caller) {
+    const allowed = await this.scope.visibleCompanyIdsFor(caller.userId, caller.permission);
     return this.prisma.company.findMany({
       ...(allowed === null ? {} : { where: { id: { in: allowed } } }),
       orderBy: { createdAt: 'asc' },
     });
   }
 
-  async createCemetery(dto: CreateCemeteryDto, actor: string | null) {
-    await this.scope.assertCompany(actor, dto.companyId);
+  async createCemetery(dto: CreateCemeteryDto, caller: Caller) {
+    await this.scope.assertCompanyFor(caller.userId, caller.permission, dto.companyId);
     return this.wrapUnique(
       () =>
         this.prisma.cemetery.create({
@@ -53,17 +54,17 @@ export class CemeteryService {
     );
   }
 
-  async listCemeteries(companyId: string, actor: string | null) {
-    await this.scope.assertCompany(actor, companyId);
-    const sites = await this.scope.listSiteFilter(actor);
+  async listCemeteries(companyId: string, caller: Caller) {
+    await this.scope.assertCompanyFor(caller.userId, caller.permission, companyId);
+    const sites = await this.scope.listSiteFilterFor(caller.userId, caller.permission);
     return this.prisma.cemetery.findMany({
       where: { companyId, ...(sites === null ? {} : { id: { in: sites } }) },
       orderBy: { code: 'asc' },
     });
   }
 
-  async createGraveType(dto: CreateGraveTypeDto, actor: string | null) {
-    await this.scope.assertCompany(actor, dto.companyId);
+  async createGraveType(dto: CreateGraveTypeDto, caller: Caller) {
+    await this.scope.assertCompanyFor(caller.userId, caller.permission, dto.companyId);
     return this.wrapUnique(
       () =>
         this.prisma.graveType.create({
@@ -80,14 +81,14 @@ export class CemeteryService {
     );
   }
 
-  async listGraveTypes(companyId: string, actor: string | null) {
-    await this.scope.assertCompany(actor, companyId);
+  async listGraveTypes(companyId: string, caller: Caller) {
+    await this.scope.assertCompanyFor(caller.userId, caller.permission, companyId);
     return this.prisma.graveType.findMany({ where: { companyId }, orderBy: { code: 'asc' } });
   }
 
-  async createGravePlot(dto: CreateGravePlotDto, actor: string | null) {
-    await this.scope.assertCompany(actor, dto.companyId);
-    await this.scope.assertSite(actor, dto.cemeteryId);
+  async createGravePlot(dto: CreateGravePlotDto, caller: Caller) {
+    await this.scope.assertCompanyFor(caller.userId, caller.permission, dto.companyId);
+    await this.scope.assertSiteFor(caller.userId, caller.permission, dto.cemeteryId);
     return this.wrapUnique(
       () =>
         this.prisma.gravePlot.create({
@@ -110,21 +111,21 @@ export class CemeteryService {
 
   async listGravePlots(
     companyId: string,
-    actor: string | null,
+    caller: Caller,
     status?: string,
     cemeteryId?: string,
   ) {
-    await this.scope.assertCompany(actor, companyId);
+    await this.scope.assertCompanyFor(caller.userId, caller.permission, companyId);
     const where: Prisma.GravePlotWhereInput = { companyId };
     if (status !== undefined) where.status = status;
     if (cemeteryId !== undefined) {
       // Asking for one cemetery: it has to be one the caller covers.
-      await this.scope.assertSite(actor, cemeteryId);
+      await this.scope.assertSiteFor(caller.userId, caller.permission, cemeteryId);
       where.cemeteryId = cemeteryId;
     } else {
       // Asking for the whole company: narrow a site-bound caller to their own cemeteries
       // rather than answering with the company's entire inventory.
-      const sites = await this.scope.listSiteFilter(actor);
+      const sites = await this.scope.listSiteFilterFor(caller.userId, caller.permission);
       if (sites !== null) {
         where.cemeteryId = { in: sites };
       }
@@ -141,8 +142,28 @@ export class CemeteryService {
     }));
   }
 
-  // Change status inside a transaction and append to the status history.
-  async changeGravePlotStatus(id: string, dto: ChangeStatusDto, changedBy: string | null) {
+  /* Change status inside a transaction and append to the status history.
+   *
+   * Kiểm phạm vi theo phần mộ ĐANG sửa, y như `setPlotPosition` ngay dưới. Cho tới
+   * 27/08/2026 hàm này không kiểm phạm vi một dòng nào: `cemetery.plot.set_status` gate
+   * được "có được đổi trạng thái mộ hay không", nhưng không gate "mộ NÀO" — nên người
+   * phụ trách nghĩa trang A đổi được trạng thái mộ ở nghĩa trang B nếu biết id, và đổi
+   * trạng thái là thứ chặn/mở cả đường bán và đường an táng của mộ đó.
+   *
+   * Kiểm TRƯỚC khi mở giao dịch: hỏi phạm vi là gọi ra ngoài Prisma, giữ một giao dịch
+   * mở trong lúc chờ nó là giữ khoá hàng lâu hơn cần thiết.
+   */
+  async changeGravePlotStatus(id: string, dto: ChangeStatusDto, caller: Caller) {
+    const target = await this.prisma.gravePlot.findUnique({
+      where: { id },
+      select: { companyId: true, cemeteryId: true },
+    });
+    if (target === null) {
+      throw new NotFoundException('Grave plot not found');
+    }
+    await this.scope.assertCompanyFor(caller.userId, caller.permission, target.companyId);
+    await this.scope.assertSiteFor(caller.userId, caller.permission, target.cemeteryId);
+
     return this.prisma.$transaction(async (tx) => {
       const plot = await tx.gravePlot.findUnique({ where: { id } });
       if (plot === null) {
@@ -162,7 +183,7 @@ export class CemeteryService {
           fromStatus: plot.status,
           toStatus: dto.toStatus,
           reason: dto.reason ?? null,
-          changedBy,
+          changedBy: caller.userId,
         },
       });
       return updated;
@@ -196,7 +217,7 @@ export class CemeteryService {
   async setPlotPosition(
     id: string,
     dto: { mapX?: number | null; mapY?: number | null },
-    actor: string | null,
+    caller: Caller,
   ) {
     const plot = await this.prisma.gravePlot.findUnique({
       where: { id },
@@ -205,8 +226,8 @@ export class CemeteryService {
     if (plot === null) {
       throw new NotFoundException('Không tìm thấy lô mộ');
     }
-    await this.scope.assertCompany(actor, plot.companyId);
-    await this.scope.assertSite(actor, plot.cemeteryId);
+    await this.scope.assertCompanyFor(caller.userId, caller.permission, plot.companyId);
+    await this.scope.assertSiteFor(caller.userId, caller.permission, plot.cemeteryId);
 
     const updated = await this.prisma.gravePlot.update({
       where: { id },
@@ -217,7 +238,7 @@ export class CemeteryService {
     });
     await this.audit.record({
       actorType: 'USER',
-      actorId: actor,
+      actorId: caller.userId,
       action: 'GRAVE_PLOT.POSITION_SET',
       entityType: 'grave_plot',
       entityId: id,
@@ -230,13 +251,13 @@ export class CemeteryService {
   /* Dữ liệu vẽ sơ đồ một nghĩa trang. Chỉ trả mộ ĐÃ có toạ độ — mộ chưa số hoá vị trí
    * không vẽ được, và trả về kèm toạ độ null buộc mọi phía vẽ phải tự lọc lại.
    */
-  async plotMap(cemeteryId: string, actor: string | null) {
+  async plotMap(cemeteryId: string, caller: Caller) {
     const cemetery = await this.prisma.cemetery.findUnique({ where: { id: cemeteryId } });
     if (cemetery === null) {
       throw new NotFoundException('Không tìm thấy nghĩa trang');
     }
-    await this.scope.assertCompany(actor, cemetery.companyId);
-    await this.scope.assertSite(actor, cemeteryId);
+    await this.scope.assertCompanyFor(caller.userId, caller.permission, cemetery.companyId);
+    await this.scope.assertSiteFor(caller.userId, caller.permission, cemeteryId);
 
     const plots = await this.prisma.gravePlot.findMany({
       where: { cemeteryId, mapX: { not: null }, mapY: { not: null } },
@@ -274,7 +295,7 @@ export class CemeteryService {
    */
   async assignUsageRight(
     dto: { gravePlotId: string; holderCustomerId: string; effectiveFrom?: string; note?: string },
-    actor: string | null,
+    caller: Caller,
   ) {
     const plot = await this.prisma.gravePlot.findUnique({
       where: { id: dto.gravePlotId },
@@ -283,8 +304,8 @@ export class CemeteryService {
     if (plot === null) {
       throw new NotFoundException('Không tìm thấy lô mộ');
     }
-    await this.scope.assertCompany(actor, plot.companyId);
-    await this.scope.assertSite(actor, plot.cemeteryId);
+    await this.scope.assertCompanyFor(caller.userId, caller.permission, plot.companyId);
+    await this.scope.assertSiteFor(caller.userId, caller.permission, plot.cemeteryId);
 
     const customer = await this.prisma.customer.findUnique({
       where: { id: dto.holderCustomerId },
@@ -354,7 +375,7 @@ export class CemeteryService {
             fromStatus: plot.status,
             toStatus: 'Allocated',
             reason: `gán chủ mộ ${customer.customerCode} (không qua hợp đồng)`,
-            changedBy: actor,
+            changedBy: caller.userId,
           },
         });
       }
@@ -363,7 +384,7 @@ export class CemeteryService {
 
     await this.audit.record({
       actorType: 'USER',
-      actorId: actor,
+      actorId: caller.userId,
       action: 'GRAVE.USAGE_RIGHT_ASSIGNED',
       entityType: 'grave_plot',
       entityId: plot.id,
@@ -380,7 +401,7 @@ export class CemeteryService {
 
   /* Lấy quyền sử dụng đang hiệu lực kèm phần mộ. Dùng chung cho thu hồi và sang tên —
    * hai việc khác nhau nhưng cùng bắt đầu bằng "quyền này còn hiệu lực không". */
-  private async activeRightOrThrow(usageRightId: string, actor: string | null) {
+  private async activeRightOrThrow(usageRightId: string, caller: Caller) {
     const right = await this.prisma.graveUsageRight.findUnique({ where: { id: usageRightId } });
     if (right === null) {
       throw new NotFoundException('Không tìm thấy quyền sử dụng phần mộ');
@@ -397,8 +418,8 @@ export class CemeteryService {
     if (plot === null) {
       throw new NotFoundException('Không tìm thấy lô mộ');
     }
-    await this.scope.assertCompany(actor, plot.companyId);
-    await this.scope.assertSite(actor, plot.cemeteryId);
+    await this.scope.assertCompanyFor(caller.userId, caller.permission, plot.companyId);
+    await this.scope.assertSiteFor(caller.userId, caller.permission, plot.cemeteryId);
     return { right, plot };
   }
 
@@ -408,8 +429,8 @@ export class CemeteryService {
    * là hồ sơ không ai chịu trách nhiệm, và người nhà tới hỏi thì không có ai để hỏi.
    * Muốn đổi người chịu trách nhiệm thì đó là SANG TÊN, không phải thu hồi.
    */
-  async releaseUsageRight(usageRightId: string, dto: { reason: string }, actor: string | null) {
-    const { right, plot } = await this.activeRightOrThrow(usageRightId, actor);
+  async releaseUsageRight(usageRightId: string, dto: { reason: string }, caller: Caller) {
+    const { right, plot } = await this.activeRightOrThrow(usageRightId, caller);
 
     const burials = await this.prisma.burialRecord.count({
       where: { gravePlotId: plot.id, ...activeBurial() },
@@ -439,7 +460,7 @@ export class CemeteryService {
             fromStatus: plot.status,
             toStatus: 'Available',
             reason: `thu hồi quyền sử dụng: ${dto.reason}`,
-            changedBy: actor,
+            changedBy: caller.userId,
           },
         });
       }
@@ -448,7 +469,7 @@ export class CemeteryService {
 
     await this.audit.record({
       actorType: 'USER',
-      actorId: actor,
+      actorId: caller.userId,
       action: 'GRAVE.USAGE_RIGHT_RELEASED',
       entityType: 'grave_plot',
       entityId: plot.id,
@@ -470,9 +491,9 @@ export class CemeteryService {
   async transferUsageRight(
     usageRightId: string,
     dto: { toCustomerId: string; reason: string; effectiveFrom?: string },
-    actor: string | null,
+    caller: Caller,
   ) {
-    const { right, plot } = await this.activeRightOrThrow(usageRightId, actor);
+    const { right, plot } = await this.activeRightOrThrow(usageRightId, caller);
 
     if (right.holderCustomerId === dto.toCustomerId) {
       throw new ConflictException('Chủ mới trùng chủ hiện tại — không có gì để sang tên');
@@ -521,7 +542,7 @@ export class CemeteryService {
      * Sang tên đổi người chịu trách nhiệm, không đổi hiện trạng phần mộ. */
     await this.audit.record({
       actorType: 'USER',
-      actorId: actor,
+      actorId: caller.userId,
       action: 'GRAVE.USAGE_RIGHT_TRANSFERRED',
       entityType: 'grave_plot',
       entityId: plot.id,
@@ -541,7 +562,7 @@ export class CemeteryService {
    * Đọc từ bảng quyền sử dụng chứ không dựng lại từ nhật ký kiểm toán: nhật ký ghi việc
    * ĐÃ LÀM, còn đây là trạng thái hồ sơ — và hai thứ đó trả lời hai câu hỏi khác nhau.
    */
-  async usageRightHistory(gravePlotId: string, actor: string | null) {
+  async usageRightHistory(gravePlotId: string, caller: Caller) {
     const plot = await this.prisma.gravePlot.findUnique({
       where: { id: gravePlotId },
       select: { id: true, companyId: true, plotCode: true },
@@ -549,7 +570,7 @@ export class CemeteryService {
     if (plot === null) {
       throw new NotFoundException('Không tìm thấy lô mộ');
     }
-    await this.scope.assertCompany(actor, plot.companyId);
+    await this.scope.assertCompanyFor(caller.userId, caller.permission, plot.companyId);
 
     const rights = await this.prisma.graveUsageRight.findMany({
       where: { gravePlotId },
@@ -594,7 +615,7 @@ export class CemeteryService {
 
   /* Ai đang đứng tên một phần mộ, và các cốt đã dùng. Giao diện cần cả hai để dựng màn
    * hình an táng: không có chủ thì chưa an táng được, và phải biết cốt nào còn trống. */
-  async plotOwnership(gravePlotId: string, actor: string | null) {
+  async plotOwnership(gravePlotId: string, caller: Caller) {
     const plot = await this.prisma.gravePlot.findUnique({
       where: { id: gravePlotId },
       include: { graveType: { select: { defaultCapacity: true, name: true } } },
@@ -602,7 +623,7 @@ export class CemeteryService {
     if (plot === null) {
       throw new NotFoundException('Không tìm thấy lô mộ');
     }
-    await this.scope.assertCompany(actor, plot.companyId);
+    await this.scope.assertCompanyFor(caller.userId, caller.permission, plot.companyId);
 
     const right = await this.prisma.graveUsageRight.findFirst({
       where: { gravePlotId, ...activeUsageRight },

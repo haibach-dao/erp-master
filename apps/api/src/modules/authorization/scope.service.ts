@@ -27,14 +27,73 @@ export class ScopeService {
     private readonly evaluator: PolicyEvaluator,
   ) {}
 
-  /* Check a company id supplied by the caller against the companies they are bound to.
+  /* ---- Bản THEO MÃ QUYỀN ----
    *
-   * A GROUP-scoped caller is unrestricted and passes anything. Everyone else must name a
-   * company they hold. `companyId = null` — "across all companies" — is therefore only
-   * ever valid for a GROUP caller.
+   * VÌ SAO PHẢI CÓ, và vì sao bốn hàm ở trên chưa đủ (đo được, 27/08/2026):
+   *
+   * `EffectiveAccess.scope.level` là mức RỘNG NHẤT người này giữ Ở BẤT CỨ ĐÂU. Chú thích
+   * của chính nó đã nói "For display; per-code decisions use scopeLevelFor" — nhưng cho
+   * tới 27/08/2026 KHÔNG có một dòng mã sản xuất nào gọi `scopeLevelFor`. Công cụ được
+   * dựng ra rồi để đó; mọi lời gọi phạm vi vẫn chạy trên mức toàn-người-gọi.
+   *
+   * Hậu quả cụ thể, đúng tình huống chủ doanh nghiệp nêu ngày 27/08/2026: một người vừa
+   * là `QL_NGHIA_TRANG` (SITE, phụ trách nghĩa trang A) vừa là `KTNB_KIEM_TOAN` (GROUP,
+   * CHỈ ĐỌC toàn tập đoàn). Mức toàn-người-gọi của họ là GROUP, nên `assertSite` thoát
+   * ngay ở dòng đầu và họ HUỶ ĐƯỢC hồ sơ an táng ở nghĩa trang B — bằng một mã quyền
+   * (`burial.record.cancel`) mà vai kiểm toán không hề cấp, ở một nghĩa trang mà vai quản
+   * lý không hề phủ. Hợp giữa các vai là cộng dồn QUYỀN, không phải cộng dồn TẦM VỚI.
+   *
+   * Nên: nơi nào biết mã quyền đang thi hành thì phải hỏi phạm vi THEO MÃ ĐÓ. Mã lấy từ
+   * `req.requiredPermission` do `PermissionGuard` đặt, không gõ lại bằng tay.
+   *
+   * Ngữ nghĩa của phép kiểm là CHUNG với bốn hàm trên (`checkCompany`/`checkSite`) — chỉ
+   * khác chỗ lấy `level`. Tách như vậy để không đẻ ra bản thứ hai của luật phạm vi: hai
+   * bản là hai thứ sẽ lệch nhau, và đó đúng là lớp lỗi mà `common/lifecycle/active.ts`
+   * sinh ra để dẹp.
    */
-  async assertCompany(userId: string | null, companyId: string | null | undefined): Promise<void> {
-    const { subject, level } = await this.load(userId);
+  async assertCompanyFor(
+    userId: string | null,
+    code: string | null | undefined,
+    companyId: string | null | undefined,
+  ): Promise<void> {
+    const { subject, level } = await this.loadFor(userId, code);
+    this.checkCompany(subject, level, companyId);
+  }
+
+  async assertSiteFor(
+    userId: string | null,
+    code: string | null | undefined,
+    cemeteryId: string | null | undefined,
+  ): Promise<void> {
+    const { subject, level } = await this.loadFor(userId, code);
+    this.checkSite(subject, level, cemeteryId);
+  }
+
+  /** Companies visible FOR ONE CODE, or `null` meaning "no restriction". */
+  async visibleCompanyIdsFor(
+    userId: string | null,
+    code: string | null | undefined,
+  ): Promise<string[] | null> {
+    const { subject, level } = await this.loadFor(userId, code);
+    return level === 'GROUP' ? null : (subject.companyIds ?? []);
+  }
+
+  /** Cemeteries a list query must be narrowed to FOR ONE CODE, or `null` when none. */
+  async listSiteFilterFor(
+    userId: string | null,
+    code: string | null | undefined,
+  ): Promise<string[] | null> {
+    const { subject, level } = await this.loadFor(userId, code);
+    return level === 'SITE' ? (subject.siteIds ?? []) : null;
+  }
+
+  /* ---- Luật phạm vi, khai đúng MỘT lần ---- */
+
+  private checkCompany(
+    subject: Subject,
+    level: ScopeLevel,
+    companyId: string | null | undefined,
+  ): void {
     if (level === 'GROUP') {
       return;
     }
@@ -48,14 +107,7 @@ export class ScopeService {
     }
   }
 
-  /* Check a cemetery against the hub — the cemeteries this person actually covers.
-   *
-   * A caller bound at COMPANY level covers every cemetery inside their company, so this
-   * only bites for someone whose reach is meant to stop at specific sites. Being assigned
-   * to no cemetery means reaching none of them, never all of them.
-   */
-  async assertSite(userId: string | null, cemeteryId: string | null | undefined): Promise<void> {
-    const { subject, level } = await this.load(userId);
+  private checkSite(subject: Subject, level: ScopeLevel, cemeteryId: string | null | undefined) {
     // GROUP reaches everything; COMPANY covers every cemetery inside the companies the
     // caller holds, and that company check is a separate call the caller already makes.
     if (level === 'GROUP' || level === 'COMPANY') {
@@ -69,31 +121,29 @@ export class ScopeService {
     }
   }
 
-  /** Companies the caller may see, or `null` meaning "no restriction". */
-  async visibleCompanyIds(userId: string | null): Promise<string[] | null> {
-    const { subject, level } = await this.load(userId);
-    return level === 'GROUP' ? null : (subject.companyIds ?? []);
-  }
-
-  /* Cemeteries a list query must be narrowed to, or `null` when no narrowing applies.
+  /* Cùng subject, nhưng `level` tính THEO MÃ.
    *
-   * Only a SITE-level caller gets narrowed. A COMPANY-level caller is already bounded by
-   * their company and covers every cemetery in it, so narrowing them by the (empty) hub
-   * would hide their own data.
+   * Thiếu mã là TỪ CHỐI, không phải rơi về mức toàn-người-gọi. Rơi về là fail-open: route
+   * quên khai `@RequirePermission` (hoặc gọi nhầm từ chỗ không đi qua guard) sẽ được kiểm
+   * phạm vi rộng hơn chính nó đáng được — và im lặng. Cùng nếp với guard: không khai thì
+   * không đi qua được.
    */
-  async listSiteFilter(userId: string | null): Promise<string[] | null> {
-    const { subject, level } = await this.load(userId);
-    return level === 'SITE' ? (subject.siteIds ?? []) : null;
-  }
-
-  private async load(userId: string | null): Promise<{ subject: Subject; level: ScopeLevel }> {
+  private async loadFor(
+    userId: string | null,
+    code: string | null | undefined,
+  ): Promise<{ subject: Subject; level: ScopeLevel }> {
     if (userId === null) {
       throw new ForbiddenException('Chưa xác thực');
+    }
+    if (isBlank(code)) {
+      throw new ForbiddenException(
+        'Không xác định được mã quyền đang thi hành — không kiểm được phạm vi',
+      );
     }
     const { scope } = await this.permissions.getEffectiveAccess(userId);
     return {
       subject: { userId, companyIds: scope.companyIds, siteIds: scope.siteIds },
-      level: scope.level,
+      level: await this.permissions.scopeLevelFor(userId, code as string),
     };
   }
 

@@ -25,9 +25,15 @@ import { permissionMatches } from './policy-evaluator';
  * Roles combine by UNION, so nothing narrows a granted right; the rule chain is the only
  * mechanism that can take one away.
  *
- * Still NOT enforced here: which records the caller may touch. This guard answers "may
- * you do this at all", never "may you do this to THAT row" — the scope layer is separate
- * and not wired yet (doc 16 §D.10). Do not read a green guard as record-level control.
+ * KHÔNG thi hành ở đây: caller được chạm vào BẢN GHI NÀO. Guard trả lời "có được làm việc
+ * này không", không bao giờ trả lời "có được làm lên DÒNG ĐÓ không" — đó là việc của
+ * `ScopeService`, và nó phải được gọi ở từng service. Đừng đọc một guard xanh thành kiểm
+ * soát mức bản ghi: guard xanh + service không gọi `ScopeService` = IDOR, và `BurialsService`
+ * đã ở đúng tình trạng đó từ lúc dựng cho tới 27/08/2026.
+ *
+ * Guard có ĐÓNG GÓP một mảnh cho tầng phạm vi: nó ghi mã vừa thi hành vào
+ * `req.requiredPermission`, để `ScopeService` tính mức phạm vi THEO ĐÚNG MÃ ĐÓ thay vì
+ * theo mức rộng nhất mà người này giữ ở đâu đó.
  */
 @Injectable()
 export class PermissionGuard implements CanActivate {
@@ -56,6 +62,11 @@ export class PermissionGuard implements CanActivate {
     if (meta === null) {
       throw new ForbiddenException(`Mã quyền không có trong danh mục: ${required}`);
     }
+    /* Ghi lại mã đang thi hành để tầng phạm vi đọc lại được. Đặt SAU khi đã đối chiếu
+     * danh mục: mã không có trong danh mục thì không phải mã, và để nó lọt xuống dưới là
+     * đưa cho `ScopeService` một chuỗi mà `scopeLevelFor` sẽ trả `NONE` vì lý do khác hẳn
+     * lý do thật. */
+    req.requiredPermission = required;
     const ruling = await this.permissions.evaluateRules(userId, required);
     if (ruling === 'DENY') {
       throw new ForbiddenException(`Bị luật truy cập chặn: ${required}`);

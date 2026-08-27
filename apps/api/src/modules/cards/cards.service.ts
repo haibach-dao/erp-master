@@ -2,6 +2,7 @@ import { ConflictException, Injectable, NotFoundException } from '@nestjs/common
 import { ulid } from 'ulid';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import type { Caller } from '../authorization/caller';
 import { ScopeService } from '../authorization/scope.service';
 import { activeBurial, activeUsageRight } from '../../common/lifecycle/active';
 import type { IssueCardDto } from './cards.dto';
@@ -22,7 +23,7 @@ export class CardsService {
    * người in không cầm `crm.person.view_sensitive` sẽ nhận thẻ có CCCD dạng `079***123`.
    * Che ở đây nữa là che hai lần ở hai chỗ, và hai chỗ thì sẽ có ngày lệch nhau.
    */
-  private async buildCard(customerId: string, actor: string | null) {
+  private async buildCard(customerId: string, caller: Caller) {
     const customer = await this.prisma.customer.findUnique({
       where: { id: customerId },
       include: { person: true },
@@ -30,7 +31,7 @@ export class CardsService {
     if (customer === null) {
       throw new NotFoundException('Không tìm thấy khách hàng');
     }
-    await this.scope.assertCompany(actor, customer.companyId);
+    await this.scope.assertCompanyFor(caller.userId, caller.permission, customer.companyId);
 
     const rights = await this.prisma.graveUsageRight.findMany({
       where: { holderCustomerId: customerId, ...activeUsageRight },
@@ -139,8 +140,8 @@ export class CardsService {
    * bấm Hủy ở hộp thoại in vẫn làm số lần cấp nhảy. `nextPrintNumber` ở đây là DỰ KIẾN,
    * và trường tên nói đúng như vậy.
    */
-  async preview(customerId: string, actor: string | null) {
-    const card = await this.buildCard(customerId, actor);
+  async preview(customerId: string, caller: Caller) {
+    const card = await this.buildCard(customerId, caller);
     return {
       ...card,
       nextPrintNumber: (await this.lastPrintNumber(customerId)) + 1,
@@ -154,8 +155,8 @@ export class CardsService {
    * buộc duy nhất theo (khách, loại thẻ). Hai người cùng bấm cấp thẻ thì một người thua
    * ở tầng CSDL — chứ không phải cả hai cùng cầm "lần 02" trên hai tờ giấy.
    */
-  async issue(customerId: string, dto: IssueCardDto, actor: string | null) {
-    const card = await this.buildCard(customerId, actor);
+  async issue(customerId: string, dto: IssueCardDto, caller: Caller) {
+    const card = await this.buildCard(customerId, caller);
     if (card.companyId === null) {
       throw new ConflictException('Khách hàng chưa gắn công ty quản lý — chưa cấp thẻ được');
     }
@@ -177,14 +178,14 @@ export class CardsService {
           printReason: dto.printReason ?? null,
           approvedBy: dto.approvedBy ?? null,
           approvedTitle: dto.approvedTitle ?? null,
-          issuedBy: actor,
+          issuedBy: caller.userId,
         },
       });
     });
 
     await this.audit.record({
       actorType: 'USER',
-      actorId: actor,
+      actorId: caller.userId,
       action: 'GRAVE_CARD.ISSUED',
       entityType: 'card_print_log',
       entityId: log.id,
@@ -205,16 +206,16 @@ export class CardsService {
    * cấp, không phải cấp lần mới. Không có đường này thì mỗi sự cố máy in đều làm số trên
    * thẻ nhảy, và số đó là thứ khách dùng để đối chứng.
    */
-  async reprint(cardPrintLogId: string, actor: string | null) {
+  async reprint(cardPrintLogId: string, caller: Caller) {
     const log = await this.prisma.cardPrintLog.findUnique({ where: { id: cardPrintLogId } });
     if (log === null) {
       throw new NotFoundException('Không tìm thấy lần cấp thẻ này');
     }
-    await this.scope.assertCompany(actor, log.companyId);
-    const card = await this.buildCard(log.customerId, actor);
+    await this.scope.assertCompanyFor(caller.userId, caller.permission, log.companyId);
+    const card = await this.buildCard(log.customerId, caller);
     await this.audit.record({
       actorType: 'USER',
-      actorId: actor,
+      actorId: caller.userId,
       action: 'GRAVE_CARD.REPRINTED',
       entityType: 'card_print_log',
       entityId: log.id,
@@ -231,7 +232,7 @@ export class CardsService {
     };
   }
 
-  async listIssuances(customerId: string, actor: string | null) {
+  async listIssuances(customerId: string, caller: Caller) {
     const customer = await this.prisma.customer.findUnique({
       where: { id: customerId },
       select: { companyId: true },
@@ -239,7 +240,7 @@ export class CardsService {
     if (customer === null) {
       throw new NotFoundException('Không tìm thấy khách hàng');
     }
-    await this.scope.assertCompany(actor, customer.companyId);
+    await this.scope.assertCompanyFor(caller.userId, caller.permission, customer.companyId);
     return this.prisma.cardPrintLog.findMany({
       where: { customerId },
       orderBy: { printNumber: 'desc' },

@@ -3,6 +3,8 @@ import { Prisma } from '@prisma/client';
 import { ulid } from 'ulid';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { ScopeService } from '../authorization/scope.service';
+import type { Caller } from '../authorization/caller';
 import {
   activeBurial,
   activeUsageRight,
@@ -23,7 +25,79 @@ export class BurialsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly scope: ScopeService,
   ) {}
+
+  /* ---- PHẠM VI: hồ sơ an táng thuộc nghĩa trang nào ----
+   *
+   * VÌ SAO CÓ ĐOẠN NÀY (nợ an ninh đo được ở PR #40, chủ doanh nghiệp quyết bịt 27/08/2026):
+   * service này KHÔNG hề tiêm `ScopeService`, và không một route nào của nó kiểm phạm vi.
+   * `burial.record.cancel` cấp cho vai mức `SITE`, nên người phụ trách nghĩa trang A HUỶ
+   * ĐƯỢC hồ sơ ở nghĩa trang B chỉ cần biết id. `verify`, `complete`, `get`, `list` và
+   * `candidates` đã có sẵn cùng lỗ đó từ trước — bịt riêng `cancel` là vá một CA, không
+   * phải vá một LỚP.
+   *
+   * QUYẾT ĐỊNH của chủ doanh nghiệp: chặn theo VAI ĐƯỢC GÁN, không theo chức danh. Ai được
+   * gán thêm vai phụ trách nghĩa trang B thì thao tác được trên B — đó chính là ngữ nghĩa
+   * sẵn có của `authz.scope_assignments` (hub người ↔ nghĩa trang, quyết định Q15), nên
+   * không cần cơ chế mới, chỉ cần GỌI nó.
+   *
+   * VƯỚNG, và cách gỡ: `BurialRecord` không mang `companyId` lẫn `cemeteryId`. Hai cột đó
+   * nằm ở `GravePlot`. Nên mọi đường phải quy về phần mộ trước rồi mới hỏi phạm vi. CỐ Ý
+   * KHÔNG thêm hai cột đó vào `burial_records`: chép lại là đẻ ra hai bản của một sự thật,
+   * và bản chép sẽ lệch vào ngày một phần mộ được sửa lại thuộc nghĩa trang khác.
+   */
+
+  /** Phạm vi cho một PHẦN MỘ đã biết id. Trả lại mộ để nơi gọi không phải hỏi lần nữa. */
+  private async assertPlotInScope(caller: Caller, gravePlotId: string) {
+    const plot = await this.prisma.gravePlot.findUnique({
+      where: { id: gravePlotId },
+      select: { id: true, companyId: true, cemeteryId: true, plotCode: true },
+    });
+    if (plot === null) {
+      throw new NotFoundException('Không tìm thấy vị trí mộ');
+    }
+    /* Hỏi phạm vi THEO MÃ QUYỀN đang thi hành, không theo mức rộng nhất người này giữ ở
+     * đâu đó. Xem chú thích dài ở `ScopeService.assertCompanyFor`: người vừa giữ vai kiểm
+     * toán toàn tập đoàn (CHỈ ĐỌC) vừa giữ vai quản lý nghĩa trang A sẽ được coi là GROUP
+     * nếu hỏi theo mức toàn-người-gọi, và huỷ được hồ sơ ở nghĩa trang B. */
+    await this.scope.assertCompanyFor(caller.userId, caller.permission, plot.companyId);
+    await this.scope.assertSiteFor(caller.userId, caller.permission, plot.cemeteryId);
+    return plot;
+  }
+
+  /** Phạm vi cho một HỒ SƠ AN TÁNG đã biết id — quy về phần mộ của nó. */
+  private async assertRecordInScope(caller: Caller, burialId: string) {
+    const burial = await this.prisma.burialRecord.findUnique({ where: { id: burialId } });
+    if (burial === null) {
+      throw new NotFoundException('Không tìm thấy hồ sơ an táng');
+    }
+    await this.assertPlotInScope(caller, burial.gravePlotId);
+    return burial;
+  }
+
+  /* Mệnh đề `where` bó một truy vấn DANH SÁCH vào các phần mộ caller với tới được.
+   *
+   * `null` = không phải bó gì (caller mức GROUP trên mã này). Ngược lại là một danh sách
+   * id phần mộ — kể cả DANH SÁCH RỖNG, và rỗng phải giữ nguyên nghĩa "không với tới mộ
+   * nào" chứ không được hiểu thành "không lọc". Đó là chỗ một `if (ids.length)` vô tình
+   * biến phép bó thành phép mở toang.
+   */
+  private async plotIdsInScope(caller: Caller): Promise<string[] | null> {
+    const companies = await this.scope.visibleCompanyIdsFor(caller.userId, caller.permission);
+    const sites = await this.scope.listSiteFilterFor(caller.userId, caller.permission);
+    if (companies === null && sites === null) {
+      return null;
+    }
+    const plots = await this.prisma.gravePlot.findMany({
+      where: {
+        ...(companies === null ? {} : { companyId: { in: companies } }),
+        ...(sites === null ? {} : { cemeteryId: { in: sites } }),
+      },
+      select: { id: true },
+    });
+    return plots.map((p) => p.id);
+  }
 
   /* Lập hồ sơ người mất.
    *
@@ -31,6 +105,15 @@ export class BurialsService {
    * diện: hệ từng được dựng theo giả định ngược lại, và hậu quả là 3 người đã được an
    * táng nhưng màn hình khách hàng không bao giờ thấy họ. Một quy ước chỉ sống ở giao
    * diện là quy ước sẽ bị đường khác đi vòng qua.
+   *
+   * CỐ Ý KHÔNG KIỂM PHẠM VI Ở ĐÂY, và đây là một LỖ CÒN MỞ chứ không phải một kết luận:
+   * hàm này neo vào NHÂN THÂN, không neo vào phần mộ, nên không có `cemeteryId` nào để
+   * hỏi. Neo theo công ty của hồ sơ khách hàng thì `Customer.companyId` CHO PHÉP NULL —
+   * kiểm có điều kiện "chỉ khi khác null" chính là fail-open, và mọi khách hàng chưa gán
+   * công ty sẽ thành cửa mở. Đóng đúng cách đòi một quyết định nghiệp vụ chưa có: hồ sơ
+   * người mất thuộc phạm vi của ai, khi bản thân `Person` là dữ liệu LIÊN CÔNG TY.
+   * Hệ quả đang chấp nhận: ai giữ `burial.deceased.create` ghi nhận được "đã mất" cho bất
+   * kỳ nhân thân nào trong hệ. Đã nêu để quyết, KHÔNG được đọc thành "đã bịt".
    */
   async createDeceased(dto: CreateDeceasedDto) {
     const person = await this.prisma.person.findUnique({
@@ -244,7 +327,11 @@ export class BurialsService {
     };
   }
 
-  async burialCandidates(gravePlotId: string) {
+  async burialCandidates(gravePlotId: string, caller: Caller) {
+    /* Danh sách này in ra HỌ TÊN người đã mất và quan hệ nhân thân của họ với chủ mộ —
+     * dữ liệu cá nhân (NĐ 13/2023). Không bó phạm vi thì bất kỳ ai giữ `burial.record.view`
+     * đọc được thân nhân của mọi chủ mộ ở mọi nghĩa trang, chỉ cần một id mộ. */
+    await this.assertPlotInScope(caller, gravePlotId);
     const right = await this.prisma.graveUsageRight.findFirst({
       where: { gravePlotId, ...activeUsageRight },
       orderBy: { createdAt: 'desc' },
@@ -401,7 +488,11 @@ export class BurialsService {
     );
   }
 
-  async createBurial(dto: CreateBurialDto, actor: string | null) {
+  async createBurial(dto: CreateBurialDto, caller: Caller) {
+    /* Phạm vi TRƯỚC mọi phép kiểm nghiệp vụ. Kiểm sau là rò rỉ: "Mộ đang Available, cần
+     * phân bổ trước" nói cho người ngoài phạm vi biết mộ đó có thật và đang ở trạng thái
+     * nào — một câu trả lời họ không được quyền có. */
+    await this.assertPlotInScope(caller, dto.gravePlotId);
     const { plotStatus, cap } = await this.effectiveCapacity(dto.gravePlotId);
     if (plotStatus !== 'Allocated' && plotStatus !== 'Occupied') {
       throw new ConflictException(
@@ -449,7 +540,7 @@ export class BurialsService {
     }
     await this.audit.record({
       actorType: 'USER',
-      actorId: actor,
+      actorId: caller.userId,
       action: 'BURIAL.CREATED',
       entityType: 'burial_record',
       entityId: burial.id,
@@ -464,11 +555,8 @@ export class BurialsService {
     return burial;
   }
 
-  async verify(id: string, actor: string | null) {
-    const burial = await this.prisma.burialRecord.findUnique({ where: { id } });
-    if (burial === null) {
-      throw new NotFoundException('Không tìm thấy hồ sơ an táng');
-    }
+  async verify(id: string, caller: Caller) {
+    const burial = await this.assertRecordInScope(caller, id);
     if (burial.status !== 'Draft') {
       throw new ConflictException(`Không thể xác minh ở trạng thái ${burial.status}`);
     }
@@ -478,7 +566,7 @@ export class BurialsService {
     });
     await this.audit.record({
       actorType: 'USER',
-      actorId: actor,
+      actorId: caller.userId,
       action: 'BURIAL.VERIFIED',
       entityType: 'burial_record',
       entityId: id,
@@ -487,11 +575,8 @@ export class BurialsService {
   }
 
   // Complete a burial → plot becomes Occupied (re-checks capacity). Blueprint M4.
-  async complete(id: string, actor: string | null) {
-    const burial = await this.prisma.burialRecord.findUnique({ where: { id } });
-    if (burial === null) {
-      throw new NotFoundException('Không tìm thấy hồ sơ an táng');
-    }
+  async complete(id: string, caller: Caller) {
+    const burial = await this.assertRecordInScope(caller, id);
     if (burial.status !== 'Verified' && burial.status !== 'Scheduled') {
       throw new ConflictException(
         `Chỉ hoàn tất hồ sơ đã Verified/Scheduled (đang ${burial.status})`,
@@ -528,7 +613,7 @@ export class BurialsService {
             fromStatus: plot.status,
             toStatus: 'Occupied',
             reason: `burial ${id} completed`,
-            changedBy: actor,
+            changedBy: caller.userId,
           },
         });
       }
@@ -538,7 +623,7 @@ export class BurialsService {
     // Audit outside the transaction (AuditService opens its own tx).
     await this.audit.record({
       actorType: 'USER',
-      actorId: actor,
+      actorId: caller.userId,
       action: 'BURIAL.COMPLETED',
       entityType: 'burial_record',
       entityId: id,
@@ -560,11 +645,8 @@ export class BurialsService {
    * partial unique index giữ cốt. Nhả cốt là HỆ QUẢ của trạng thái, không phải một lệnh
    * riêng; làm bằng lệnh riêng là mở đường cho hai chỗ nói khác nhau về cùng một cốt.
    */
-  async cancel(id: string, dto: CancelBurialDto, actor: string | null) {
-    const burial = await this.prisma.burialRecord.findUnique({ where: { id } });
-    if (burial === null) {
-      throw new NotFoundException('Không tìm thấy hồ sơ an táng');
-    }
+  async cancel(id: string, dto: CancelBurialDto, caller: Caller) {
+    const burial = await this.assertRecordInScope(caller, id);
     /* Chặn theo DANH SÁCH trạng thái huỷ được, không theo phép loại trừ từng cái. Viết
      * `!== 'Completed'` là bỏ ngỏ mọi trạng thái được thêm về sau — chúng sẽ mặc nhiên huỷ
      * được mà không ai quyết định điều đó. */
@@ -593,7 +675,7 @@ export class BurialsService {
      * `Available` là dựa vào một suy luận sai và sẽ xoá mất trạng thái do hợp đồng đặt. */
     await this.audit.record({
       actorType: 'USER',
-      actorId: actor,
+      actorId: caller.userId,
       action: 'BURIAL.CANCELLED',
       entityType: 'burial_record',
       entityId: id,
@@ -607,17 +689,39 @@ export class BurialsService {
     return updated;
   }
 
-  get(id: string) {
+  /* ĐỌC cũng phải bó phạm vi, không riêng GHI.
+   *
+   * Hồ sơ an táng mang tên người mất, ngày mất, mộ nào cốt nào — đọc được hồ sơ ở nghĩa
+   * trang mình không phụ trách đã là rò rỉ dữ liệu cá nhân, chưa cần sửa gì. Và đây còn là
+   * bước DÒ trước khi huỷ: không bó `get` thì người ta vẫn dò ra id để thử `cancel`.
+   */
+  async get(id: string, caller: Caller) {
+    await this.assertRecordInScope(caller, id);
     return this.prisma.burialRecord.findUnique({
       where: { id },
       include: { deceased: { include: { person: { select: { id: true, fullName: true } } } } },
     });
   }
 
-  list(gravePlotId?: string, status?: string) {
+  /* Danh sách hồ sơ an táng, đã bó vào phần mộ caller với tới được.
+   *
+   * Hỏi một mộ cụ thể thì TỪ CHỐI (403) nếu ngoài phạm vi, chứ không trả mảng rỗng: rỗng
+   * nói "ở đây không có gì", một câu khác hẳn và gây hiểu nhầm — cùng lý do đã ghi ở đầu
+   * `ScopeService`. Hỏi không kèm mộ thì BÓ danh sách, vì ở đó không có bản ghi cụ thể nào
+   * để mà từ chối.
+   */
+  async list(caller: Caller, gravePlotId?: string, status?: string) {
+    if (gravePlotId !== undefined) {
+      await this.assertPlotInScope(caller, gravePlotId);
+      return this.prisma.burialRecord.findMany({
+        where: { gravePlotId, ...(status !== undefined ? { status } : {}) },
+        orderBy: { createdAt: 'desc' },
+      });
+    }
+    const plotIds = await this.plotIdsInScope(caller);
     return this.prisma.burialRecord.findMany({
       where: {
-        ...(gravePlotId !== undefined ? { gravePlotId } : {}),
+        ...(plotIds === null ? {} : { gravePlotId: { in: plotIds } }),
         ...(status !== undefined ? { status } : {}),
       },
       orderBy: { createdAt: 'desc' },

@@ -1,8 +1,71 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import { ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { BurialsService } from './burials.service';
 import type { PrismaService } from '../../prisma/prisma.service';
 import type { AuditService } from '../audit/audit.service';
+import type { ScopeService } from '../authorization/scope.service';
+import type { Caller } from '../authorization/caller';
+
+/* Caller mang theo MÃ QUYỀN đang thi hành, không chỉ userId. Mỗi test dùng đúng mã của
+ * route mình đang thử — viết một mã dùng chung cho mọi test là bỏ mất chính thứ đáng
+ * kiểm: phạm vi được tính THEO MÃ. */
+const CALLER_CREATE: Caller = { userId: 'u1', permission: 'burial.record.create' };
+const CALLER_VERIFY: Caller = { userId: 'u1', permission: 'burial.record.verify' };
+const CALLER_COMPLETE: Caller = { userId: 'u1', permission: 'burial.record.complete' };
+const CALLER_CANCEL: Caller = { userId: 'u1', permission: 'burial.record.cancel' };
+const CALLER_VIEW: Caller = { userId: 'u1', permission: 'burial.record.view' };
+
+const CEMETERY_A = 'nt-A';
+const CEMETERY_B = 'nt-B';
+const COMPANY = 'cty-1';
+
+/* `ScopeService` giả.
+ *
+ * `allowedSites = null` nghĩa là không bó gì (caller mức GROUP/COMPANY trên mã đó). Một
+ * mảng nghĩa là chỉ với tới đúng những nghĩa trang đó — và mảng RỖNG phải giữ nguyên nghĩa
+ * "không với tới nghĩa trang nào", không được hiểu thành "không lọc".
+ *
+ * Giả lập ở mức NGỮ NGHĨA chứ không trả cứng `undefined`: trả cứng thì test vẫn xanh kể cả
+ * khi service quên truyền `caller.permission` xuống, mà đó chính là điều đáng kiểm nhất.
+ */
+function scopeStub(opts: { allowedSites?: string[] | null; allowedCompanies?: string[] | null } = {}) {
+  const { allowedSites = null, allowedCompanies = null } = opts;
+  const seen: { code: string | null; siteId?: string | null; companyId?: string | null }[] = [];
+  const assertSiteFor = vi.fn((_u: string | null, code: string | null, siteId: string | null) => {
+    seen.push({ code, siteId });
+    if (code === null || code === undefined) {
+      return Promise.reject(new ForbiddenException('Không xác định được mã quyền đang thi hành'));
+    }
+    if (allowedSites !== null && !allowedSites.includes(siteId ?? '')) {
+      return Promise.reject(new ForbiddenException('Ngoài phạm vi được gán'));
+    }
+    return Promise.resolve();
+  });
+  const assertCompanyFor = vi.fn(
+    (_u: string | null, code: string | null, companyId: string | null) => {
+      seen.push({ code, companyId });
+      if (code === null || code === undefined) {
+        return Promise.reject(new ForbiddenException('Không xác định được mã quyền đang thi hành'));
+      }
+      if (allowedCompanies !== null && !allowedCompanies.includes(companyId ?? '')) {
+        return Promise.reject(new ForbiddenException('Ngoài phạm vi được gán'));
+      }
+      return Promise.resolve();
+    },
+  );
+  const scope = {
+    assertSiteFor,
+    assertCompanyFor,
+    visibleCompanyIdsFor: vi.fn().mockResolvedValue(allowedCompanies),
+    listSiteFilterFor: vi.fn().mockResolvedValue(allowedSites),
+  } as unknown as ScopeService;
+  return { scope, seen, assertSiteFor, assertCompanyFor };
+}
+
+/** Mộ dùng cho mọi test — nằm ở nghĩa trang A. */
+function plotRow(cemeteryId = CEMETERY_A) {
+  return { id: PLOT, companyId: COMPANY, cemeteryId, plotCode: 'A-01-01' };
+}
 
 const OWNER_PERSON = 'person-owner';
 const DECEASED_PERSON = 'person-deceased';
@@ -63,6 +126,8 @@ function build(
     deceasedMissing?: boolean;
     takenSlot?: number | null;
     alreadyBuriedAt?: string | null;
+    cemeteryId?: string;
+    allowedSites?: string[] | null;
   } = {},
 ) {
   const {
@@ -76,6 +141,8 @@ function build(
     deceasedMissing = false,
     takenSlot = null,
     alreadyBuriedAt = null,
+    cemeteryId = CEMETERY_A,
+    allowedSites = null,
   } = opts;
 
   const record = vi.fn().mockResolvedValue(undefined);
@@ -86,7 +153,7 @@ function build(
   const prisma = {
     gravePlot: {
       findUnique: vi.fn().mockResolvedValue({
-        id: PLOT,
+        ...plotRow(cemeteryId),
         status: plotStatus,
         capacityOverride: null,
         graveType: { defaultCapacity: capacity },
@@ -139,8 +206,9 @@ function build(
     },
   } as unknown as PrismaService;
 
-  const svc = new BurialsService(prisma, { record } as unknown as AuditService);
-  return { svc, record, create };
+  const { scope, assertSiteFor } = scopeStub({ allowedSites });
+  const svc = new BurialsService(prisma, { record } as unknown as AuditService, scope);
+  return { svc, record, create, assertSiteFor };
 }
 
 const dto = { gravePlotId: PLOT, deceasedPersonId: DECEASED };
@@ -149,7 +217,7 @@ describe('an táng — phải có quan hệ với chủ mộ', () => {
   it('chụp lại đúng mã quan hệ khi người mất là con của chủ mộ', async () => {
     const { svc, create } = build({ rels: [rel({ relationshipType: 'CHILD' })] });
 
-    const burial = (await svc.createBurial(dto, 'u1')) as Record<string, unknown>;
+    const burial = (await svc.createBurial(dto, CALLER_CREATE)) as Record<string, unknown>;
 
     expect(burial.relationshipToOwner).toBe('CHILD');
     expect(burial.ownerCustomerId).toBe(OWNER_CUSTOMER);
@@ -160,7 +228,7 @@ describe('an táng — phải có quan hệ với chủ mộ', () => {
     // Không có dòng quan hệ nào — căn cứ là chính danh tính, không phải quan hệ nhân thân.
     const { svc, create } = build({ rels: [], ownerPersonId: DECEASED_PERSON });
 
-    const burial = (await svc.createBurial(dto, 'u1')) as Record<string, unknown>;
+    const burial = (await svc.createBurial(dto, CALLER_CREATE)) as Record<string, unknown>;
 
     expect(burial.relationshipToOwner).toBe('SELF');
     expect(create).toHaveBeenCalledOnce();
@@ -178,7 +246,7 @@ describe('an táng — phải có quan hệ với chủ mộ', () => {
       ],
     });
 
-    const burial = (await svc.createBurial(dto, 'u1')) as Record<string, unknown>;
+    const burial = (await svc.createBurial(dto, CALLER_CREATE)) as Record<string, unknown>;
 
     // PARENT (chủ→mất) quy thành CHILD (mất→chủ). Suy từ reciprocalCode, không tự đặt.
     expect(burial.relationshipToOwner).toBe('CHILD');
@@ -188,14 +256,14 @@ describe('an táng — phải có quan hệ với chủ mộ', () => {
   it('không có quan hệ nào thì chặn, không tạo hồ sơ', async () => {
     const { svc, create } = build({ rels: [] });
 
-    await expect(svc.createBurial(dto, 'u1')).rejects.toThrow(ConflictException);
+    await expect(svc.createBurial(dto, CALLER_CREATE)).rejects.toThrow(ConflictException);
     expect(create).not.toHaveBeenCalled();
   });
 
   it('quan hệ mới khai, chưa xác nhận thì KHÔNG đủ căn cứ đặt cốt', async () => {
     const { svc, create } = build({ rels: [rel({ status: 'Pending' })] });
 
-    await expect(svc.createBurial(dto, 'u1')).rejects.toThrow(ConflictException);
+    await expect(svc.createBurial(dto, CALLER_CREATE)).rejects.toThrow(ConflictException);
     expect(create).not.toHaveBeenCalled();
   });
 
@@ -204,28 +272,28 @@ describe('an táng — phải có quan hệ với chủ mộ', () => {
       rels: [rel({ effectiveTo: new Date('2020-01-01') })],
     });
 
-    await expect(svc.createBurial(dto, 'u1')).rejects.toThrow(ConflictException);
+    await expect(svc.createBurial(dto, CALLER_CREATE)).rejects.toThrow(ConflictException);
     expect(create).not.toHaveBeenCalled();
   });
 
   it('mộ chưa có chủ đứng tên thì chặn — không có gì để đối chiếu quan hệ', async () => {
     const { svc, create } = build({ usageRight: null });
 
-    await expect(svc.createBurial(dto, 'u1')).rejects.toThrow(ConflictException);
+    await expect(svc.createBurial(dto, CALLER_CREATE)).rejects.toThrow(ConflictException);
     expect(create).not.toHaveBeenCalled();
   });
 
   it('mộ do khách hàng TỔ CHỨC đứng tên thì chặn thay vì lặng lẽ bỏ qua luật', async () => {
     const { svc, create } = build({ ownerPersonId: null });
 
-    await expect(svc.createBurial(dto, 'u1')).rejects.toThrow(ConflictException);
+    await expect(svc.createBurial(dto, CALLER_CREATE)).rejects.toThrow(ConflictException);
     expect(create).not.toHaveBeenCalled();
   });
 
   it('không tìm thấy hồ sơ người mất thì báo 404, không tạo hồ sơ', async () => {
     const { svc, create } = build({ deceasedMissing: true });
 
-    await expect(svc.createBurial(dto, 'u1')).rejects.toThrow(NotFoundException);
+    await expect(svc.createBurial(dto, CALLER_CREATE)).rejects.toThrow(NotFoundException);
     expect(create).not.toHaveBeenCalled();
   });
 });
@@ -234,7 +302,7 @@ describe('an táng — một phần mộ chứa nhiều cốt', () => {
   it('cho phép đặt cốt thứ hai khi sức chứa là 2', async () => {
     const { svc, create } = build({ capacity: 2, activeBurials: 1 });
 
-    await svc.createBurial(dto, 'u1');
+    await svc.createBurial(dto, CALLER_CREATE);
 
     expect(create).toHaveBeenCalledOnce();
   });
@@ -242,14 +310,14 @@ describe('an táng — một phần mộ chứa nhiều cốt', () => {
   it('chặn khi đã kín sức chứa, và chặn TRƯỚC khi xét quan hệ', async () => {
     const { svc, create } = build({ capacity: 2, activeBurials: 2 });
 
-    await expect(svc.createBurial(dto, 'u1')).rejects.toThrow(/Vượt sức chứa mộ \(2\/2\)/);
+    await expect(svc.createBurial(dto, CALLER_CREATE)).rejects.toThrow(/Vượt sức chứa mộ \(2\/2\)/);
     expect(create).not.toHaveBeenCalled();
   });
 
   it('mộ chưa được phân bổ hợp đồng thì chưa an táng được', async () => {
     const { svc, create } = build({ plotStatus: 'Available' });
 
-    await expect(svc.createBurial(dto, 'u1')).rejects.toThrow(ConflictException);
+    await expect(svc.createBurial(dto, CALLER_CREATE)).rejects.toThrow(ConflictException);
     expect(create).not.toHaveBeenCalled();
   });
 });
@@ -258,7 +326,7 @@ describe('an táng — dấu vết kiểm toán', () => {
   it('ghi audit kèm chủ mộ và quan hệ, để hồ sơ kể được căn cứ lúc đó', async () => {
     const { svc, record } = build({ rels: [rel({ relationshipType: 'SPOUSE' })] });
 
-    await svc.createBurial(dto, 'u1');
+    await svc.createBurial(dto, CALLER_CREATE);
 
     expect(record).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -280,7 +348,7 @@ describe('an táng — chọn cốt trong phần mộ', () => {
   it('ghi đúng số cốt vào hồ sơ', async () => {
     const { svc, create } = build({ capacity: 4 });
 
-    const burial = (await svc.createBurial({ ...dto, slotNumber: 3 }, 'u1')) as Record<
+    const burial = (await svc.createBurial({ ...dto, slotNumber: 3 }, CALLER_CREATE)) as Record<
       string,
       unknown
     >;
@@ -292,7 +360,7 @@ describe('an táng — chọn cốt trong phần mộ', () => {
   it('không chọn cốt vẫn tạo được — hồ sơ chưa xác định vị trí là chuyện có thật', async () => {
     const { svc, create } = build();
 
-    const burial = (await svc.createBurial(dto, 'u1')) as Record<string, unknown>;
+    const burial = (await svc.createBurial(dto, CALLER_CREATE)) as Record<string, unknown>;
 
     expect(burial.slotNumber).toBeNull();
     expect(create).toHaveBeenCalledOnce();
@@ -301,14 +369,14 @@ describe('an táng — chọn cốt trong phần mộ', () => {
   it('cốt vượt sức chứa thì chặn, câu lỗi nói rõ mộ có mấy cốt', async () => {
     const { svc, create } = build({ capacity: 2 });
 
-    await expect(svc.createBurial({ ...dto, slotNumber: 3 }, 'u1')).rejects.toThrow(/chỉ có 2 cốt/);
+    await expect(svc.createBurial({ ...dto, slotNumber: 3 }, CALLER_CREATE)).rejects.toThrow(/chỉ có 2 cốt/);
     expect(create).not.toHaveBeenCalled();
   });
 
   it('cốt đã có người thì chặn, và nói tên người đang nằm ở đó', async () => {
     const { svc, create } = build({ capacity: 4, takenSlot: 2 });
 
-    await expect(svc.createBurial({ ...dto, slotNumber: 2 }, 'u1')).rejects.toThrow(
+    await expect(svc.createBurial({ ...dto, slotNumber: 2 }, CALLER_CREATE)).rejects.toThrow(
       /Cốt số 2 đã có Người Đã Nằm/,
     );
     expect(create).not.toHaveBeenCalled();
@@ -317,7 +385,7 @@ describe('an táng — chọn cốt trong phần mộ', () => {
   it('cốt khác trong cùng mộ vẫn nhận được', async () => {
     const { svc, create } = build({ capacity: 4, takenSlot: 2 });
 
-    await svc.createBurial({ ...dto, slotNumber: 3 }, 'u1');
+    await svc.createBurial({ ...dto, slotNumber: 3 }, CALLER_CREATE);
 
     expect(create).toHaveBeenCalledOnce();
   });
@@ -325,7 +393,7 @@ describe('an táng — chọn cốt trong phần mộ', () => {
   it('audit ghi cả số cốt — hồ sơ phải kể được người này nằm ở đâu', async () => {
     const { svc, record } = build({ capacity: 4 });
 
-    await svc.createBurial({ ...dto, slotNumber: 1 }, 'u1');
+    await svc.createBurial({ ...dto, slotNumber: 1 }, CALLER_CREATE);
 
     expect(record).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -367,7 +435,11 @@ describe('hồ sơ người mất — phải là khách hàng trước', () => {
         update,
       },
     } as unknown as PrismaService;
-    const svc = new BurialsService(prisma, { record: vi.fn() } as unknown as AuditService);
+    const svc = new BurialsService(
+      prisma,
+      { record: vi.fn() } as unknown as AuditService,
+      scopeStub().scope,
+    );
     return { svc, create, update };
   }
 
@@ -418,7 +490,7 @@ describe('an táng — không an táng một người hai lần', () => {
   it('người đã nằm ở mộ khác thì chặn, và NÓI RÕ đang nằm ở đâu', async () => {
     const { svc, create } = build({ alreadyBuriedAt: 'plot-khac' });
 
-    await expect(svc.createBurial(dto, 'u1')).rejects.toThrow(
+    await expect(svc.createBurial(dto, CALLER_CREATE)).rejects.toThrow(
       /đã được an táng ở phần mộ.*cốt 2.*Huỷ hồ sơ an táng cũ/s,
     );
     expect(create).not.toHaveBeenCalled();
@@ -427,7 +499,7 @@ describe('an táng — không an táng một người hai lần', () => {
   it('người chưa nằm ở đâu thì an táng được', async () => {
     const { svc, create } = build({ alreadyBuriedAt: null });
 
-    await svc.createBurial(dto, 'u1');
+    await svc.createBurial(dto, CALLER_CREATE);
 
     expect(create).toHaveBeenCalledOnce();
   });
@@ -502,6 +574,7 @@ function buildCandidates(
     : DEC_POOL;
 
   const prisma = {
+    gravePlot: { findUnique: vi.fn().mockResolvedValue(plotRow()) },
     graveUsageRight: { findFirst: vi.fn().mockResolvedValue(usageRight) },
     customer: {
       findUnique: vi.fn().mockResolvedValue({
@@ -575,14 +648,18 @@ function buildCandidates(
     },
   } as unknown as PrismaService;
 
-  return new BurialsService(prisma, { record: vi.fn() } as unknown as AuditService);
+  return new BurialsService(
+    prisma,
+    { record: vi.fn() } as unknown as AuditService,
+    scopeStub().scope,
+  );
 }
 
 const names = (r: { candidates: { fullName: string }[] }) => r.candidates.map((c) => c.fullName);
 
 describe('danh sách ứng viên an táng', () => {
   it('người đã mất có quan hệ với chủ mộ thì được chọn', async () => {
-    const r = await buildCandidates().burialCandidates(PLOT);
+    const r = await buildCandidates().burialCandidates(PLOT, CALLER_VIEW);
     expect(r.blocked).toBeNull();
     expect(names(r)).toEqual(['Con Đã Mất']);
     expect(r.candidates[0]?.relationshipType).toBe('CHILD');
@@ -590,21 +667,21 @@ describe('danh sách ứng viên an táng', () => {
 
   it('người KHÔNG có quan hệ với chủ mộ thì không được chọn, dù đã mất', async () => {
     // `Người Lạ` đã mất và chưa nằm ở đâu — chỉ thiếu mỗi quan hệ.
-    const r = await buildCandidates().burialCandidates(PLOT);
+    const r = await buildCandidates().burialCandidates(PLOT, CALLER_VIEW);
     expect(names(r)).not.toContain('Người Lạ');
   });
 
   it('người có quan hệ nhưng CÒN SỐNG thì không được chọn', async () => {
     const r = await buildCandidates({
       rels: [rel({ sourcePersonId: 'person-alive' })],
-    }).burialCandidates(PLOT);
+    }).burialCandidates(PLOT, CALLER_VIEW);
     expect(r.candidates).toHaveLength(0);
   });
 
   it('người ĐÃ nằm ở cốt khác thì không được chọn lại', async () => {
     const r = await buildCandidates({
       rels: [rel({ sourcePersonId: BURIED_PERSON })],
-    }).burialCandidates(PLOT);
+    }).burialCandidates(PLOT, CALLER_VIEW);
     expect(names(r)).not.toContain('Đã Nằm Cốt');
     expect(r.candidates).toHaveLength(0);
   });
@@ -612,26 +689,26 @@ describe('danh sách ứng viên an táng', () => {
   it('quan hệ CHƯA xác nhận thì không tính', async () => {
     const r = await buildCandidates({
       rels: [rel({ status: 'Pending' })],
-    }).burialCandidates(PLOT);
+    }).burialCandidates(PLOT, CALLER_VIEW);
     expect(r.candidates).toHaveLength(0);
   });
 
   it('quan hệ đã HẾT hiệu lực thì không tính', async () => {
     const r = await buildCandidates({
       rels: [rel({ effectiveTo: new Date('2020-01-01') })],
-    }).burialCandidates(PLOT);
+    }).burialCandidates(PLOT, CALLER_VIEW);
     expect(r.candidates).toHaveLength(0);
   });
 
   it('lấy quan hệ theo CẢ HAI chiều — chủ mộ đứng ở vế nào cũng được', async () => {
     const nguoc = await buildCandidates({
       rels: [rel({ sourcePersonId: OWNER_PERSON, targetPersonId: DECEASED_PERSON })],
-    }).burialCandidates(PLOT);
+    }).burialCandidates(PLOT, CALLER_VIEW);
     expect(names(nguoc)).toEqual(['Con Đã Mất']);
   });
 
   it('chính chủ mộ đã mất thì tự an táng được, đánh dấu SELF', async () => {
-    const r = await buildCandidates({ ownerDeceased: true }).burialCandidates(PLOT);
+    const r = await buildCandidates({ ownerDeceased: true }).burialCandidates(PLOT, CALLER_VIEW);
     const self = r.candidates.find((c) => c.isOwner);
     expect(self?.fullName).toBe('Chủ Mộ');
     expect(self?.relationshipType).toBe('SELF');
@@ -654,7 +731,7 @@ describe('danh sách ứng viên an táng', () => {
           relationshipType: 'CHILD',
         }),
       ],
-    }).burialCandidates(PLOT);
+    }).burialCandidates(PLOT, CALLER_VIEW);
     expect(names(r)).toEqual(['Con Đã Mất']);
     expect(r.candidates[0]?.relationshipType).toBe('PARENT');
   });
@@ -669,18 +746,18 @@ describe('danh sách ứng viên an táng', () => {
         }),
       ],
       reciprocalOf: {}, // danh mục KHÔNG có mã đối ứng cho CHILD
-    }).burialCandidates(PLOT);
+    }).burialCandidates(PLOT, CALLER_VIEW);
     expect(r.candidates).toHaveLength(0);
   });
 
   it('mộ chưa có chủ thì trả LÝ DO, không phải danh sách rỗng suông', async () => {
-    const r = await buildCandidates({ usageRight: null }).burialCandidates(PLOT);
+    const r = await buildCandidates({ usageRight: null }).burialCandidates(PLOT, CALLER_VIEW);
     expect(r.blocked).toMatch(/chưa có chủ/);
     expect(r.candidates).toHaveLength(0);
   });
 
   it('mộ do tổ chức đứng tên thì trả lý do — chưa có quy tắc nhân thân', async () => {
-    const r = await buildCandidates({ ownerPerson: null }).burialCandidates(PLOT);
+    const r = await buildCandidates({ ownerPerson: null }).burialCandidates(PLOT, CALLER_VIEW);
     expect(r.blocked).toMatch(/tổ chức/);
   });
 });
@@ -693,7 +770,10 @@ describe('danh sách ứng viên an táng', () => {
  * sơ khách hàng.
  */
 describe('huỷ hồ sơ an táng', () => {
-  function buildCancel(status: string | null) {
+  function buildCancel(
+    status: string | null,
+    scopeOpts: { allowedSites?: string[] | null; cemeteryId?: string } = {},
+  ) {
     const record = vi.fn().mockResolvedValue(undefined);
     /* `update` trả `{ id, ...data }` chứ không trả cứng: test phải đọc được TRẠNG THÁI đã
      * ghi. Trả cứng thì service ghi nhầm trạng thái mà test vẫn xanh. */
@@ -713,9 +793,17 @@ describe('huỷ hồ sơ an táng', () => {
           ),
         update,
       },
+      /* Hồ sơ an táng KHÔNG mang `cemeteryId` — phải đi vòng qua phần mộ. Mock phải có
+       * bảng mộ, nếu không phép kiểm phạm vi không có gì để hỏi. */
+      gravePlot: {
+        findUnique: vi.fn().mockResolvedValue(plotRow(scopeOpts.cemeteryId ?? CEMETERY_A)),
+      },
     } as unknown as PrismaService;
-    const svc = new BurialsService(prisma, { record } as unknown as AuditService);
-    return { svc, update, record };
+    const { scope, assertSiteFor } = scopeStub({
+      allowedSites: scopeOpts.allowedSites ?? null,
+    });
+    const svc = new BurialsService(prisma, { record } as unknown as AuditService, scope);
+    return { svc, update, record, assertSiteFor };
   }
 
   const dtoCancel = { reason: 'nhập nhầm người' };
@@ -723,7 +811,7 @@ describe('huỷ hồ sơ an táng', () => {
   it.each(['Draft', 'Verified', 'Scheduled'])('huỷ được hồ sơ đang %s', async (status) => {
     const { svc, update } = buildCancel(status);
 
-    const res = (await svc.cancel('br-1', dtoCancel, 'u1')) as Record<string, unknown>;
+    const res = (await svc.cancel('br-1', dtoCancel, CALLER_CANCEL)) as Record<string, unknown>;
 
     expect(res.status).toBe('Cancelled');
     expect(res.cancelReason).toBe('nhập nhầm người');
@@ -739,14 +827,14 @@ describe('huỷ hồ sơ an táng', () => {
   it('KHÔNG huỷ được hồ sơ đã HOÀN TẤT, và nói rõ phải làm thủ tục gì', async () => {
     const { svc, update } = buildCancel('Completed');
 
-    await expect(svc.cancel('br-1', dtoCancel, 'u1')).rejects.toThrow(/DI DỜI\/CẢI TÁNG/);
+    await expect(svc.cancel('br-1', dtoCancel, CALLER_CANCEL)).rejects.toThrow(/DI DỜI\/CẢI TÁNG/);
     expect(update).not.toHaveBeenCalled();
   });
 
   it('huỷ cái đã huỷ thì từ chối, không ghi đè lý do cũ', async () => {
     const { svc, update } = buildCancel('Cancelled');
 
-    await expect(svc.cancel('br-1', dtoCancel, 'u1')).rejects.toThrow(ConflictException);
+    await expect(svc.cancel('br-1', dtoCancel, CALLER_CANCEL)).rejects.toThrow(ConflictException);
     expect(update).not.toHaveBeenCalled();
   });
 
@@ -758,13 +846,13 @@ describe('huỷ hồ sơ an táng', () => {
   it('trạng thái LẠ thì từ chối, không mặc nhiên cho huỷ', async () => {
     const { svc, update } = buildCancel('Exhumed');
 
-    await expect(svc.cancel('br-1', dtoCancel, 'u1')).rejects.toThrow(ConflictException);
+    await expect(svc.cancel('br-1', dtoCancel, CALLER_CANCEL)).rejects.toThrow(ConflictException);
     expect(update).not.toHaveBeenCalled();
   });
 
   it('không tìm thấy hồ sơ thì 404, không phải 409', async () => {
     const { svc } = buildCancel(null);
-    await expect(svc.cancel('br-1', dtoCancel, 'u1')).rejects.toThrow(NotFoundException);
+    await expect(svc.cancel('br-1', dtoCancel, CALLER_CANCEL)).rejects.toThrow(NotFoundException);
   });
 
   /* Huỷ NHẢ CỐT ra cho người khác, nên nhật ký phải giữ được cốt nào vừa được nhả — nếu
@@ -772,7 +860,7 @@ describe('huỷ hồ sơ an táng', () => {
   it('nhật ký giữ đủ cốt vừa nhả, trạng thái cũ, và lý do', async () => {
     const { svc, record } = buildCancel('Verified');
 
-    await svc.cancel('br-1', dtoCancel, 'u1');
+    await svc.cancel('br-1', dtoCancel, CALLER_CANCEL);
 
     expect(record).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -787,5 +875,145 @@ describe('huỷ hồ sơ an táng', () => {
         afterData: expect.objectContaining({ reason: 'nhập nhầm người' }),
       }),
     );
+  });
+});
+
+/* ---- PHẠM VI: người phụ trách nghĩa trang A không chạm được nghĩa trang B ----
+ *
+ * Nợ an ninh đo được ở PR #40, chủ doanh nghiệp quyết bịt 27/08/2026. Trước đó
+ * `BurialsService` không hề tiêm `ScopeService`: mọi route của nó nhận id là làm, bất kể
+ * hồ sơ nằm ở nghĩa trang nào.
+ *
+ * Bộ test này thử CẢ HAI CHIỀU. Chỉ thử chiều xanh ("người phụ trách A làm được ở A") là
+ * ship một cổng luôn-qua: nó vẫn xanh y hệt khi không có phép kiểm nào cả.
+ */
+describe('phạm vi hồ sơ an táng — theo VAI ĐƯỢC GÁN, không theo chức danh', () => {
+  const rec = { id: 'br-1', status: 'Draft', gravePlotId: PLOT, slotNumber: 2, version: 0 };
+
+  function buildScoped(opts: { allowedSites: string[] | null; cemeteryId?: string }) {
+    const update = vi
+      .fn()
+      .mockImplementation((args: { data: Record<string, unknown> }) =>
+        Promise.resolve({ id: 'br-1', ...args.data }),
+      );
+    const findMany = vi.fn().mockResolvedValue([]);
+    const prisma = {
+      burialRecord: {
+        findUnique: vi.fn().mockResolvedValue(rec),
+        findMany,
+        update,
+      },
+      gravePlot: {
+        findUnique: vi.fn().mockResolvedValue(plotRow(opts.cemeteryId ?? CEMETERY_A)),
+        /* Mock PHẢI tôn trọng bộ lọc. Trả cứng `[{ id: PLOT }]` thì phép bó phạm vi trông
+         * như đang chạy trong khi thực ra là mock tự trả lời — và test "danh sách rỗng"
+         * sẽ xanh kể cả khi service bó sai. */
+        findMany: vi.fn().mockImplementation((args: { where: Record<string, unknown> }) => {
+          const w = (args.where ?? {}) as {
+            cemeteryId?: { in: string[] };
+            companyId?: { in: string[] };
+          };
+          const plot = plotRow(opts.cemeteryId ?? CEMETERY_A);
+          if (w.cemeteryId !== undefined && !w.cemeteryId.in.includes(plot.cemeteryId)) {
+            return Promise.resolve([]);
+          }
+          if (w.companyId !== undefined && !w.companyId.in.includes(plot.companyId)) {
+            return Promise.resolve([]);
+          }
+          return Promise.resolve([{ id: plot.id }]);
+        }),
+      },
+    } as unknown as PrismaService;
+    const { scope, assertSiteFor } = scopeStub({ allowedSites: opts.allowedSites });
+    const svc = new BurialsService(
+      prisma,
+      { record: vi.fn() } as unknown as AuditService,
+      scope,
+    );
+    return { svc, update, findMany, assertSiteFor, plotFindMany: prisma.gravePlot.findMany };
+  }
+
+  it('CHIỀU ĐỎ: phụ trách nghĩa trang A thì KHÔNG huỷ được hồ sơ ở nghĩa trang B', async () => {
+    const { svc, update } = buildScoped({ allowedSites: [CEMETERY_A], cemeteryId: CEMETERY_B });
+
+    await expect(svc.cancel('br-1', { reason: 'thử' }, CALLER_CANCEL)).rejects.toThrow(
+      ForbiddenException,
+    );
+    // Quan trọng hơn cả loại lỗi: KHÔNG có gì được ghi.
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('CHIỀU XANH: được gán thêm vai phụ trách B thì huỷ được hồ sơ ở B', async () => {
+    // Đúng câu chủ doanh nghiệp nêu: quyền theo VAI ĐƯỢC GÁN, không theo chức danh.
+    const { svc, update } = buildScoped({
+      allowedSites: [CEMETERY_A, CEMETERY_B],
+      cemeteryId: CEMETERY_B,
+    });
+
+    const res = (await svc.cancel('br-1', { reason: 'thử' }, CALLER_CANCEL)) as Record<
+      string,
+      unknown
+    >;
+
+    expect(res.status).toBe('Cancelled');
+    expect(update).toHaveBeenCalledOnce();
+  });
+
+  it('phép kiểm chạy THEO ĐÚNG MÃ QUYỀN của route, không theo mức rộng nhất người đó giữ', async () => {
+    /* Đây là mấu chốt, và là chỗ bản cũ để lọt: người vừa giữ vai kiểm toán toàn tập đoàn
+     * (CHỈ ĐỌC) vừa giữ vai quản lý nghĩa trang A có mức toàn-người-gọi là GROUP. Hỏi phạm
+     * vi theo mức đó thì `assertSite` thoát ngay dòng đầu và họ huỷ được hồ sơ ở B. */
+    const { svc, assertSiteFor } = buildScoped({ allowedSites: [CEMETERY_A] });
+
+    await svc.cancel('br-1', { reason: 'thử' }, CALLER_CANCEL);
+
+    expect(assertSiteFor).toHaveBeenCalledWith('u1', 'burial.record.cancel', CEMETERY_A);
+  });
+
+  it.each([
+    ['verify', (s: BurialsService) => s.verify('br-1', CALLER_VERIFY)],
+    ['complete', (s: BurialsService) => s.complete('br-1', CALLER_COMPLETE)],
+    ['get', (s: BurialsService) => s.get('br-1', CALLER_VIEW)],
+    ['cancel', (s: BurialsService) => s.cancel('br-1', { reason: 'x' }, CALLER_CANCEL)],
+    ['candidates', (s: BurialsService) => s.burialCandidates(PLOT, CALLER_VIEW)],
+    ['list theo mộ', (s: BurialsService) => s.list(CALLER_VIEW, PLOT)],
+  ])('%s cũng bị chặn khi hồ sơ nằm ngoài phạm vi — không riêng cancel', async (_name, call) => {
+    const { svc } = buildScoped({ allowedSites: [CEMETERY_A], cemeteryId: CEMETERY_B });
+
+    await expect(call(svc)).rejects.toThrow(ForbiddenException);
+  });
+
+  it('danh sách KHÔNG kèm mộ thì bị BÓ vào các mộ với tới được, không trả cả hệ', async () => {
+    const { svc, findMany, plotFindMany } = buildScoped({ allowedSites: [CEMETERY_A] });
+
+    await svc.list(CALLER_VIEW);
+
+    expect(plotFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ cemeteryId: { in: [CEMETERY_A] } }) }),
+    );
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ gravePlotId: { in: [PLOT] } }) }),
+    );
+  });
+
+  it('không với tới nghĩa trang nào thì danh sách rỗng, KHÔNG phải mở toang', async () => {
+    /* Mảng rỗng và `null` là hai điều khác nhau: rỗng = "không với tới mộ nào", `null` =
+     * "không phải bó gì". Một `if (ids.length)` đặt nhầm chỗ biến cái thứ nhất thành cái
+     * thứ hai, và phép bó thành phép mở toang — im lặng. */
+    const { svc, findMany } = buildScoped({ allowedSites: [] });
+
+    await svc.list(CALLER_VIEW);
+
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ gravePlotId: { in: [] } }) }),
+    );
+  });
+
+  it('route không đi qua guard (thiếu mã quyền) thì TỪ CHỐI, không rơi về mức rộng nhất', async () => {
+    const { svc } = buildScoped({ allowedSites: [CEMETERY_A] });
+
+    await expect(
+      svc.cancel('br-1', { reason: 'x' }, { userId: 'u1', permission: null }),
+    ).rejects.toThrow(ForbiddenException);
   });
 });

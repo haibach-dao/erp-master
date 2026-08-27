@@ -4,6 +4,7 @@ import type { Request } from 'express';
 import { JwtAuthGuard } from '../iam/guards/jwt-auth.guard';
 import { PermissionGuard } from '../authorization/permission.guard';
 import { RequirePermission } from '../authorization/require-permission.decorator';
+import { callerOf, type Caller } from '../authorization/caller';
 import { MaskUnless } from '../../common/masking/mask.decorator';
 import { ContractsService } from './contracts.service';
 import { AddPartyDto, CreateContractDto, CancelContractDto } from './contracts.dto';
@@ -15,14 +16,14 @@ import { AddPartyDto, CreateContractDto, CancelContractDto } from './contracts.d
 export class ContractsController {
   constructor(private readonly svc: ContractsService) {}
 
-  private actor(req: Request): string | null {
-    return req.user?.userId ?? null;
+  private caller(req: Request): Caller {
+    return callerOf(req);
   }
 
   @Post()
   @RequirePermission('contract.record.create')
   create(@Body() dto: CreateContractDto, @Req() req: Request) {
-    return this.svc.create(dto, this.actor(req));
+    return this.svc.create(dto, this.caller(req));
   }
 
   @Post(':id/parties')
@@ -34,13 +35,13 @@ export class ContractsController {
   @Post(':id/verify')
   @RequirePermission('contract.record.verify')
   verify(@Param('id') id: string, @Req() req: Request) {
-    return this.svc.verify(id, this.actor(req));
+    return this.svc.verify(id, this.caller(req));
   }
 
   @Post(':id/activate')
   @RequirePermission('contract.record.activate')
   activate(@Param('id') id: string, @Req() req: Request) {
-    return this.svc.activate(id, this.actor(req));
+    return this.svc.activate(id, this.caller(req));
   }
 
   /* Huỷ hợp đồng. Mã quyền này có trong danh mục từ đầu nhưng CHƯA từng có endpoint —
@@ -48,7 +49,7 @@ export class ContractsController {
   @Post(':id/cancel')
   @RequirePermission('contract.record.cancel')
   cancel(@Param('id') id: string, @Body() dto: CancelContractDto, @Req() req: Request) {
-    return this.svc.cancel(id, dto, req.user?.userId ?? null);
+    return this.svc.cancel(id, dto, this.caller(req));
   }
 
   @Get(':id')
@@ -67,6 +68,6 @@ export class ContractsController {
     @Query('status') status?: string,
     @Query('gravePlotId') gravePlotId?: string,
   ) {
-    return this.svc.list(companyId, this.actor(req), status, gravePlotId);
+    return this.svc.list(companyId, this.caller(req), status, gravePlotId);
   }
 }

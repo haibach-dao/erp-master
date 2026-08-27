@@ -16,6 +16,7 @@ import type { Request } from 'express';
 import { JwtAuthGuard } from '../iam/guards/jwt-auth.guard';
 import { PermissionGuard } from '../authorization/permission.guard';
 import { RequirePermission } from '../authorization/require-permission.decorator';
+import { callerOf } from '../authorization/caller';
 import { CustomersService } from './customers.service';
 import {
   AddPersonAddressDto,
@@ -25,6 +26,7 @@ import {
   CreateCustomerDto,
   CreatePersonDto,
   CreateRelationshipDto,
+  SearchCustomersDto,
   UpdateCustomerDto,
 } from './customers.dto';
 
@@ -57,10 +59,16 @@ export class CustomersController {
     return this.svc.createCustomer(dto, this.actor(req));
   }
 
+  /* Danh sách + bộ lọc khách hàng. LỌC Ở SERVER, không ở giao diện.
+   *
+   * Nhận cả bộ lọc qua một DTO chứ không nhận từng `@Query` rời: DTO là chỗ danh sách giá
+   * trị hợp lệ được ÉP (giá trị lạ → 400), còn `@Query('x') x?: string` thì nhận bất cứ
+   * chuỗi gì và đẩy xuống service.
+   */
   @Get('customers/search')
   @RequirePermission('crm.customer.search')
-  search(@Query('q') q: string, @Query('deceasedOnly') deceasedOnly?: string) {
-    return this.svc.search(q ?? '', deceasedOnly === 'true');
+  search(@Query() filters: SearchCustomersDto, @Req() req: Request) {
+    return this.svc.search(filters, callerOf(req));
   }
 
   /* PHẢI khai SAU `customers/search`. Express khớp route theo thứ tự đăng ký, nên

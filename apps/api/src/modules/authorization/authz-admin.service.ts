@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { ulid } from 'ulid';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import type { Caller } from './caller';
 import { ScopeService } from './scope.service';
 
 /* Assigning who covers which cemetery — the hub axis, from the admin screen.
@@ -46,12 +47,12 @@ export class AuthzAdminService {
    * administrator bounded to one company could hand out access to another company's
    * sites — widening someone else's reach past their own.
    */
-  async assign(userId: string, cemeteryId: string, actor: string | null) {
+  async assign(userId: string, cemeteryId: string, caller: Caller) {
     const cemetery = await this.prisma.cemetery.findUnique({ where: { id: cemeteryId } });
     if (cemetery === null) {
       throw new NotFoundException('Không tìm thấy nghĩa trang');
     }
-    await this.scope.assertCompany(actor, cemetery.companyId);
+    await this.scope.assertCompanyFor(caller.userId, caller.permission, cemetery.companyId);
 
     const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { id: true } });
     if (user === null) {
@@ -60,13 +61,13 @@ export class AuthzAdminService {
 
     const row = await this.prisma.scopeAssignment.upsert({
       where: { userId_cemeteryId: { userId, cemeteryId } },
-      update: { validTo: null, grantedBy: actor },
-      create: { id: ulid(), userId, cemeteryId, grantedBy: actor },
+      update: { validTo: null, grantedBy: caller.userId },
+      create: { id: ulid(), userId, cemeteryId, grantedBy: caller.userId },
     });
     await this.audit.record({
       companyId: cemetery.companyId,
       actorType: 'USER',
-      actorId: actor,
+      actorId: caller.userId,
       action: 'AUTHZ.SCOPE_ASSIGNED',
       entityType: 'scope_assignment',
       entityId: row.id,
@@ -82,7 +83,7 @@ export class AuthzAdminService {
    * last month" is exactly the question an audit asks. Expiry also means the read path
    * needs no extra logic: it already ignores anything outside its window.
    */
-  async revoke(userId: string, cemeteryId: string, actor: string | null) {
+  async revoke(userId: string, cemeteryId: string, caller: Caller) {
     const row = await this.prisma.scopeAssignment.findUnique({
       where: { userId_cemeteryId: { userId, cemeteryId } },
     });
@@ -93,7 +94,7 @@ export class AuthzAdminService {
     if (cemetery === null) {
       throw new BadRequestException('Nghĩa trang không còn tồn tại');
     }
-    await this.scope.assertCompany(actor, cemetery.companyId);
+    await this.scope.assertCompanyFor(caller.userId, caller.permission, cemetery.companyId);
 
     const updated = await this.prisma.scopeAssignment.update({
       where: { userId_cemeteryId: { userId, cemeteryId } },
@@ -102,7 +103,7 @@ export class AuthzAdminService {
     await this.audit.record({
       companyId: cemetery.companyId,
       actorType: 'USER',
-      actorId: actor,
+      actorId: caller.userId,
       action: 'AUTHZ.SCOPE_REVOKED',
       entityType: 'scope_assignment',
       entityId: row.id,

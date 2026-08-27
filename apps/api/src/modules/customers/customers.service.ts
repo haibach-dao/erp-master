@@ -9,6 +9,8 @@ import { ulid } from 'ulid';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PiiService } from '../../common/pii/pii.service';
 import { AuditService } from '../audit/audit.service';
+import { ScopeService } from '../authorization/scope.service';
+import type { Caller } from '../authorization/caller';
 import { activeSubRecord, activeUsageRight } from '../../common/lifecycle/active';
 import {
   CUSTOMER_BLOCKING_REFERENCES,
@@ -35,12 +37,101 @@ interface DedupWarning {
   matches: unknown[];
 }
 
+/* ---- Bộ lọc danh sách khách hàng ----
+ *
+ * DANH SÁCH ĐÓNG cho mọi trục có tập giá trị hữu hạn, và giá trị lạ bị TỪ CHỐI ở DTO chứ
+ * không bị bỏ qua âm thầm. Bỏ qua âm thầm là cách một bộ lọc gõ sai (`deceased` thay vì
+ * `Deceased`) trả về đúng dữ liệu mà người dùng tưởng là đã lọc.
+ */
+
+/** Còn sống / đã mất. `all` là mặc định, và phải khai tường minh chứ không để `undefined`. */
+export const LIFE_STATUS = ['all', 'alive', 'deceased'] as const;
+export type LifeStatus = (typeof LIFE_STATUS)[number];
+
+/** Đang đứng tên phần mộ hay chưa. */
+export const GRAVE_OWNER_FILTER = ['all', 'yes', 'no'] as const;
+export type GraveOwnerFilter = (typeof GRAVE_OWNER_FILTER)[number];
+
+export interface CustomerFilters {
+  q?: string;
+  lifeStatus?: LifeStatus;
+  graveOwner?: GraveOwnerFilter;
+  /** Đứng tên mộ Ở nghĩa trang này. Kiểm phạm vi trước khi dùng. */
+  cemeteryId?: string;
+  companyId?: string;
+  /** `Customer.type`: INDIVIDUAL | ORGANIZATION | AGENT | PROSPECT. */
+  type?: string;
+  /** `Customer.status`: active | inactive. */
+  status?: string;
+  limit?: number;
+}
+
+/* Trần cứng cho số dòng trả về.
+ *
+ * Có trần vì không có trần thì một truy vấn `?limit=100000` biến endpoint này thành cổng
+ * trích xuất toàn bộ danh sách khách hàng — mà trích xuất là mã quyền KHÁC
+ * (`crm.customer.export`, S3). Không để client tự chọn nghĩa là không để client tự nâng
+ * cấp quyền của mình bằng một tham số URL.
+ */
+const DEFAULT_LIMIT = 50;
+const MAX_LIMIT = 200;
+
+function clampLimit(limit: number | undefined): number {
+  if (limit === undefined || !Number.isFinite(limit) || limit <= 0) {
+    return DEFAULT_LIMIT;
+  }
+  return Math.min(Math.floor(limit), MAX_LIMIT);
+}
+
+function notBlank(v: string | undefined | null): boolean {
+  return v !== undefined && v !== null && v !== '';
+}
+
+/* "Đã mất" suy từ SỰ TỒN TẠI của hồ sơ người mất, không từ một cờ riêng — cùng một sự thật
+ * với chỗ hiển thị, nên hai nơi không thể mâu thuẫn.
+ *
+ * Khách hàng TỔ CHỨC (`personId = null`) không sống cũng không mất. Họ rơi khỏi CẢ HAI
+ * nhánh, và đó là câu trả lời đúng: một công ty không có ngày mất. Ai muốn thấy họ thì để
+ * `all` hoặc lọc theo `type`.
+ */
+function lifeStatusWhere(status: LifeStatus | undefined): Prisma.CustomerWhereInput {
+  if (status === 'deceased') {
+    return { person: { deceased: { isNot: null } } };
+  }
+  if (status === 'alive') {
+    return { person: { deceased: { is: null } } };
+  }
+  return {};
+}
+
+/* Tìm tự do. Chuỗi rỗng KHÔNG được sinh mệnh đề nào.
+ *
+ * `contains: ''` khớp mọi dòng nên nhìn qua tưởng vô hại — nhưng nó vẫn là một `OR` gồm 5
+ * nhánh, và nhánh `person.fullName` ép Postgres nối bảng `persons` cho mọi truy vấn kể cả
+ * khi người dùng chưa gõ gì. Bỏ hẳn khi rỗng là rẻ hơn và nói đúng ý hơn.
+ */
+function freeTextWhere(q: string): Prisma.CustomerWhereInput {
+  if (q === '') {
+    return {};
+  }
+  return {
+    OR: [
+      { customerCode: { contains: q, mode: 'insensitive' } },
+      { phone: { contains: q } },
+      { email: { contains: q, mode: 'insensitive' } },
+      { orgName: { contains: q, mode: 'insensitive' } },
+      { person: { fullName: { contains: q, mode: 'insensitive' } } },
+    ],
+  };
+}
+
 @Injectable()
 export class CustomersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly pii: PiiService,
     private readonly audit: AuditService,
+    private readonly scope: ScopeService,
   ) {}
 
   private personData(dto: CreatePersonDto): Prisma.PersonCreateInput {
@@ -755,50 +846,144 @@ export class CustomersService {
     };
   }
 
-  /* Customer 360 search by code / name / phone / email / org name.
+  /* Danh sách khách hàng: TÌM tự do + LỌC theo tiêu chí, tất cả ở SERVER.
    *
-   * Trả kèm ba thứ bảng tổng hợp cần mà bản ghi Customer không tự có: nơi sinh, phần mộ
-   * đang đứng tên, và người này còn sống hay đã mất. Gộp ở đây thay vì để giao diện gọi
-   * thêm — 50 dòng mà mỗi dòng một lời gọi là 50 lượt cho một lần mở trang.
+   * VÌ SAO PHẢI Ở SERVER (chú thích cũ đã cảnh báo, nay là ràng buộc thật): truy vấn cắt ở
+   * `limit` dòng. Lọc sau khi nhận về là lọc trên MỘT LÁT CẮT, nên "còn 3 người đã mất" có
+   * thể ra 0 chỉ vì 50 khách còn sống đứng trước họ. Người dùng không có cách nào biết
+   * mình vừa nhìn một câu trả lời sai.
+   *
+   * Trả về BAO NGOÀI (`items` + `total` + `limit` + `truncated`) chứ không trả mảng suông:
+   * một danh sách bị cắt mà không nói là bị cắt là chỗ người dùng đếm rồi kết luận nhầm.
+   * `total` đếm trên TOÀN BỘ tập đã lọc, không phải trên lát cắt.
+   *
+   * PHẠM VI: danh sách này bó theo phạm vi người gọi, tính THEO MÃ `crm.customer.search`.
+   * Trước đây nó trả khách hàng của MỌI công ty cho bất kỳ ai đăng nhập — và một bộ lọc
+   * "theo công ty" mà server tin thẳng giá trị client gửi lên thì chính là cái lỗ đó khoác
+   * áo mới. HỆ QUẢ PHẢI BIẾT: `Customer.companyId` CHO PHÉP NULL, nên khách hàng chưa gán
+   * công ty KHÔNG hiện với người gọi mức COMPANY/SITE. Đó là câu trả lời đúng ("không
+   * thuộc công ty nào bạn phụ trách"), nhưng nó đổi thứ màn hình hiện so với trước.
    */
-  async search(q: string, deceasedOnly = false) {
-    const customers = await this.prisma.customer.findMany({
-      where: {
-        /* Lọc "đã mất" ở SERVER, không để giao diện tự lọc sau khi nhận về: truy vấn cắt
-         * ở 50 dòng, nên lọc phía client sẽ bỏ sót người đã mất nếu danh sách có nhiều
-         * khách còn sống đứng trước. */
-        ...(deceasedOnly ? { person: { deceased: { isNot: null } } } : {}),
-        OR: [
-          { customerCode: { contains: q, mode: 'insensitive' } },
-          { phone: { contains: q } },
-          { email: { contains: q, mode: 'insensitive' } },
-          { orgName: { contains: q, mode: 'insensitive' } },
-          { person: { fullName: { contains: q, mode: 'insensitive' } } },
-        ],
-      },
-      include: {
-        person: {
-          select: {
-            id: true,
-            fullName: true,
-            gender: true,
-            nationalIdMasked: true,
-            dateOfBirth: true,
-            placeOfBirth: true,
-            /* Sống hay đã mất suy từ SỰ TỒN TẠI của hồ sơ người mất, không phải từ một
-             * cờ boolean riêng. Một cờ riêng là thứ có thể lệch với hồ sơ an táng; ở đây
-             * hai câu trả lời không thể mâu thuẫn vì chúng là cùng một sự thật. */
-            deceased: { select: { dateOfDeath: true } },
+  async search(filters: CustomerFilters, caller: Caller) {
+    const limit = clampLimit(filters.limit);
+
+    /* Bó theo phạm vi TRƯỚC, rồi mới giao với công ty người dùng chọn. Giao chứ không
+     * thay: client chọn công ty là để THU HẸP tầm nhìn của mình, không bao giờ để mở rộng. */
+    const visible = await this.scope.visibleCompanyIdsFor(caller.userId, caller.permission);
+    let companyIds: string[] | null = visible;
+    if (notBlank(filters.companyId)) {
+      // Ném 403 nếu công ty được chọn nằm ngoài phạm vi — không lặng lẽ trả rỗng.
+      await this.scope.assertCompanyFor(caller.userId, caller.permission, filters.companyId);
+      companyIds = [filters.companyId as string];
+    }
+
+    /* Hai trục "đứng tên mộ" và "theo nghĩa trang" KHÔNG viết được thành mệnh đề Prisma
+     * lồng nhau: `Customer` và `GraveUsageRight` nối nhau bằng id LỎNG
+     * (`holder_customer_id` không có khoá ngoại, không có `@relation`). Nên phải hỏi hai
+     * lượt rồi giao tập id. Ghi rõ ở đây để lần sau không ai đi tìm một
+     * `where: { usageRights: { some: ... } }` không hề tồn tại. */
+    const ownership = await this.graveOwnershipWhere(filters, caller);
+
+    const where: Prisma.CustomerWhereInput = {
+      ...(companyIds === null ? {} : { companyId: { in: companyIds } }),
+      ...lifeStatusWhere(filters.lifeStatus),
+      ...(notBlank(filters.type) ? { type: filters.type } : {}),
+      ...(notBlank(filters.status) ? { status: filters.status } : {}),
+      ...(ownership === null ? {} : ownership),
+      ...freeTextWhere(filters.q ?? ''),
+    };
+
+    /* Đếm và lấy trang trong CÙNG một `where`. Hai mệnh đề khác nhau là hai câu trả lời
+     * khác nhau cho cùng một câu hỏi — đúng lớp lỗi mà `common/lifecycle` sinh ra để dẹp,
+     * chỉ khác là ở đây nó hiện thành "tổng 12" trên một bảng đang có 9 dòng. */
+    const [total, customers] = await Promise.all([
+      this.prisma.customer.count({ where }),
+      this.prisma.customer.findMany({
+        where,
+        include: {
+          person: {
+            select: {
+              id: true,
+              fullName: true,
+              gender: true,
+              nationalIdMasked: true,
+              dateOfBirth: true,
+              placeOfBirth: true,
+              /* Sống hay đã mất suy từ SỰ TỒN TẠI của hồ sơ người mất, không phải từ một
+               * cờ boolean riêng. Một cờ riêng là thứ có thể lệch với hồ sơ an táng; ở đây
+               * hai câu trả lời không thể mâu thuẫn vì chúng là cùng một sự thật. */
+              deceased: { select: { dateOfDeath: true } },
+            },
           },
         },
-      },
-      take: 50,
+        orderBy: { customerCode: 'asc' },
+        take: limit,
+      }),
+    ]);
+
+    return {
+      items: await this.decorateWithGraves(customers),
+      total,
+      limit,
+      truncated: total > customers.length,
+    };
+  }
+
+  /* Mệnh đề `where` trên `id` cho hai trục "đứng tên mộ" / "theo nghĩa trang".
+   *
+   * `null` = hai trục này không được dùng, không bó gì. Ngược lại luôn trả một mệnh đề —
+   * kể cả `{ id: { in: [] } }`, và RỖNG phải giữ nguyên nghĩa "không ai thoả" chứ không
+   * được rơi về "không lọc".
+   */
+  private async graveOwnershipWhere(
+    filters: CustomerFilters,
+    caller: Caller,
+  ): Promise<Prisma.CustomerWhereInput | null> {
+    const wantsOwnership = filters.graveOwner === 'yes' || filters.graveOwner === 'no';
+    const cemeteryId = notBlank(filters.cemeteryId) ? (filters.cemeteryId as string) : null;
+    if (!wantsOwnership && cemeteryId === null) {
+      return null;
+    }
+    if (cemeteryId !== null) {
+      await this.scope.assertSiteFor(caller.userId, caller.permission, cemeteryId);
+    }
+
+    /* "Chưa đứng tên mộ" + một nghĩa trang cụ thể là câu hỏi VÔ NGHĨA: "không đứng tên mộ
+     * nào ở nghĩa trang A" gồm cả người đang đứng tên ba mộ ở nghĩa trang B. Chặn ở đây,
+     * thay vì trả một tập lặng lẽ sai mà người dùng tưởng là đúng. */
+    if (filters.graveOwner === 'no' && cemeteryId !== null) {
+      throw new BadRequestException(
+        'Không lọc đồng thời "chưa đứng tên mộ" và một nghĩa trang cụ thể — hai điều kiện này loại trừ nhau',
+      );
+    }
+
+    /* CHỈ quyền sử dụng CÒN HIỆU LỰC. Người đã sang tên mộ cho con thì không còn "đang
+     * đứng tên" — dùng `activeUsageRight` chứ không đếm cả lịch sử. */
+    const rights = await this.prisma.graveUsageRight.findMany({
+      where: { ...activeUsageRight },
+      select: { holderCustomerId: true, gravePlotId: true },
     });
+    let holders = rights;
+    if (cemeteryId !== null) {
+      const plots = await this.prisma.gravePlot.findMany({
+        where: { cemeteryId, id: { in: rights.map((r) => r.gravePlotId) } },
+        select: { id: true },
+      });
+      const inCemetery = new Set(plots.map((pl) => pl.id));
+      holders = rights.filter((r) => inCemetery.has(r.gravePlotId));
+    }
+    const ids = [...new Set(holders.map((r) => r.holderCustomerId))];
+
+    return filters.graveOwner === 'no' ? { id: { notIn: ids } } : { id: { in: ids } };
+  }
+
+  /* Gắn thêm hai thứ bảng tổng hợp cần mà bản ghi `Customer` không tự có: phần mộ đang
+   * đứng tên, và còn sống hay đã mất. Một lượt cho cả trang, không phải mỗi khách một
+   * lượt — 50 dòng mà mỗi dòng một lời gọi là 50 lượt cho một lần mở trang. */
+  private async decorateWithGraves<T extends { id: string; person: unknown }>(customers: T[]) {
     if (customers.length === 0) {
       return [];
     }
-
-    // Một lượt cho cả trang, không phải mỗi khách một lượt.
     const rights = await this.prisma.graveUsageRight.findMany({
       where: { holderCustomerId: { in: customers.map((c) => c.id) }, ...activeUsageRight },
       select: { holderCustomerId: true, gravePlotId: true },
@@ -823,7 +1008,7 @@ export class CustomersService {
     return customers.map((c) => ({
       ...c,
       gravePlotCodes: (byCustomer.get(c.id) ?? []).sort(),
-      isDeceased: c.person?.deceased != null,
+      isDeceased: (c.person as { deceased?: unknown } | null)?.deceased != null,
     }));
   }
 
