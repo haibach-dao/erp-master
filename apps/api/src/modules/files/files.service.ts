@@ -11,6 +11,8 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { ulid } from 'ulid';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PermissionsService } from '../authorization/permissions.service';
+import { ScopeService } from '../authorization/scope.service';
+import type { Caller } from '../authorization/caller';
 import { permissionMatches } from '../authorization/policy-evaluator';
 import { AuditService } from '../audit/audit.service';
 import type { ConfirmUploadDto, PresignUploadDto } from './files.dto';
@@ -30,6 +32,11 @@ const DOWNLOAD_URL_TTL = 120;
 const SENSITIVE_FILE_PERMISSION = 'file.object.download_sensitive';
 const PUBLIC_SENSITIVITY = 'normal';
 
+/* Một câu, dùng cho MỌI nhánh không quy được phạm vi. Ba câu khác nhau cho ba nhánh là
+ * kể cho người gọi biết file đó được trỏ tới từ đâu — thứ họ không được biết. */
+const SCOPE_UNRESOLVED =
+  'Không quy được file này về công ty hay nghĩa trang nào — không kiểm được phạm vi';
+
 @Injectable()
 export class FilesService {
   private readonly logger = new Logger(FilesService.name);
@@ -41,6 +48,7 @@ export class FilesService {
     private readonly config: ConfigService,
     private readonly audit: AuditService,
     private readonly permissions: PermissionsService,
+    private readonly scope: ScopeService,
   ) {
     this.bucket = this.config.get<string>('S3_BUCKET') ?? 'erp-files';
     this.s3 = new S3Client({
@@ -96,8 +104,89 @@ export class FilesService {
     });
   }
 
-  async getDownloadUrl(id: string, actor: string | null) {
-    const file = await this.requireReadable(id, actor, 'FILE.DOWNLOAD_DENIED');
+  /* PHẠM VI CỦA MỘT FILE — quy NGƯỢC, vì bản thân file không có neo.
+   *
+   * `FileObject` KHÔNG có `companyId`, không có `cemeteryId`, không có gì ngoài
+   * `uploadedBy`. Nên không hỏi trực tiếp được "file này thuộc công ty nào"; phải đi tìm
+   * AI ĐANG TRỎ TỚI NÓ. Ba chỗ, tất cả đều là id LỎNG — hai schema, không khoá ngoại nối,
+   * và không cột nào có index (nợ đã ghi ở bản giao):
+   *
+   *   1. `ExternalContract.contractFileId`  -> công ty + nghĩa trang qua phần mộ
+   *   2. `BurialRecord.legalDocFileId`      -> nghĩa trang qua phần mộ
+   *   3. `DeceasedPerson.deathCertFileId`   -> qua hồ sơ an táng của người đó
+   *
+   * File CHƯA ai trỏ tới thì neo duy nhất còn lại là NGƯỜI TẢI LÊN. Đây không phải trường
+   * hợp hiếm: `presign` -> `confirm` diễn ra TRƯỚC khi file được gắn vào bản ghi nào, nên
+   * mọi file vừa tải lên đều nằm ở trạng thái này. Cho chính người tải lên đọc file của họ
+   * là đủ để hoàn tất luồng, và không mở cho ai khác.
+   *
+   * Không quy được, cũng không phải người tải lên, thì TỪ CHỐI. Giấy chứng tử và hợp đồng
+   * là thứ rò ra thì không thu lại được, nên mặc định phải là chặn.
+   */
+  private async assertFileInScope(
+    file: { id: string; uploadedBy: string | null },
+    caller: Caller,
+  ): Promise<void> {
+    const contract = await this.prisma.externalContract.findFirst({
+      where: { contractFileId: file.id },
+      select: { companyId: true, gravePlotId: true },
+    });
+    if (contract !== null) {
+      await this.scope.assertCompanyFor(caller.userId, caller.permission, contract.companyId);
+      await this.assertPlotSite(contract.gravePlotId, caller);
+      return;
+    }
+
+    const burial = await this.prisma.burialRecord.findFirst({
+      where: { legalDocFileId: file.id },
+      select: { gravePlotId: true },
+    });
+    if (burial !== null) {
+      await this.assertPlotSite(burial.gravePlotId, caller);
+      return;
+    }
+
+    const deceased = await this.prisma.deceasedPerson.findFirst({
+      where: { deathCertFileId: file.id },
+      select: { personId: true },
+    });
+    if (deceased !== null) {
+      const rec = await this.prisma.burialRecord.findFirst({
+        where: { deceasedPersonId: deceased.personId },
+        select: { gravePlotId: true },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (rec === null) {
+        /* Giấy chứng tử của người CHƯA có hồ sơ an táng: không quy được về nghĩa trang nào.
+         * Lược đồ đánh dấu tài liệu này `restricted`, nên chặn chứ không cho qua. */
+        throw new ForbiddenException(SCOPE_UNRESOLVED);
+      }
+      await this.assertPlotSite(rec.gravePlotId, caller);
+      return;
+    }
+
+    if (caller.userId !== null && file.uploadedBy === caller.userId) {
+      return;
+    }
+    throw new ForbiddenException(SCOPE_UNRESOLVED);
+  }
+
+  /* Quy phần mộ về công ty + nghĩa trang. Không tìm thấy phần mộ thì TỪ CHỐI: không có khoá
+   * ngoại nối nên con trỏ treo là chuyện xảy ra được, và lúc đó không kiểm được gì. */
+  private async assertPlotSite(gravePlotId: string, caller: Caller): Promise<void> {
+    const plot = await this.prisma.gravePlot.findUnique({
+      where: { id: gravePlotId },
+      select: { companyId: true, cemeteryId: true },
+    });
+    if (plot === null) {
+      throw new ForbiddenException(SCOPE_UNRESOLVED);
+    }
+    await this.scope.assertCompanyFor(caller.userId, caller.permission, plot.companyId);
+    await this.scope.assertSiteFor(caller.userId, caller.permission, plot.cemeteryId);
+  }
+
+  async getDownloadUrl(id: string, caller: Caller) {
+    const file = await this.requireReadable(id, caller, 'FILE.DOWNLOAD_DENIED');
     if (file.scanStatus !== 'clean') {
       throw new ConflictException(`File chưa sẵn sàng tải (scan=${file.scanStatus})`);
     }
@@ -108,7 +197,7 @@ export class FilesService {
     );
     await this.audit.record({
       actorType: 'USER',
-      actorId: actor,
+      actorId: caller.userId,
       action: 'DOCUMENT.DOWNLOADED',
       entityType: 'file',
       entityId: id,
@@ -120,22 +209,30 @@ export class FilesService {
 
   // Metadata carries `storageKey` and `sensitivity`, so it is gated exactly like the
   // download. Returning it freely would leak the object key of every restricted file.
-  async getMeta(id: string, actor: string | null) {
-    return this.requireReadable(id, actor, 'FILE.META_DENIED');
+  async getMeta(id: string, caller: Caller) {
+    return this.requireReadable(id, caller, 'FILE.META_DENIED');
   }
 
-  private async requireReadable(id: string, actor: string | null, deniedAction: string) {
+  private async requireReadable(id: string, caller: Caller, deniedAction: string) {
     const file = await this.prisma.fileObject.findUnique({ where: { id } });
     if (file === null) {
       throw new NotFoundException('Không tìm thấy file');
     }
+    /* PHẠM VI trước, ĐỘ NHẠY sau — và phạm vi áp cho CẢ HAI nhánh độ nhạy.
+     *
+     * Tới 27/08/2026 hàm này chỉ hỏi độ nhạy: file `normal` thì ai cầm
+     * `file.object.download` cũng tải được, còn file `restricted` thì ai cầm
+     * `download_sensitive` cũng tải được — của MỌI công ty, chỉ cần biết id. Đây là hai
+     * câu hỏi khác nhau: "tài liệu này nhạy tới đâu" và "tài liệu này của ai". Trả lời
+     * một câu rồi bỏ câu kia là hở đúng một nửa. */
+    await this.assertFileInScope(file, caller);
     if (file.sensitivity === PUBLIC_SENSITIVITY) {
       return file;
     }
-    if (actor !== null && (await this.holds(actor, SENSITIVE_FILE_PERMISSION))) {
+    if (caller.userId !== null && (await this.holds(caller.userId, SENSITIVE_FILE_PERMISSION))) {
       return file;
     }
-    await this.denied(actor, deniedAction, id, `sensitivity=${file.sensitivity}`);
+    await this.denied(caller.userId, deniedAction, id, `sensitivity=${file.sensitivity}`);
     throw new ForbiddenException(`Thiếu quyền: ${SENSITIVE_FILE_PERMISSION}`);
   }
 

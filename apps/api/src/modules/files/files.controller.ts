@@ -4,6 +4,7 @@ import type { Request } from 'express';
 import { JwtAuthGuard } from '../iam/guards/jwt-auth.guard';
 import { PermissionGuard } from '../authorization/permission.guard';
 import { RequirePermission } from '../authorization/require-permission.decorator';
+import { callerOf, type Caller } from '../authorization/caller';
 import { FilesService } from './files.service';
 import { ConfirmUploadDto, PresignUploadDto } from './files.dto';
 
@@ -14,8 +15,15 @@ import { ConfirmUploadDto, PresignUploadDto } from './files.dto';
 export class FilesController {
   constructor(private readonly svc: FilesService) {}
 
+  /* `presign` và `confirm` chỉ cần USER ID: presign tạo file MỚI (chưa có bản ghi nào để
+   * quy phạm vi), còn confirm vốn đã chặn chỉ người tải lên — hẹp hơn phạm vi. Hai đường
+   * ĐỌC thì cần cả mã quyền, nên dùng `caller`. */
   private actor(req: Request): string | null {
     return req.user?.userId ?? null;
+  }
+
+  private caller(req: Request): Caller {
+    return callerOf(req);
   }
 
   @Post('presign-upload')
@@ -33,12 +41,12 @@ export class FilesController {
   @Get(':id/download-url')
   @RequirePermission('file.object.download')
   downloadUrl(@Param('id') id: string, @Req() req: Request) {
-    return this.svc.getDownloadUrl(id, this.actor(req));
+    return this.svc.getDownloadUrl(id, this.caller(req));
   }
 
   @Get(':id')
   @RequirePermission('file.object.view')
   meta(@Param('id') id: string, @Req() req: Request) {
-    return this.svc.getMeta(id, this.actor(req));
+    return this.svc.getMeta(id, this.caller(req));
   }
 }

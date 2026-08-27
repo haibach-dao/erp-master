@@ -123,7 +123,7 @@ export class CustomersController {
   @Get('persons/:id/national-id')
   @RequirePermission('crm.person.view_sensitive')
   revealNationalId(@Param('id') id: string, @Req() req: Request) {
-    return this.svc.revealNationalId(id, this.actor(req));
+    return this.svc.revealNationalId(id, callerOf(req));
   }
 
   /* ---- Bảng phụ nhân thân ----

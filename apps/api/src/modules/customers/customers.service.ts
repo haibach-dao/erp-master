@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -1013,15 +1014,73 @@ export class CustomersService {
   }
 
   // Decrypt CCCD — every full view is audited (G0-A6). Fine-grained permission is a follow-up.
-  async revealNationalId(personId: string, actor: string | null) {
+  /* PHẠM VI CỦA MỘT NHÂN THÂN, cho đường đọc CCCD đầy đủ.
+   *
+   * `Person` KHÔNG có `companyId` — nó là dữ liệu LIÊN CÔNG TY, đúng như chú thích ở
+   * `createDeceased` đã nêu. Nên phải QUY qua bản ghi có neo, và quy theo thứ tự:
+   *
+   *   1. Hồ sơ khách hàng của chính người đó (`Customer.personId` là unique).
+   *   2. Không có khách hàng thì hồ sơ AN TÁNG: người được an táng nằm ở một phần mộ cụ
+   *      thể, và phần mộ có cả công ty lẫn nghĩa trang.
+   *
+   * Không quy được thì TỪ CHỐI. Đây là chỗ khác hẳn `createDeceased`: ở đó chặn hết là
+   * chặn một việc GHI hợp lệ (ghi nhận một người đã mất), nên phải chờ quyết. Ở đây là
+   * ĐỌC CCCD ĐẦY ĐỦ — thứ rò ra thì không thu lại được — nên mặc định phải là chặn.
+   *
+   * `Customer.companyId` CHO PHÉP NULL, nên "chỉ kiểm khi khác null" ở bước 1 chính là
+   * fail-open: mọi khách chưa gán công ty sẽ thành cửa mở. Null ở bước 1 thì RƠI SANG
+   * bước 2, không phải cho qua.
+   */
+  private async assertPersonInScope(personId: string, caller: Caller): Promise<void> {
+    const customer = await this.prisma.customer.findUnique({
+      where: { personId },
+      select: { companyId: true },
+    });
+    if (customer !== null && customer.companyId !== null) {
+      await this.scope.assertCompanyFor(caller.userId, caller.permission, customer.companyId);
+      return;
+    }
+
+    const burial = await this.prisma.burialRecord.findFirst({
+      where: { deceasedPersonId: personId },
+      select: { gravePlotId: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (burial !== null) {
+      const plot = await this.prisma.gravePlot.findUnique({
+        where: { id: burial.gravePlotId },
+        select: { companyId: true, cemeteryId: true },
+      });
+      if (plot !== null) {
+        await this.scope.assertCompanyFor(caller.userId, caller.permission, plot.companyId);
+        await this.scope.assertSiteFor(caller.userId, caller.permission, plot.cemeteryId);
+        return;
+      }
+    }
+
+    throw new ForbiddenException(
+      'Không quy được nhân thân này về công ty hay nghĩa trang nào — không kiểm được phạm vi',
+    );
+  }
+
+  /* Giải mã và trả CCCD ĐẦY ĐỦ.
+   *
+   * Tới 27/08/2026 hàm này không kiểm phạm vi dòng nào: gate `crm.person.view_sensitive`
+   * trả lời "có được xem CCCD hay không", nên ai cầm mã đó đọc được CCCD của MỌI nhân thân
+   * trong hệ chỉ cần biết id. Dữ liệu cá nhân theo NĐ 13/2023.
+   */
+  async revealNationalId(personId: string, caller: Caller) {
     const person = await this.prisma.person.findUnique({ where: { id: personId } });
     if (person === null || person.nationalIdCipher === null) {
       throw new NotFoundException('Không có dữ liệu CCCD');
     }
+    /* Kiểm phạm vi TRƯỚC khi giải mã. Giải mã rồi mới chặn là đã đưa bản rõ vào bộ nhớ
+     * tiến trình cho một người không được phép — và chỉ cần một lần lỡ trả về là xong. */
+    await this.assertPersonInScope(personId, caller);
     const nationalId = this.pii.decrypt(person.nationalIdCipher);
     await this.audit.record({
       actorType: 'USER',
-      actorId: actor,
+      actorId: caller.userId,
       action: 'PII.NATIONAL_ID_VIEWED',
       entityType: 'person',
       entityId: personId,
