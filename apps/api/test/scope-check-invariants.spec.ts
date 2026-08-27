@@ -15,8 +15,8 @@ const SCOPE_SERVICE = join(SRC, 'modules', 'authorization', 'scope.service.ts');
 
 /* Method nhận `Caller` mà CHƯA hỏi phạm vi, kèm LÝ DO.
  *
- * Đây là NỢ ĐÃ ĐO, không phải chỗ được miễn. Sáu dòng dưới là hiện trạng đo ngày
- * 27/08/2026, đã nêu để anh Bách quyết — chưa quyết thì chưa đổi, vì bó phạm vi ở đây là
+ * Đây là NỢ ĐÃ ĐO, không phải chỗ được miễn. Bốn dòng dưới là phần CÒN LẠI sau khi anh Bách
+ * quyết bó `contracts.verify` + `activate` (27/08/2026) — chưa quyết thì chưa đổi, vì bó phạm vi ở đây là
  * đổi HÀNH VI (người đang làm được sẽ nhận 403), và neo vào đâu thì mỗi hàm một câu hỏi.
  *
  * Thêm một dòng vào đây phải viết ra vì sao KHÔNG bó được. "Vì tiện" không phải lý do, và
@@ -25,10 +25,6 @@ const SCOPE_SERVICE = join(SRC, 'modules', 'authorization', 'scope.service.ts');
 const MEASURED_UNGUARDED: Readonly<Record<string, string>> = {
   'modules/contracts/contracts.service.ts:create':
     'Neo vào `dto.companyId` do client gửi thì phải kiểm TRƯỚC khi tạo; chưa quyết vì hợp đồng có thể tạo cho công ty khác trong cùng tập đoàn (nghiệp vụ chưa chốt).',
-  'modules/contracts/contracts.service.ts:verify':
-    'Neo có sẵn và rõ (`contract.companyId`, y như `cancel` đang dùng), nhưng bó lại là đổi hành vi ở bước thẩm định — chờ anh Bách quyết cùng lượt với `activate`.',
-  'modules/contracts/contracts.service.ts:activate':
-    'Cùng neo với `verify`. Cho hiệu lực là bước sinh quyền sử dụng, nên đổi hành vi ở đây phải quyết cùng `verify` chứ không lệch nhau một bên.',
   'modules/services/services.service.ts:subscribe':
     'Không có neo nào chắc: dịch vụ gắn vào thuê bao, `companyId` phải quy qua danh mục dịch vụ hoặc phần mộ — chưa quyết quy đường nào.',
   'modules/services/services.service.ts:renew':
@@ -54,7 +50,7 @@ describe('phạm vi — method nhận Caller thì phải HỎI phạm vi', () =>
     }
   });
 
-  it('không có lỗ MỚI nào ngoài sáu chỗ đã đo và đã nêu để quyết', () => {
+  it('không có lỗ MỚI nào ngoài bốn chỗ đã đo và đã nêu để quyết', () => {
     const unexpected = hits
       .map((h) => `${h.file}:${h.method}`)
       .filter((k) => !(k in MEASURED_UNGUARDED));

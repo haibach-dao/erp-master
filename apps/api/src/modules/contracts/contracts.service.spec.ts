@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ConflictException } from '@nestjs/common';
+import { ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { ContractsService } from './contracts.service';
 import type { PrismaService } from '../../prisma/prisma.service';
 import type { AuditService } from '../audit/audit.service';
@@ -55,12 +55,13 @@ function build(row: unknown) {
     externalContract: { findUnique: vi.fn().mockResolvedValue(row), update },
     $transaction: vi.fn().mockImplementation((fn: (t: unknown) => unknown) => fn(tx)),
   } as unknown as PrismaService;
+  const assertCompanyFor = vi.fn().mockResolvedValue(undefined);
   const svc = new ContractsService(
     prisma,
     { record } as unknown as AuditService,
-    { assertCompanyFor: vi.fn() } as unknown as ScopeService,
+    { assertCompanyFor } as unknown as ScopeService,
   );
-  return { svc, record, update, tx };
+  return { svc, record, update, tx, assertCompanyFor };
 }
 
 /* Số bước phụ thuộc NGƯỜI LÀM, không phụ thuộc bản ghi (G0-Q10). Ai cầm quyền cho hiệu
@@ -269,5 +270,70 @@ describe('huỷ hợp đồng — đảo đúng hệ quả của activate', () =
         }),
       }),
     );
+  });
+});
+
+/* Gate mã quyền trả lời "có được làm việc này hay không". Nó KHÔNG trả lời "lên hợp đồng
+ * NÀO" — nên tới 27/08/2026 người cầm `contract.record.verify` thẩm định được hợp đồng của
+ * công ty khác chỉ cần biết id, và `activate` thì phân bổ luôn phần mộ của công ty đó.
+ */
+describe('phạm vi — verify và activate chỉ chạm hợp đồng trong phạm vi được gán', () => {
+  it('verify hỏi phạm vi theo companyId CỦA HỢP ĐỒNG, kèm mã quyền đang thi hành', async () => {
+    const { svc, assertCompanyFor } = build(contract({ status: 'Uploaded' }));
+
+    await svc.verify('ct-1', verifier(MANAGER));
+
+    /* Tham số GIỮA là thứ đáng kiểm nhất: thiếu mã quyền thì phạm vi bị tính ở mức rộng
+     * nhất của người gọi — đúng lớp lỗi đã vá bằng cách xoá bản cũ. */
+    expect(assertCompanyFor).toHaveBeenCalledWith(MANAGER, 'contract.record.verify', 'co-1');
+  });
+
+  it('activate hỏi phạm vi theo companyId CỦA HỢP ĐỒNG, kèm mã quyền đang thi hành', async () => {
+    const { svc, assertCompanyFor } = build(contract({ status: 'Verified' }));
+
+    await svc.activate('ct-1', activator(MANAGER));
+
+    expect(assertCompanyFor).toHaveBeenCalledWith(MANAGER, 'contract.record.activate', 'co-1');
+  });
+
+  it('ngoài phạm vi thì verify BỊ CHẶN và không sửa gì', async () => {
+    const { svc, update, assertCompanyFor } = build(contract({ status: 'Uploaded' }));
+    assertCompanyFor.mockRejectedValue(new ForbiddenException('Ngoài phạm vi được gán'));
+
+    await expect(svc.verify('ct-1', verifier(MANAGER))).rejects.toBeInstanceOf(ForbiddenException);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('ngoài phạm vi thì activate BỊ CHẶN và phần mộ không bị phân bổ', async () => {
+    const { svc, tx, assertCompanyFor } = build(contract({ status: 'Verified' }));
+    assertCompanyFor.mockRejectedValue(new ForbiddenException('Ngoài phạm vi được gán'));
+
+    await expect(svc.activate('ct-1', activator(MANAGER))).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+    expect(tx.graveUsageRight.create).not.toHaveBeenCalled();
+    expect(tx.gravePlot.update).not.toHaveBeenCalled();
+  });
+
+  /* Thứ tự có giá trị riêng, không chỉ là thẩm mỹ: kiểm trạng thái trước rồi mới kiểm phạm
+   * vi thì câu lỗi "Không thể xác minh ở trạng thái Active" đã kể cho người NGOÀI phạm vi
+   * biết hợp đồng đó tồn tại và đang ở đâu. Cả hai đường đều phải trả 403, không phải 409. */
+  it('ngoài phạm vi thì trả 403 chứ KHÔNG rò trạng thái hợp đồng qua câu lỗi 409', async () => {
+    const { svc, assertCompanyFor } = build(contract({ status: 'Active' }));
+    assertCompanyFor.mockRejectedValue(new ForbiddenException('Ngoài phạm vi được gán'));
+
+    await expect(svc.verify('ct-1', verifier(MANAGER))).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(svc.cancel('ct-1', { reason: 'x' }, CALLER_CANCEL)).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+  });
+
+  /* Không tìm thấy thì 404 TRƯỚC khi hỏi phạm vi — hỏi phạm vi của một bản ghi không tồn
+   * tại là không có gì để hỏi, và `contract.companyId` lúc đó là đọc trên null. */
+  it('hợp đồng không tồn tại thì 404, không gọi kiểm phạm vi', async () => {
+    const { svc, assertCompanyFor } = build(null);
+
+    await expect(svc.verify('ct-1', verifier(MANAGER))).rejects.toBeInstanceOf(NotFoundException);
+    expect(assertCompanyFor).not.toHaveBeenCalled();
   });
 });

@@ -82,6 +82,15 @@ export class ContractsService {
     if (contract === null) {
       throw new NotFoundException('Không tìm thấy hợp đồng');
     }
+    /* Kiểm phạm vi TRƯỚC mọi phép kiểm trạng thái. Gate `contract.record.verify` trả lời
+     * "có được thẩm định hợp đồng hay không", KHÔNG trả lời "hợp đồng NÀO" — nên trước
+     * 27/08/2026 người cầm mã này thẩm định được hợp đồng của công ty khác nếu biết id,
+     * và thẩm định là bước mở đường cho `activate` sinh quyền sử dụng phần mộ.
+     *
+     * Đặt trước phép kiểm trạng thái là có chủ đích: kiểm trạng thái trước rồi mới kiểm
+     * phạm vi thì câu lỗi "Không thể xác minh ở trạng thái Active" đã kể cho người ngoài
+     * phạm vi biết hợp đồng đó TỒN TẠI và đang ở trạng thái nào. */
+    await this.scope.assertCompanyFor(caller.userId, caller.permission, contract.companyId);
     if (contract.status !== 'Uploaded' && contract.status !== 'PendingVerification') {
       throw new ConflictException(`Không thể xác minh ở trạng thái ${contract.status}`);
     }
@@ -133,10 +142,10 @@ export class ContractsService {
     if (contract === null) {
       throw new NotFoundException('Không tìm thấy hợp đồng');
     }
+    await this.scope.assertCompanyFor(caller.userId, caller.permission, contract.companyId);
     if (contract.status === 'Cancelled') {
       throw new ConflictException('Hợp đồng đã huỷ rồi');
     }
-    await this.scope.assertCompanyFor(caller.userId, caller.permission, contract.companyId);
 
     /* CHẶN khi phần mộ đã có người an táng. Huỷ hợp đồng lúc đó là rút căn cứ pháp lý của
      * một việc đã không đảo ngược được — người đã nằm dưới đất rồi. Muốn đổi người chịu
@@ -219,6 +228,9 @@ export class ContractsService {
     if (contract === null) {
       throw new NotFoundException('Không tìm thấy hợp đồng');
     }
+    // Cùng lý do như `verify`: gate mã quyền không gate BẢN GHI. Cho hiệu lực là bước
+    // PHÂN BỔ phần mộ và sinh quyền sử dụng, nên đây là chỗ đắt nhất để để hở.
+    await this.scope.assertCompanyFor(caller.userId, caller.permission, contract.companyId);
     if (!ACTIVATABLE_FROM.includes(contract.status)) {
       throw new ConflictException(`Không thể cho hiệu lực ở trạng thái ${contract.status}`);
     }
