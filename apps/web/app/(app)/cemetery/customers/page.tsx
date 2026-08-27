@@ -138,16 +138,19 @@ export default function CustomersPage() {
             <TableHead>CCCD</TableHead>
             <TableHead>Nơi sinh</TableHead>
             <TableHead>Phần mộ đứng tên</TableHead>
+            {/* Cột RIÊNG, không gộp vào cột trên: người ĐÃ MẤT hầu như không đứng tên mộ,
+                nên cột "đứng tên" của họ luôn là "—" và việc đã an táng không thấy đâu. */}
+            <TableHead>Nơi an nghỉ</TableHead>
             <TableHead>Tình trạng</TableHead>
             <TableHead>Điện thoại</TableHead>
             <TableHead />
           </TableRow>
         </TableHeader>
         <TableBody>
-          {list.isPending ? <TableSkeleton rows={6} cols={8} /> : null}
+          {list.isPending ? <TableSkeleton rows={6} cols={10} /> : null}
 
           {list.data?.items.length === 0 ? (
-            <TableMessage colSpan={8}>
+            <TableMessage colSpan={10}>
               {/* Ba câu khác nhau cho ba tình huống khác nhau. Gộp thành "không có dữ liệu"
                   là bắt người dùng tự đoán họ đang gặp cái nào — và việc phải làm để thoát
                   ra thì mỗi cái một khác: tạo mới / sửa từ khoá / nới bộ lọc. */}
@@ -207,6 +210,32 @@ export default function CustomersPage() {
                   <span className="font-mono text-xs" title={c.gravePlotCodes.join(', ')}>
                     {c.gravePlotCodes.slice(0, 2).join(', ')}
                     {c.gravePlotCodes.length > 2 ? ` +${c.gravePlotCodes.length - 2}` : ''}
+                  </span>
+                )}
+              </TableCell>
+              <TableCell>
+                {/* Mã mộ KÈM cốt số: "nằm ở P1" và "nằm ở cốt 2 của P1" là hai mức chính
+                    xác khác nhau, và cốt số là thứ người đi thăm mộ cần. */}
+                {c.restingPlaces.length === 0 ? (
+                  <span className="text-muted-foreground">—</span>
+                ) : (
+                  <span
+                    className="font-mono text-xs"
+                    title={c.restingPlaces
+                      .map((r) =>
+                        r.slotNumber === null
+                          ? `${r.plotCode} (chưa rõ cốt)`
+                          : `${r.plotCode} · cốt ${r.slotNumber}`,
+                      )
+                      .join(', ')}
+                  >
+                    {c.restingPlaces
+                      .slice(0, 2)
+                      .map((r) =>
+                        r.slotNumber === null ? r.plotCode : `${r.plotCode}/${r.slotNumber}`,
+                      )
+                      .join(', ')}
+                    {c.restingPlaces.length > 2 ? ` +${c.restingPlaces.length - 2}` : ''}
                   </span>
                 )}
               </TableCell>

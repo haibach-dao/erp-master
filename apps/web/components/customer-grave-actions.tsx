@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { ArrowLeftRight, Landmark, Plus, Undo2, UserPlus } from 'lucide-react';
+import { ArrowLeftRight, Info, Landmark, Plus, Undo2, UserPlus } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { birthOrder, relationshipLabel } from '@/lib/relationship';
 import {
@@ -70,6 +70,7 @@ export function CustomerGraveActions({
   const [buryPlotId, setBuryPlotId] = useState<string | null>(null);
   const [transferPlot, setTransferPlot] = useState<CustomerPlot | null>(null);
   const [releasePlot, setReleasePlot] = useState<CustomerPlot | null>(null);
+  const [detailPlot, setDetailPlot] = useState<CustomerPlot | null>(null);
 
   /* Chủ mộ đã mất thì KHÔNG gán thêm mộ được — cùng luật server ép, nhắc lại ở đây để nút
    * không mời người dùng bấm vào một việc chắc chắn bị từ chối. Server vẫn là chỗ ép
@@ -115,7 +116,10 @@ export function CustomerGraveActions({
                   <TableHead>Mã mộ</TableHead>
                   <TableHead>Vị trí</TableHead>
                   <TableHead>Trạng thái</TableHead>
-                  <TableHead>Sức chứa</TableHead>
+                  {/* "Sức chứa" một mình trả lời nửa câu hỏi. Người dùng cần biết ĐÃ DÙNG
+                      bao nhiêu, không phải chứa được bao nhiêu. */}
+                  <TableHead>Cốt đã dùng</TableHead>
+                  <TableHead>Người an táng</TableHead>
                   <TableHead />
                 </TableRow>
               </TableHeader>
@@ -135,9 +139,56 @@ export function CustomerGraveActions({
                         </Badge>
                       )}
                     </TableCell>
-                    <TableCell className="num">{g.capacity ?? '—'}</TableCell>
+                    <TableCell className="num">
+                      {g.capacity === null ? '—' : `${g.occupants.length}/${g.capacity}`}
+                    </TableCell>
+                    {/* Cột này là câu trả lời cho "an táng xong rồi mà màn hình không đổi gì".
+                        In ĐÍCH DANH người nằm trong mộ, kèm cốt số và quan hệ với chủ mộ —
+                        một con số đếm thì vẫn bắt người dùng mở hộp thoại ra mới biết là ai. */}
+                    <TableCell>
+                      {g.occupants.length === 0 ? (
+                        <span className="text-xs text-muted-foreground">Chưa có ai</span>
+                      ) : (
+                        <ul className="space-y-0.5">
+                          {g.occupants.map((oc) => (
+                            <li key={oc.burialRecordId} className="text-sm leading-snug">
+                              <span className="text-xs text-muted-foreground">
+                                {oc.slotNumber === null ? 'Chưa rõ cốt' : `Cốt ${oc.slotNumber}`} ·{' '}
+                              </span>
+                              <span className="font-medium">{oc.fullName}</span>
+                              {relLabel(
+                                oc.relationshipToOwner,
+                                oc.gender,
+                                oc.dateOfBirth,
+                                customer.person?.dateOfBirth ?? null,
+                              ) !== '' ? (
+                                <span className="text-xs text-muted-foreground">
+                                  {' '}
+                                  (
+                                  {relLabel(
+                                    oc.relationshipToOwner,
+                                    oc.gender,
+                                    oc.dateOfBirth,
+                                    customer.person?.dateOfBirth ?? null,
+                                  )}
+                                  )
+                                </span>
+                              ) : null}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </TableCell>
                     <TableCell>
                       <div className="flex flex-wrap justify-end gap-1">
+                        {/* Đường vào chi tiết là một NÚT riêng, không phải cả dòng bấm được.
+                            Dòng này đã chứa bốn nút; lồng nút trong một dòng bấm được thì
+                            mỗi cú bấm chạy hai việc, và trình đọc màn hình đọc ra một mớ
+                            không phân biệt được. */}
+                        <Button variant="ghost" size="sm" onClick={() => setDetailPlot(g)}>
+                          <Info className="size-4" aria-hidden />
+                          Chi tiết
+                        </Button>
                         <Button
                           variant="ghost"
                           size="sm"
@@ -213,7 +264,156 @@ export function CustomerGraveActions({
           }}
         />
       ) : null}
+
+      {detailPlot !== null ? (
+        <PlotDetailDialog plot={detailPlot} onClose={() => setDetailPlot(null)} />
+      ) : null}
     </>
+  );
+}
+
+/* CHI TIẾT MỘT PHẦN MỘ — chỉ ĐỌC, không có nút hành động nào.
+ *
+ * Cố ý không nhồi "an táng" / "sang tên" / "thu hồi" vào đây: ba việc đó đã có ba nút riêng
+ * trên dòng, và một hộp thoại vừa xem vừa làm là chỗ người ta bấm nhầm.
+ *
+ * Dữ liệu lấy TỪ SERVER (`plotOwnership`), không nhận qua props, dù dòng bảng đã có sẵn
+ * `occupants`. Hai lý do:
+ *   - `plotOwnership` biết những thứ dòng bảng không biết: cốt nào còn trống, số hồ sơ an
+ *     táng chưa có cốt, ngày an táng, chủ mộ đã mất chưa.
+ *   - Mở chi tiết là lúc người dùng muốn con số ĐÚNG LÚC NÀY, không phải con số của lần
+ *     tải trang trước.
+ */
+function PlotDetailDialog({ plot, onClose }: { plot: CustomerPlot; onClose: () => void }) {
+  const ownership = useQuery({
+    queryKey: ['plotOwnership', plot.gravePlotId],
+    queryFn: () => getPlotOwnership(plot.gravePlotId),
+  });
+  const history = useQuery({
+    queryKey: ['usageRightHistory', plot.gravePlotId],
+    queryFn: () => getUsageRightHistory(plot.gravePlotId),
+  });
+
+  const o = ownership.data;
+  // `getUsageRightHistory` trả BAO NGOÀI, không phải mảng suông — mở ra một lần ở đây.
+  const rows = history.data?.history ?? [];
+
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      title={`Phần mộ ${plot.plotCode ?? '—'}`}
+      description={
+        o === undefined
+          ? undefined
+          : `${o.graveTypeName} · ${o.occupants.length}/${o.capacity} cốt đã dùng`
+      }
+      footer={
+        <Button variant="secondary" onClick={onClose}>
+          Đóng
+        </Button>
+      }
+    >
+      <div className="space-y-4">
+        {ownership.error !== null ? (
+          <Alert variant="destructive">{errText(ownership.error)}</Alert>
+        ) : null}
+
+        {o?.holder != null ? (
+          <Alert variant="info">
+            Chủ mộ: <strong>{o.holder.name ?? '—'}</strong> · {o.holder.customerCode}
+            {o.holder.isDeceased ? ' (đã mất)' : ''}
+          </Alert>
+        ) : null}
+
+        <div>
+          <p className="mb-1.5 text-sm font-medium">Người an táng</p>
+          {ownership.isPending ? (
+            <p className="text-sm text-muted-foreground">Đang tải…</p>
+          ) : (o?.occupants.length ?? 0) === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              Chưa có ai. Dùng “An táng vào cốt” trên dòng phần mộ.
+            </p>
+          ) : (
+            <ul className="divide-y divide-border rounded-md border">
+              {(o?.occupants ?? []).map((oc) => (
+                <li key={oc.burialRecordId} className="px-3 py-2 text-sm">
+                  <div className="flex items-center justify-between gap-2">
+                    <span>
+                      <span className="text-xs text-muted-foreground">
+                        {oc.slotNumber === null ? 'Chưa rõ cốt' : `Cốt ${oc.slotNumber}`} ·{' '}
+                      </span>
+                      <strong>{oc.fullName}</strong>
+                    </span>
+                    <Badge variant="neutral">
+                      {relLabel(
+                        oc.relationshipToOwner,
+                        oc.gender,
+                        oc.dateOfBirth,
+                        o?.holder?.dateOfBirth ?? null,
+                      ) || 'Có quan hệ'}
+                    </Badge>
+                  </div>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    {oc.burialDate === null
+                      ? 'Chưa ghi ngày an táng'
+                      : `An táng ${new Date(oc.burialDate).toLocaleDateString('vi-VN')}`}
+                    {' · '}
+                    {statusOf(oc.status).label}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        {/* Cốt trống là con số quyết định "còn an táng thêm được không". Lấy từ server, không
+            tính lại ở đây: sức chứa có thể bị ghi đè trên từng mộ, và hồ sơ chưa gán cốt vẫn
+            chiếm chỗ thật. */}
+        {o !== undefined ? (
+          <p className="text-sm text-muted-foreground">
+            {o.freeSlots.length === 0
+              ? `Đã kín ${o.capacity}/${o.capacity} cốt.`
+              : `Cốt còn trống: ${o.freeSlots.join(', ')}`}
+          </p>
+        ) : null}
+
+        {o !== undefined && o.unnumberedBurials > 0 ? (
+          <Alert variant="warning">
+            Có {o.unnumberedBurials} hồ sơ an táng CHƯA gán cốt số. Chúng vẫn chiếm chỗ, nên số
+            cốt trống ở trên đã trừ đi rồi.
+          </Alert>
+        ) : null}
+
+        <div>
+          <p className="mb-1.5 text-sm font-medium">Lịch sử chủ mộ</p>
+          {history.isPending ? (
+            <p className="text-sm text-muted-foreground">Đang tải…</p>
+          ) : rows.length === 0 ? (
+            <p className="text-sm text-muted-foreground">Chưa có bản ghi nào.</p>
+          ) : (
+            <ul className="divide-y divide-border rounded-md border">
+              {rows.map((h) => (
+                <li key={h.usageRightId} className="flex justify-between gap-2 px-3 py-2 text-sm">
+                  <span>
+                    <strong>{h.holderName ?? '—'}</strong>
+                    <span className="block text-xs text-muted-foreground">
+                      {h.holderCode ?? '—'}
+                      {/* Quyền sinh NGOÀI hợp đồng phải đọc ra được: không có nhãn này thì
+                          không ai phân biệt quyền nào đã qua thẩm định. */}
+                      {h.viaContract ? ' · theo hợp đồng' : ' · gán tay'}
+                    </span>
+                  </span>
+                  <span className="shrink-0 text-xs text-muted-foreground">
+                    {statusOf(h.status).label}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+    </Dialog>
   );
 }
 
@@ -409,6 +609,24 @@ function BuryDialog({
           ? `Phần mộ đã kín ${o.capacity}/${o.capacity} cốt.`
           : (eligible.data?.blocked ?? null);
 
+  /* MỘT nguồn cho "vì sao nút An táng không bấm được", và nó LUÔN được in ra.
+   *
+   * LỖI ĐÃ TRẢ GIÁ (27/08/2026): nút bị chặn bởi `personId === ''` — chưa chọn ai — nhưng
+   * điều kiện đó không đi qua cơ chế giải thích nào cả. Kết quả: hộp thoại mở ra với đúng
+   * một ứng viên hiện sẵn, nút xám, và không một chữ nói vì sao. Chủ doanh nghiệp hỏi
+   * "sao cái nút An táng không sáng vậy" — câu hỏi đó là bằng chứng giao diện đã hỏng, chứ
+   * không phải người dùng đọc chưa kỹ.
+   *
+   * Tách làm hai vì hai thứ khác nhau, không phải để cho có:
+   *   - `blocked`        : trở ngại THẬT (chưa có chủ mộ, mộ đã kín) -> Alert cảnh báo
+   *   - `disabledReason` : gồm cả `blocked` LẪN "chưa chọn người" -> dòng nhắc cạnh nút
+   *
+   * "Chưa chọn người" KHÔNG dựng Alert cảnh báo: đó là trạng thái bình thường lúc vừa mở,
+   * báo động ở đó là dạy người dùng bỏ qua cảnh báo. Nhưng nó VẪN phải hiện ra chữ. */
+  const disabledReason =
+    blocked ??
+    (personId === '' ? 'Bấm chọn một người trong danh sách để bật nút An táng.' : null);
+
   return (
     <Dialog
       open
@@ -421,11 +639,19 @@ function BuryDialog({
       }
       footer={
         <>
+          {/* `mr-auto` đẩy dòng nhắc sang trái, hai nút vẫn ở phải. Đặt nó TRONG footer chứ
+              không ở cuối thân hộp thoại: thân có `overflow-y-auto`, nên câu giải thích sẽ
+              cuộn ra khỏi tầm mắt đúng lúc người dùng đang nhìn cái nút xám. */}
+          {disabledReason !== null && !bury.isPending ? (
+            <p className="mr-auto text-xs text-muted-foreground" aria-live="polite">
+              {disabledReason}
+            </p>
+          ) : null}
           <Button variant="secondary" onClick={onClose}>
             Huỷ
           </Button>
           <Button
-            disabled={blocked !== null || personId === '' || bury.isPending}
+            disabled={disabledReason !== null || bury.isPending}
             loading={bury.isPending}
             onClick={() => bury.mutate()}
           >
@@ -470,11 +696,11 @@ function BuryDialog({
         ) : null}
 
         <Field
-          label="Người an táng"
+          label="Chọn người an táng"
           hint={
             eligible.isPending
               ? 'Đang tìm người đủ điều kiện…'
-              : `Chỉ hiện người ĐÃ MẤT, CÓ QUAN HỆ đã xác nhận với ${eligible.data?.owner?.fullName ?? 'chủ mộ'}, và CHƯA nằm ở cốt nào.`
+              : `Bấm một dòng để chọn. Danh sách chỉ hiện người ĐÃ MẤT, CÓ QUAN HỆ đã xác nhận với ${eligible.data?.owner?.fullName ?? 'chủ mộ'}, và CHƯA nằm ở cốt nào.`
           }
         >
           <Input
@@ -496,37 +722,58 @@ function BuryDialog({
                   : 'Không ai đủ điều kiện. Khai quan hệ với chủ mộ, và đánh dấu người đó đã mất, trước khi an táng.'}
             </p>
           ) : (
-            <ul className="divide-y divide-border">
-              {matches.map((c) => (
-                <li key={c.deceasedPersonId}>
-                  <button
-                    type="button"
-                    onClick={() => setPersonId(c.deceasedPersonId)}
-                    className={cn(
-                      'flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-accent/50',
-                      personId === c.deceasedPersonId ? 'bg-accent' : '',
-                    )}
-                  >
-                    <span>
-                      <span className="font-medium">{c.fullName}</span>
-                      <span className="block text-xs text-muted-foreground">
-                        {c.customerCode ?? '(chưa có mã KH)'}
-                        {c.dateOfDeath !== null
-                          ? ` · mất ${new Date(c.dateOfDeath).toLocaleDateString('vi-VN')}`
-                          : ' · chưa ghi ngày mất'}
+            /* `radiogroup` + `radio`, không phải danh sách nút rời: đây là CHỌN MỘT trong
+               nhiều, và trình đọc màn hình phải nghe được "1 trong 3, đã chọn" thay vì ba
+               cái nút không liên quan. Nền xám thôi thì không đủ — nó là màu, và màu một
+               mình không phải dấu hiệu trạng thái. */
+            <ul role="radiogroup" aria-label="Người an táng" className="divide-y divide-border">
+              {matches.map((c) => {
+                const picked = personId === c.deceasedPersonId;
+                return (
+                  <li key={c.deceasedPersonId}>
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={picked}
+                      onClick={() => setPersonId(c.deceasedPersonId)}
+                      className={cn(
+                        'flex w-full items-center gap-3 px-3 py-2 text-left text-sm hover:bg-accent/50',
+                        picked ? 'bg-accent' : '',
+                      )}
+                    >
+                      {/* Dấu chọn phải THẤY ĐƯỢC ngay cả khi chỉ có MỘT ứng viên: đúng tình
+                          huống 27/08/2026 — một dòng duy nhất, không dấu hiệu nào, nên nó
+                          nhìn như dòng thông tin chứ không như lựa chọn. */}
+                      <span
+                        aria-hidden
+                        className={cn(
+                          'grid size-4 shrink-0 place-items-center rounded-full border',
+                          picked ? 'border-primary' : 'border-input',
+                        )}
+                      >
+                        {picked ? <span className="size-2 rounded-full bg-primary" /> : null}
                       </span>
-                    </span>
-                    <Badge variant={c.isOwner ? 'default' : 'neutral'}>
-                      {relLabel(
-                        c.relationshipType,
-                        c.gender,
-                        c.dateOfBirth,
-                        eligible.data?.owner?.dateOfBirth ?? null,
-                      ) || 'Có quan hệ'}
-                    </Badge>
-                  </button>
-                </li>
-              ))}
+                      <span className="min-w-0 flex-1">
+                        <span className="font-medium">{c.fullName}</span>
+                        <span className="block text-xs text-muted-foreground">
+                          {c.customerCode ?? '(chưa có mã KH)'}
+                          {c.dateOfDeath !== null
+                            ? ` · mất ${new Date(c.dateOfDeath).toLocaleDateString('vi-VN')}`
+                            : ' · chưa ghi ngày mất'}
+                        </span>
+                      </span>
+                      <Badge variant={c.isOwner ? 'default' : 'neutral'}>
+                        {relLabel(
+                          c.relationshipType,
+                          c.gender,
+                          c.dateOfBirth,
+                          eligible.data?.owner?.dateOfBirth ?? null,
+                        ) || 'Có quan hệ'}
+                      </Badge>
+                    </button>
+                  </li>
+                );
+              })}
             </ul>
           )}
         </div>

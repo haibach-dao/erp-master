@@ -121,8 +121,12 @@ export interface Customer360 {
   phone: string | null;
   email: string | null;
   person: CustomerPerson | null;
-  /** Mã các phần mộ đang đứng tên. API gom sẵn để bảng không phải gọi thêm mỗi dòng. */
+  /** Mã các phần mộ đang ĐỨNG TÊN. API gom sẵn để bảng không phải gọi thêm mỗi dòng. */
   gravePlotCodes: string[];
+  /* NƠI AN NGHỈ — mộ khách này NẰM TRONG. Giữ RIÊNG khỏi `gravePlotCodes`, không gộp:
+   * "đứng tên mộ" và "nằm trong mộ" là hai câu hỏi khác nhau, và một người có thể ở cả hai,
+   * một trong hai, hay không cái nào. Gộp lại là cách hồ sơ an táng trở nên vô hình. */
+  restingPlaces: { plotCode: string; slotNumber: number | null }[];
   isDeceased: boolean;
 }
 
@@ -857,6 +861,19 @@ export interface CustomerPlot {
   status: string | null;
   capacity: number | null;
   effectiveFrom: string | null;
+  /* AI ĐANG NẰM trong mộ này. Server trả kèm, KHÔNG để giao diện gọi `plotOwnership` cho
+   * từng dòng: N lượt gọi và N ô nhấp nháy chờ tải, cho thứ vốn nằm sẵn cạnh dữ liệu đang
+   * lấy. `gender` + `dateOfBirth` cần cho nhãn quan hệ ("anh trai" hay "em trai" phải so
+   * tuổi với chủ mộ). */
+  occupants: {
+    burialRecordId: string;
+    slotNumber: number | null;
+    personId: string;
+    fullName: string;
+    gender: string | null;
+    dateOfBirth: string | null;
+    relationshipToOwner: string | null;
+  }[];
 }
 
 /* NƠI AN NGHỈ — mộ khách hàng này NẰM TRONG.

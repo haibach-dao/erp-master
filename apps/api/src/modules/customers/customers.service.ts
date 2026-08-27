@@ -12,7 +12,7 @@ import { PiiService } from '../../common/pii/pii.service';
 import { AuditService } from '../audit/audit.service';
 import { ScopeService } from '../authorization/scope.service';
 import type { Caller } from '../authorization/caller';
-import { activeSubRecord, activeUsageRight } from '../../common/lifecycle/active';
+import { activeBurial, activeSubRecord, activeUsageRight } from '../../common/lifecycle/active';
 import {
   CUSTOMER_BLOCKING_REFERENCES,
   CUSTOMER_CASCADE_REFERENCES,
@@ -428,6 +428,44 @@ export class CustomersService {
           });
     const plotById = new Map(plots.map((pl) => [pl.id, pl]));
 
+    /* AI ĐANG NẰM trong từng phần mộ khách này đứng tên.
+     *
+     * VÌ SAO Ở ĐÂY, KHÔNG Ở GIAO DIỆN (chủ doanh nghiệp nêu 27/08/2026): bảng "Phần mộ đứng
+     * tên" trước đây chỉ có mã mộ / vị trí / trạng thái / sức chứa. An táng xong, màn hình
+     * KHÔNG đổi một chữ — nên việc vừa làm nhìn như không ăn. Để giao diện tự gọi
+     * `plotOwnership` cho từng dòng thì thành N lượt gọi và N ô nhấp nháy chờ tải, cho một
+     * thứ vốn đã nằm sẵn cạnh dữ liệu đang lấy.
+     *
+     * MỘT truy vấn cho MỌI mộ (`in`), không phải một truy vấn mỗi mộ.
+     *
+     * Dùng ĐÚNG `activeBurial()` và đúng `orderBy` như `CemeteryService.plotOwnership`. Hai
+     * màn hình kể về cùng một phần mộ thì phải kể cùng một chuyện: lệch bộ lọc ở đây là
+     * bảng nói "còn trống" trong khi hộp thoại nói "đã kín" — đúng lớp lỗi mà
+     * `common/lifecycle/active.ts` sinh ra để dẹp. */
+    const occupantRows =
+      plots.length === 0
+        ? []
+        : await this.prisma.burialRecord.findMany({
+            where: { gravePlotId: { in: plots.map((pl) => pl.id) }, ...activeBurial() },
+            include: {
+              deceased: {
+                include: {
+                  person: { select: { id: true, fullName: true, gender: true, dateOfBirth: true } },
+                },
+              },
+            },
+            orderBy: [{ slotNumber: 'asc' }, { createdAt: 'asc' }],
+          });
+    const occupantsByPlot = new Map<string, typeof occupantRows>();
+    for (const row of occupantRows) {
+      const list = occupantsByPlot.get(row.gravePlotId);
+      if (list === undefined) {
+        occupantsByPlot.set(row.gravePlotId, [row]);
+      } else {
+        list.push(row);
+      }
+    }
+
     const relationships =
       customer.personId === null
         ? []
@@ -532,6 +570,18 @@ export class CustomersService {
           capacity:
             plot === undefined ? null : (plot.capacityOverride ?? plot.graveType.defaultCapacity),
           effectiveFrom: r.effectiveFrom,
+          /* Trả cả `gender` và `dateOfBirth`: nhãn quan hệ ("anh trai" hay "em trai") suy
+           * từ giới tính VÀ so tuổi với chủ mộ, nên thiếu hai trường này thì giao diện phải
+           * lùi về nhãn trung tính. Xem `lib/relationship` bên web. */
+          occupants: (occupantsByPlot.get(r.gravePlotId) ?? []).map((b) => ({
+            burialRecordId: b.id,
+            slotNumber: b.slotNumber,
+            personId: b.deceased.person.id,
+            fullName: b.deceased.person.fullName,
+            gender: b.deceased.person.gender,
+            dateOfBirth: b.deceased.person.dateOfBirth,
+            relationshipToOwner: b.relationshipToOwner,
+          })),
         };
       }),
       relationships,
@@ -978,9 +1028,21 @@ export class CustomersService {
     return filters.graveOwner === 'no' ? { id: { notIn: ids } } : { id: { in: ids } };
   }
 
-  /* Gắn thêm hai thứ bảng tổng hợp cần mà bản ghi `Customer` không tự có: phần mộ đang
-   * đứng tên, và còn sống hay đã mất. Một lượt cho cả trang, không phải mỗi khách một
-   * lượt — 50 dòng mà mỗi dòng một lời gọi là 50 lượt cho một lần mở trang. */
+  /* Gắn thêm những thứ bảng tổng hợp cần mà bản ghi `Customer` không tự có: phần mộ đang
+   * ĐỨNG TÊN, NƠI AN NGHỈ, và còn sống hay đã mất. Một lượt cho cả trang, không phải mỗi
+   * khách một lượt — 50 dòng mà mỗi dòng một lời gọi là 50 lượt cho một lần mở trang.
+   *
+   * HAI TRỤC MỘ, GIỮ RIÊNG — không gộp thành một cột "phần mộ":
+   *
+   *   - `gravePlotCodes` : mộ khách này ĐỨNG TÊN (chủ mộ)
+   *   - `restingPlaces`  : mộ khách này NẰM TRONG (đã an táng)
+   *
+   * Hai câu hỏi khác nhau, và một người có thể ở cả hai, một trong hai, hay không cái nào.
+   * Gộp lại chính là cách hồ sơ an táng đang chặn xoá khách hàng trở nên VÔ HÌNH trên màn
+   * hình của họ (27/08/2026) — cùng lý do `CustomerRestingPlace` được tách khỏi
+   * `CustomerPlot` ở tầng chi tiết. Chủ doanh nghiệp nêu đúng chỗ này: danh sách có cột
+   * "phần mộ đứng tên" nên người ĐÃ MẤT luôn hiện "—", và việc vừa an táng không thấy đâu.
+   */
   private async decorateWithGraves<T extends { id: string; person: unknown }>(customers: T[]) {
     if (customers.length === 0) {
       return [];
@@ -989,28 +1051,72 @@ export class CustomersService {
       where: { holderCustomerId: { in: customers.map((c) => c.id) }, ...activeUsageRight },
       select: { holderCustomerId: true, gravePlotId: true },
     });
+
+    /* Nơi an nghỉ: `Customer.personId` -> `DeceasedPerson.personId` -> `BurialRecord`.
+     * Lọc bằng `deceased: { personId: { in: ... } }` vì `BurialRecord.deceasedPersonId` trỏ
+     * tới `DeceasedPerson`, KHÔNG trỏ thẳng tới `Person` — nhầm chỗ này thì truy vấn chạy
+     * được mà luôn trả rỗng. */
+    const personIds = customers
+      .map((c) => (c.person as { id?: string } | null)?.id)
+      .filter((id): id is string => typeof id === 'string');
+    const burials =
+      personIds.length === 0
+        ? []
+        : await this.prisma.burialRecord.findMany({
+            where: { deceased: { personId: { in: personIds } }, ...activeBurial() },
+            select: {
+              gravePlotId: true,
+              slotNumber: true,
+              deceased: { select: { personId: true } },
+            },
+            orderBy: [{ slotNumber: 'asc' }, { createdAt: 'asc' }],
+          });
+
+    /* MỘT truy vấn mã mộ cho CẢ HAI trục. Hỏi hai lượt là hai lượt cho cùng một bảng, và
+     * mã mộ của một phần mộ thì không phụ thuộc vào việc ai hỏi nó. */
+    const plotIds = [
+      ...new Set([...rights.map((r) => r.gravePlotId), ...burials.map((b) => b.gravePlotId)]),
+    ];
     const plots =
-      rights.length === 0
+      plotIds.length === 0
         ? []
         : await this.prisma.gravePlot.findMany({
-            where: { id: { in: rights.map((r) => r.gravePlotId) } },
+            where: { id: { in: plotIds } },
             select: { id: true, plotCode: true },
           });
     const codeById = new Map(plots.map((pl) => [pl.id, pl.plotCode]));
 
-    const byCustomer = new Map<string, string[]>();
+    const ownedByCustomer = new Map<string, string[]>();
     for (const r of rights) {
-      const list = byCustomer.get(r.holderCustomerId) ?? [];
+      const list = ownedByCustomer.get(r.holderCustomerId) ?? [];
       const code = codeById.get(r.gravePlotId);
       if (code !== undefined) list.push(code);
-      byCustomer.set(r.holderCustomerId, list);
+      ownedByCustomer.set(r.holderCustomerId, list);
     }
 
-    return customers.map((c) => ({
-      ...c,
-      gravePlotCodes: (byCustomer.get(c.id) ?? []).sort(),
-      isDeceased: (c.person as { deceased?: unknown } | null)?.deceased != null,
-    }));
+    const restingByPerson = new Map<string, { plotCode: string; slotNumber: number | null }[]>();
+    for (const b of burials) {
+      const code = codeById.get(b.gravePlotId);
+      if (code === undefined) continue;
+      const key = b.deceased.personId;
+      const list = restingByPerson.get(key) ?? [];
+      list.push({ plotCode: code, slotNumber: b.slotNumber });
+      restingByPerson.set(key, list);
+    }
+
+    return customers.map((c) => {
+      const personId = (c.person as { id?: string } | null)?.id;
+      return {
+        ...c,
+        gravePlotCodes: (ownedByCustomer.get(c.id) ?? []).sort(),
+        /* Mảng, không phải một giá trị: một người CHỈ nên nằm ở một chỗ, và
+         * `assertNotAlreadyBuried` ép đúng điều đó — nhưng dữ liệu cũ có thể đã lệch, và
+         * một màn hình rút xuống "lấy cái đầu tiên" sẽ giấu đúng cái sai cần thấy. */
+        restingPlaces:
+          personId === undefined ? [] : (restingByPerson.get(personId) ?? []),
+        isDeceased: (c.person as { deceased?: unknown } | null)?.deceased != null,
+      };
+    });
   }
 
   // Decrypt CCCD — every full view is audited (G0-A6). Fine-grained permission is a follow-up.
