@@ -536,6 +536,9 @@ export interface PermissionRow {
 
 export interface RoleAssignmentRow {
   id: string;
+  userId: string;
+  /** Chỉ có khi tra NGƯỢC theo vai — tra xuôi thì người dùng đã biết mình xem ai. */
+  userEmail?: string | null;
   roleCode: string;
   roleName: string;
   companyId: string | null;
@@ -569,6 +572,10 @@ export const revokePermission = (roleCode: string, permissionCode: string): Prom
 
 export const listRoleAssignments = (userId: string): Promise<RoleAssignmentRow[]> =>
   apiFetch(`/api/v1/authz/role-assignments?userId=${encodeURIComponent(userId)}`);
+
+/** Chiều NGƯỢC: vai này đang ở tay ai. Câu phải hỏi mỗi lần rà quyền. */
+export const listRoleHolders = (roleCode: string): Promise<RoleAssignmentRow[]> =>
+  apiFetch(`/api/v1/authz/role-assignments?roleCode=${encodeURIComponent(roleCode)}`);
 
 export const assignRole = (input: {
   userId: string;

@@ -69,10 +69,22 @@ export class AuthzMatrixController {
     return this.svc.revoke(roleCode, permissionCode, this.caller(req));
   }
 
+  /* Tra hai chiều: `?userId=` (người này giữ vai gì) hoặc `?roleCode=` (vai này ở tay ai).
+   * Không truyền gì thì 400 — xem `listAssignments`. */
   @Get('role-assignments')
   @RequirePermission('authz.role.view')
-  listAssignments(@Query('userId') userId: string, @Req() req: Request) {
-    return this.svc.listAssignments(userId, this.caller(req));
+  listAssignments(
+    @Query('userId') userId: string | undefined,
+    @Query('roleCode') roleCode: string | undefined,
+    @Req() req: Request,
+  ) {
+    return this.svc.listAssignments(
+      {
+        ...(userId === undefined ? {} : { userId }),
+        ...(roleCode === undefined ? {} : { roleCode }),
+      },
+      this.caller(req),
+    );
   }
 
   @Post('role-assignments')

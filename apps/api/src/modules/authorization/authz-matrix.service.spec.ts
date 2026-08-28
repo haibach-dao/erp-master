@@ -40,7 +40,9 @@ function build(opts: { groupGrant?: boolean; level?: string; visible?: string[] 
       }),
       update: vi.fn().mockResolvedValue({ id: 'ra-1', validTo: new Date('2026-08-27') }),
     },
-    permission: { findUnique: vi.fn().mockResolvedValue({ id: 'perm-1', code: 'crm.customer.view' }) },
+    permission: {
+      findUnique: vi.fn().mockResolvedValue({ id: 'perm-1', code: 'crm.customer.view' }),
+    },
   } as unknown as PrismaService;
 
   const assertCompanyFor = vi.fn().mockResolvedValue(undefined);
@@ -156,9 +158,9 @@ describe('leo thang quyền — sửa NỘI DUNG vai chỉ dành cho mức GROUP
   it('mức COMPANY thì KHÔNG sửa được nội dung vai — vai không thuộc công ty nào', async () => {
     const { svc, record } = build({ level: 'COMPANY' });
 
-    await expect(svc.grant('THU_NGAN', 'crm.customer.view', 'COMPANY', GRANTER)).rejects.toBeInstanceOf(
-      ForbiddenException,
-    );
+    await expect(
+      svc.grant('THU_NGAN', 'crm.customer.view', 'COMPANY', GRANTER),
+    ).rejects.toBeInstanceOf(ForbiddenException);
     expect(record).not.toHaveBeenCalled();
   });
 
@@ -183,9 +185,9 @@ describe('leo thang quyền — sửa NỘI DUNG vai chỉ dành cho mức GROUP
   it('ngoài phạm vi thì trả 403, KHÔNG rò phạm vi nào hợp lệ qua câu lỗi 400', async () => {
     const { svc } = build({ level: 'COMPANY' });
 
-    await expect(svc.grant('THU_NGAN', 'crm.customer.view', 'PHAM_VI_SAI', GRANTER)).rejects.toBeInstanceOf(
-      ForbiddenException,
-    );
+    await expect(
+      svc.grant('THU_NGAN', 'crm.customer.view', 'PHAM_VI_SAI', GRANTER),
+    ).rejects.toBeInstanceOf(ForbiddenException);
   });
 
   it('không xác định được mã quyền đang thi hành thì TỪ CHỐI, không rơi về mức rộng nhất', async () => {
@@ -243,7 +245,7 @@ describe('leo thang quyền — bản đồ vai bó theo công ty người gọi
   it('người mức GROUP thấy tất cả, không lọc gì', async () => {
     const { svc, prisma } = build({ visible: null });
 
-    await svc.listAssignments('u1', VIEWER);
+    await svc.listAssignments({ userId: 'u1' }, VIEWER);
 
     expect(prisma.roleAssignment.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: { userId: 'u1' } }),
@@ -256,10 +258,34 @@ describe('leo thang quyền — bản đồ vai bó theo công ty người gọi
   it('người bó ở công ty chỉ thấy dòng của công ty đó — vai toàn tập đoàn KHÔNG lọt', async () => {
     const { svc, prisma } = build({ visible: ['co-1'] });
 
-    await svc.listAssignments('u1', VIEWER);
+    await svc.listAssignments({ userId: 'u1' }, VIEWER);
 
     expect(prisma.roleAssignment.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: { userId: 'u1', companyId: { in: ['co-1'] } } }),
     );
+  });
+
+  /* Chiều NGƯỢC bó theo ĐÚNG phép lọc công ty như chiều xuôi. Nếu chỉ bó một chiều thì
+   * người bó ở công ty A hỏi "ai đang giữ vai ADMIN" là đọc được cả người ở công ty B —
+   * cùng tấm bản đồ, chỉ vào bằng cửa khác. */
+  it('tra theo VAI cũng bó theo công ty người gọi thấy', async () => {
+    const { svc, prisma } = build({ visible: ['co-1'] });
+
+    await svc.listAssignments({ roleCode: 'ADMIN' }, VIEWER);
+
+    expect(prisma.roleAssignment.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { role: { code: 'ADMIN' }, companyId: { in: ['co-1'] } },
+      }),
+    );
+  });
+
+  /* Không lọc gì thì thành "liệt kê bản đồ quyền của mọi người" — một câu chưa ai hỏi,
+   * trả lời bằng đúng thứ dữ liệu nhạy nhất. Chặn ở service chứ không chỉ ở giao diện. */
+  it('không lọc theo gì cả thì từ chối, không liệt kê toàn bộ', async () => {
+    const { svc, prisma } = build({ visible: null });
+
+    await expect(svc.listAssignments({}, VIEWER)).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.roleAssignment.findMany).not.toHaveBeenCalled();
   });
 });

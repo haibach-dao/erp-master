@@ -141,7 +141,7 @@ export class AuthzMatrixService {
     return { revoked: permissionCode };
   }
 
-  /* Roles a person holds, including the ones whose window has closed.
+  /* Dòng gán vai, tra được theo HAI CHIỀU: người này giữ vai gì, và vai này đang ở tay ai.
    *
    * Danh sách này là BẢN ĐỒ quyền: nó cho biết ai với tới đâu, tức đúng thứ người muốn leo
    * thang cần đọc trước. Nên nó bó theo công ty người gọi thấy được.
@@ -149,19 +149,46 @@ export class AuthzMatrixService {
    * Dòng `companyId = null` là vai gán TOÀN TẬP ĐOÀN. Nó không thuộc công ty nào nên không
    * lọt qua phép lọc theo công ty được — chỉ người mức GROUP (`visible === null`) thấy. Trả
    * nó cho người bó ở một công ty là kể rằng người kia giữ một vai vượt trên họ.
+   *
+   * Chiều NGƯỢC (theo vai) thêm 28/08/2026. Trước đó chỉ tra được xuôi, nên câu "ai đang
+   * cầm mã S3 này" phải trả lời bằng cách gõ từng userId một — nghĩa là trên thực tế
+   * không trả lời được. Câu đó là câu cần hỏi mỗi lần rà quyền.
+   *
+   * BẮT BUỘC có ít nhất một trong hai. Không có gì thì đây thành "liệt kê toàn bộ bản đồ
+   * quyền của mọi người" — trả lời một câu chưa ai hỏi, bằng đúng thứ dữ liệu nhạy nhất.
    */
-  async listAssignments(userId: string, caller: Caller) {
+  async listAssignments(filter: { userId?: string; roleCode?: string }, caller: Caller) {
+    const userId = filter.userId ?? '';
+    const roleCode = filter.roleCode ?? '';
+    if (userId === '' && roleCode === '') {
+      throw new BadRequestException('Phải lọc theo người dùng hoặc theo vai');
+    }
     const visible = await this.scope.visibleCompanyIdsFor(caller.userId, caller.permission);
     const rows = await this.prisma.roleAssignment.findMany({
       where: {
-        userId,
+        ...(userId === '' ? {} : { userId }),
+        ...(roleCode === '' ? {} : { role: { code: roleCode } }),
         ...(visible === null ? {} : { companyId: { in: visible } }),
       },
       include: { role: { select: { code: true, name: true } } },
       orderBy: { createdAt: 'asc' },
     });
+
+    /* Email người giữ vai, lấy bằng truy vấn RIÊNG.
+     *
+     * `RoleAssignment.userId` không có quan hệ Prisma sang `User`: hai bảng nằm ở hai
+     * schema khác nhau (`authz` và `iam`), tách nhau có chủ đích. Nên không `include`
+     * được, phải tra thêm một lượt.
+     *
+     * Chỉ đọc email khi tra theo VAI: chiều xuôi người dùng đã biết mình đang xem ai.
+     */
+    const emails =
+      roleCode === '' ? new Map<string, string>() : await this.emailsFor(rows.map((r) => r.userId));
+
     return rows.map((r) => ({
       id: r.id,
+      userId: r.userId,
+      ...(roleCode === '' ? {} : { userEmail: emails.get(r.userId) ?? null }),
       roleCode: r.role.code,
       roleName: r.role.name,
       companyId: r.companyId,
@@ -171,6 +198,17 @@ export class AuthzMatrixService {
       grantedBy: r.grantedBy,
       grantReason: r.grantReason,
     }));
+  }
+
+  private async emailsFor(userIds: string[]): Promise<Map<string, string>> {
+    if (userIds.length === 0) {
+      return new Map();
+    }
+    const users = await this.prisma.user.findMany({
+      where: { id: { in: [...new Set(userIds)] } },
+      select: { id: true, email: true },
+    });
+    return new Map(users.map((u) => [u.id, u.email]));
   }
 
   /* Give a person a role, optionally bounded to one company and with an expiry.
