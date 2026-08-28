@@ -12,3 +12,7 @@ coverage/
 .env.*.local
 !.env.example
 *.tsbuildinfo
+
+# Bản chiếu máy sinh để XEM ở local (ma trận quyền). Không phải nguồn sự thật —
+# nguồn là permission-catalog.ts; dựng lại bằng scripts/authz-report.ts.
+.local/
