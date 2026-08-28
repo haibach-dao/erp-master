@@ -279,8 +279,27 @@ export const PERMISSION_CATALOG: readonly PermissionDef[] = [
   p('authz.role_assignment.assign', 'S3', 'Gán vai cho người'),
   p('authz.role_assignment.revoke', 'S3', 'Thu vai của người'),
   p('authz.scope.assign', 'S3', 'Gán phạm vi dữ liệu cho người'),
-  p('authz.change.submit', 'S2', 'Trình thay đổi ma trận quyền'),
-  p('authz.change.approve', 'S3', 'Cho thay đổi ma trận quyền HIỆU LỰC'),
+  /* BỎ DẦN 28/08/2026 — chủ doanh nghiệp quyết: phân quyền KHÔNG qua bước trình-rồi-duyệt.
+   *
+   * Hai mã này khai một quy trình hai bước (soạn thay đổi → người khác cho hiệu lực) mà
+   * không route nào từng gọi tới. Câu hỏi đặt ra là bổ sung quy trình đó hay bỏ hẳn, và
+   * câu trả lời là BỎ: người phân quyền chính là người có thẩm quyền phân quyền. Cấp mã
+   * ADMIN cho một IT thì họ cũng phân quyền được cho người khác — đó là điều đã biết và
+   * đã chấp nhận khi cấp. Bắt họ tự trình rồi tự duyệt là một vòng thủ tục rỗng.
+   *
+   * Nên với RIÊNG việc phân quyền: bấm là hiệu lực. Nguyên tắc "Đã duyệt ≠ Hiệu lực" ở
+   * hiến pháp AI vẫn nguyên giá trị cho hồ sơ nghiệp vụ — nó không áp cho đường này.
+   *
+   * HỆ QUẢ ĐANG CHẤP NHẬN: không có ai thứ hai nhìn lại trước khi một mã S3 đổi chủ. Thứ
+   * thay cho cặp mắt đó là AUDIT — `AUTHZ.PERMISSION_GRANTED`/`_REVOKED` ghi ảnh trước/sau
+   * mỗi lần bấm. Phát hiện SAU, không chặn TRƯỚC. Đó là đánh đổi đã chọn, không phải khe hở.
+   */
+  p('authz.change.submit', 'S2', 'Trình thay đổi ma trận quyền', {
+    deprecated: 'authz.role_permission.grant',
+  }),
+  p('authz.change.approve', 'S3', 'Cho thay đổi ma trận quyền HIỆU LỰC', {
+    deprecated: 'authz.role_permission.grant + authz.role_permission.revoke',
+  }),
   p('authz.matrix.export', 'S2', 'Xuất bản chiếu ma trận vai × quyền'),
   p('authz.rule.view', 'S2', 'Xem chuỗi luật truy cập'),
   p('authz.rule.update', 'S3', 'Sửa chuỗi luật truy cập (thêm/đổi thứ tự/thu hồi)'),
@@ -641,7 +660,9 @@ export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
     'authz.permission.view',
     'authz.role.view',
     'authz.matrix.export',
-    'authz.change.approve',
+    /* Bỏ 28/08/2026 cùng quyết định phân quyền không qua trình-rồi-duyệt: hai mã
+     * `authz.change.*` không gate route nào, nên giữ ở đây là ghi một quyền không tồn tại
+     * vào bản chiếu ma trận. */
   ]),
 
   HD_GIA: role('Hội đồng giá', 'Duyệt giá — tách hẳn khỏi người bán', 'COMPANY', [
@@ -733,7 +754,7 @@ export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
       'authz.permission.view',
       'authz.role.view',
       'authz.matrix.export',
-      'authz.change.submit',
+      /* Bỏ 28/08/2026 — xem chú thích ở `authz.change.submit` trong danh mục. */
       'iam.user.view',
       'iam.user.create',
       'iam.user.update',
@@ -745,14 +766,14 @@ export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
 
   QT_NGHIEP_VU: role(
     'Quản trị nghiệp vụ',
-    'Soạn ma trận quyền và danh mục. CHỈ submit, KHÔNG approve.',
+    'Đọc ma trận quyền và giữ danh mục. KHÔNG sửa được ma trận (28/08/2026).',
     'GROUP',
     [
       ...CEMETERY_READ_ALL,
       'authz.permission.view',
       'authz.role.view',
       'authz.matrix.export',
-      'authz.change.submit',
+      /* Bỏ 28/08/2026 — xem chú thích ở `authz.change.submit` trong danh mục. */
       'config.reference.view',
       'notification.template.view',
       'notification.template.update',
