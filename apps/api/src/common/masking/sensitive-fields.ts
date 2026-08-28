@@ -23,6 +23,18 @@ export const SENSITIVE_FIELDS: readonly MaskRule[] = [
    * Hai mã tách nhau vì hai rủi ro khác nhau: người bán cần gọi được cho khách hàng, còn
    * CCCD thì họ không cần. Gộp lại thì "cho xem số điện thoại" đồng nghĩa "cho xem CCCD
    * đầy đủ" — leo thang do thiết kế mã, không do ai quyết định. */
+  /* Số CCCD BẢN RÕ. Thêm 28/08/2026 cùng việc thẻ mộ in được CCCD đầy đủ.
+   *
+   * Trước đó không có dòng này vì bản rõ chỉ ra khỏi hệ qua đúng một route
+   * (`/persons/:id/national-id`) vốn đã gate S3 — không có gì để che. Nay thẻ mộ cũng trả
+   * bản rõ, nên chỗ quyết định "ai đọc được số thật" phải nằm ở ĐÂY, một chỗ, cho mọi
+   * route. Route nào sau này trả thêm `nationalId` là tự động được che, không cần ai nhớ.
+   *
+   * Chiến lược `national_id` chứ không phải `redact`: người không cầm S3 vẫn nhận
+   * `079***789` — đủ đối chiếu 3 số cuối với giấy tờ khách đang cầm, không đủ để định
+   * danh. Che thành `***` là làm hỏng việc của người tiếp đón mà không giấu thêm được gì.
+   */
+  { field: 'nationalId', permission: 'crm.person.view_sensitive', strategy: 'national_id' },
   { field: 'phone', permission: 'crm.person.view_contact' },
   { field: 'email', permission: 'crm.person.view_contact' },
   // Ngày sinh/ngày mất che thành NĂM: đủ để đối chiếu hồ sơ, không đủ để định danh.

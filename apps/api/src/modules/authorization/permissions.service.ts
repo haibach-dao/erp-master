@@ -70,6 +70,32 @@ export class PermissionsService {
     return grants;
   }
 
+  /* Người này có cầm mã `code` không — dùng cho LỚP CHE trường và cho việc ghi nhật ký
+   * "bản đầy đủ có rời khỏi hệ hay không".
+   *
+   * Tách ra thành hàm riêng vì có hai nơi phải trả lời CÙNG một câu hỏi và phải trả lời
+   * GIỐNG NHAU: `MaskingInterceptor` quyết che hay không che, còn `CardsService` ghi vào
+   * nhật ký rằng thẻ vừa in có CCCD đầy đủ hay không. Hai nơi tự kiểm thì sẽ có ngày một
+   * bên nói che còn bên kia ghi là không che — và nhật ký sai còn tệ hơn không có nhật ký.
+   *
+   * FAIL CLOSED: mã không có trong danh mục trả về false, tức là VẪN CHE.
+   *
+   * GIỚI HẠN CÓ CHỦ ĐÍCH: hàm này KHÔNG đi qua chuỗi luật truy cập (`evaluateRules`), khác
+   * với `scopeLevelFor`. Giữ nguyên hành vi vốn có của lớp che — một luật DENY hiện không
+   * che thêm trường nào. Đổi điều đó là một quyết định riêng, không phải hệ quả phụ của
+   * việc gom hai chỗ kiểm về một chỗ.
+   */
+  async holdsForMasking(userId: string, code: string): Promise<boolean> {
+    const meta = await this.getPermissionMeta(code);
+    if (meta === null) {
+      return false;
+    }
+    const grants = await this.getGrants(userId);
+    return grants.some((g) =>
+      permissionMatches(g.permission, code, { wildcardExempt: meta.wildcardExempt }),
+    );
+  }
+
   /* Scope level for ONE code — union across the grants that actually cover that code.
    *
    * Union has to be computed per code, never once for the whole caller. A single global

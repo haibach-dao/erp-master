@@ -4,6 +4,8 @@ import { CardsService } from './cards.service';
 import type { PrismaService } from '../../prisma/prisma.service';
 import type { AuditService } from '../audit/audit.service';
 import type { ScopeService } from '../authorization/scope.service';
+import type { PermissionsService } from '../authorization/permissions.service';
+import type { PiiService } from '../../common/pii/pii.service';
 import type { Caller } from '../authorization/caller';
 
 /* Caller mang theo MÃ QUYỀN đang thi hành, không chỉ userId — phạm vi được tính theo
@@ -39,6 +41,10 @@ function build(
     companyId?: string | null;
     customerMissing?: boolean;
     log?: unknown;
+    /** Người gọi có cầm `crm.person.view_sensitive` không — quyết CCCD trên thẻ. */
+    holdsSensitive?: boolean;
+    /** Hồ sơ chưa nhập CCCD — không có gì để giải mã. */
+    noNationalId?: boolean;
   } = {},
 ) {
   const {
@@ -52,6 +58,8 @@ function build(
     companyId = 'co-1',
     customerMissing = false,
     log = null,
+    holdsSensitive = false,
+    noNationalId = false,
   } = opts;
 
   const record = vi.fn().mockResolvedValue(undefined);
@@ -79,7 +87,8 @@ function build(
                 fullName: 'Nguyễn Văn A',
                 gender: 'MALE',
                 dateOfBirth: new Date('1970-07-07'),
-                nationalIdMasked: '079***123',
+                nationalIdCipher: noNationalId ? null : 'iv:tag:enc',
+                nationalIdMasked: noNationalId ? null : '079***789',
                 nationalIdIssuedOn: new Date('2021-06-15'),
                 nationalIdIssuedPlace: 'Cục CSQLHC',
                 phone: '0911111111',
@@ -122,12 +131,16 @@ function build(
   } as unknown as PrismaService;
 
   const assertCompanyFor = vi.fn().mockResolvedValue(undefined);
+  const decrypt = vi.fn().mockReturnValue('079123456789');
+  const holdsForMasking = vi.fn().mockResolvedValue(holdsSensitive);
   const svc = new CardsService(
     prisma,
     { record } as unknown as AuditService,
     { assertCompanyFor } as unknown as ScopeService,
+    { decrypt } as unknown as PiiService,
+    { holdsForMasking } as unknown as PermissionsService,
   );
-  return { svc, record, createLog, assertCompanyFor };
+  return { svc, record, createLog, assertCompanyFor, decrypt, holdsForMasking };
 }
 
 /* Lỗi đắt nhất của bản hệ cũ: mở thẻ ra xem cũng ghi một dòng nhật ký, nên bấm Hủy ở hộp
@@ -157,10 +170,11 @@ describe('thẻ mộ — xem trước KHÔNG phải là cấp thẻ', () => {
   it('cấp thẻ mới ghi nhật ký và phát audit', async () => {
     const { svc, createLog, record } = build({ lastPrintNumber: 1 });
 
-    const card = (await svc.issue(CUSTOMER, { printReason: 'Đổi thông tin' }, CALLER_PRINT)) as Record<
-      string,
-      unknown
-    >;
+    const card = (await svc.issue(
+      CUSTOMER,
+      { printReason: 'Đổi thông tin' },
+      CALLER_PRINT,
+    )) as Record<string, unknown>;
 
     expect(card.printNumber).toBe(2);
     expect(card.issued).toBe(true);
@@ -244,14 +258,29 @@ describe('thẻ mộ — nội dung in ra', () => {
     expect(card.plots[0].occupants[0].relationshipToOwner).toBe('SPOUSE');
   });
 
-  it('trả CCCD dạng đã che sẵn — bản đầy đủ không đi qua đường này', async () => {
-    const { svc } = build();
+  /* Đổi 28/08/2026. Test cũ khẳng định thẻ KHÔNG bao giờ mang bản rõ, và nó khẳng định
+   * đúng cái lỗi: service đọc cột `nationalIdMasked` nên thẻ ra bản che với MỌI người,
+   * kể cả người cầm S3. Chủ doanh nghiệp quyết thẻ phải in được số đầy đủ, nên đường đi
+   * bây giờ là: service trả BẢN RÕ, `MaskingInterceptor` che lại nếu người gọi không cầm
+   * `crm.person.view_sensitive`. Việc che không còn nằm trong service — nên ở đây chỉ
+   * kiểm service giao đúng bản rõ, và kiểm việc che ở `masking-invariants`. */
+  it('trả CCCD BẢN RÕ và để lớp che quyết — service không tự che', async () => {
+    const { svc, decrypt } = build();
 
     const card = (await svc.preview(CUSTOMER, CALLER_VIEW)) as { owner: Record<string, unknown> };
 
-    expect(card.owner.nationalIdMasked).toBe('079***123');
-    expect(card.owner).not.toHaveProperty('nationalId');
-    expect(card.owner).not.toHaveProperty('nationalIdCipher');
+    expect(card.owner.nationalId).toBe('079123456789');
+    expect(decrypt).toHaveBeenCalledWith('iv:tag:enc');
+    expect(card.owner).not.toHaveProperty('nationalIdMasked');
+  });
+
+  it('người chưa có CCCD trong hồ sơ thì không gọi giải mã', async () => {
+    const { svc, decrypt } = build({ noNationalId: true });
+
+    const card = (await svc.preview(CUSTOMER, CALLER_VIEW)) as { owner: Record<string, unknown> };
+
+    expect(card.owner.nationalId).toBeNull();
+    expect(decrypt).not.toHaveBeenCalled();
   });
 });
 
@@ -284,5 +313,79 @@ describe('thẻ mộ — chặn trước khi cấp', () => {
     /* Ba tham số, và tham số GIỮA là thứ đáng kiểm nhất: mã quyền đang thi hành. Thiếu nó
      * thì phạm vi được tính ở mức rộng nhất của người gọi — đúng lớp lỗi vừa vá. */
     expect(assertCompanyFor).toHaveBeenCalledWith('u1', 'cemetery.card.view', 'co-1');
+  });
+});
+
+/* Mỗi tờ thẻ mang số CCCD thật là một bản sao dữ liệu cá nhân RỜI KHỎI HỆ — không thu hồi
+ * được. NĐ 13/2023 đòi biết ai đưa dữ liệu của một người ra ngoài và lúc nào, nên nhật ký
+ * phải phân biệt được thẻ có số thật với thẻ có số đã che. */
+describe('thẻ mộ — nhật ký nói rõ thẻ có mang CCCD đầy đủ hay không', () => {
+  it('người cầm view_sensitive: ghi FULL', async () => {
+    const { svc, record } = build({ holdsSensitive: true });
+
+    await svc.issue(CUSTOMER, {}, CALLER_PRINT);
+
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'GRAVE_CARD.ISSUED',
+        afterData: expect.objectContaining({ nationalIdOnCard: 'FULL' }),
+      }),
+    );
+  });
+
+  it('người không cầm view_sensitive: ghi MASKED', async () => {
+    const { svc, record } = build({ holdsSensitive: false });
+
+    await svc.issue(CUSTOMER, {}, CALLER_PRINT);
+
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'GRAVE_CARD.ISSUED',
+        afterData: expect.objectContaining({ nationalIdOnCard: 'MASKED' }),
+      }),
+    );
+  });
+
+  /* In lại cũng đẩy ra một tờ giấy nữa, nên cũng phải ghi. Bỏ sót chỗ này thì đếm được
+   * số LẦN CẤP có số thật mà không đếm được số TỜ có số thật. */
+  it('in lại cũng ghi, vì in lại cũng đẩy ra một tờ giấy nữa', async () => {
+    const { svc, record } = build({
+      holdsSensitive: true,
+      log: { id: 'log-1', customerId: CUSTOMER, companyId: 'co-1', printNumber: 2 },
+    });
+
+    await svc.reprint('log-1', CALLER_VIEW);
+
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'GRAVE_CARD.REPRINTED',
+        afterData: expect.objectContaining({ nationalIdOnCard: 'FULL' }),
+      }),
+    );
+  });
+
+  /* Hỏi ĐÚNG mã đang mở khoá lớp che. Hỏi mã khác thì nhật ký nói một đằng, tờ giấy in
+   * một nẻo — và không ai phát hiện được vì cả hai đều "chạy đúng". */
+  it('hỏi đúng mã crm.person.view_sensitive, không phải mã nào khác', async () => {
+    const { svc, holdsForMasking } = build();
+
+    await svc.issue(CUSTOMER, {}, CALLER_PRINT);
+
+    expect(holdsForMasking).toHaveBeenCalledWith('u1', 'crm.person.view_sensitive');
+  });
+
+  /* Ca biên: request không mang người dùng. Ghi MASKED và ĐỪNG hỏi — cùng nếp fail closed
+   * với lớp che, vốn cũng che khi không biết người gọi là ai. */
+  it('không biết người gọi là ai thì ghi MASKED, không hỏi quyền', async () => {
+    const { svc, record, holdsForMasking } = build({ holdsSensitive: true });
+
+    await svc.issue(CUSTOMER, {}, { userId: null, permission: 'cemetery.card.print' });
+
+    expect(holdsForMasking).not.toHaveBeenCalled();
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        afterData: expect.objectContaining({ nationalIdOnCard: 'MASKED' }),
+      }),
+    );
   });
 });

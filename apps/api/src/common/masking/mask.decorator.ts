@@ -14,14 +14,18 @@ export const NEVER_SERIALIZE = [
   'refreshTokenHash',
 ] as const;
 
-export type MaskStrategy = 'redact' | 'year';
+export type MaskStrategy = 'redact' | 'year' | 'national_id';
 
 export interface MaskRule {
   /** Property name as it appears in the response body. */
   field: string;
   /** Caller must hold this code to see the real value. */
   permission: string;
-  /** `redact` -> '***'. `year` -> keep the year of a date only. */
+  /**
+   * `redact` -> '***'. `year` -> keep the year of a date only.
+   * `national_id` -> keep 3 first + 3 last ('079***789'), đủ để đối chiếu giấy tờ trước
+   * mặt khách mà không đủ để định danh — xem `mask-national-id.ts`.
+   */
   strategy?: MaskStrategy;
 }
 

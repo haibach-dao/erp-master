@@ -91,9 +91,10 @@ function FrontCover({ card, printNumber }: { card: GraveCard; printNumber: strin
     ['Họ và tên', card.owner.fullName ?? '—'],
     ['Giới tính', card.owner.gender ?? '—'],
     ['Ngày sinh', fmtDate(card.owner.dateOfBirth)],
-    // CCCD in bản ĐÃ CHE. Bản đầy đủ không đi qua đường này — muốn xem thì có endpoint
-    // riêng, có ghi nhật ký từng lần xem.
-    ['Số CCCD', card.owner.nationalIdMasked ?? '—'],
+    /* API trả số đầy đủ cho người cầm `crm.person.view_sensitive`, và `079***789` cho
+     * người không cầm. In thẳng thứ nhận được — KHÔNG tự che thêm ở đây: che ở hai nơi
+     * là hai nơi sẽ có ngày lệch nhau, và nơi sai sẽ là nơi này. */
+    ['Số CCCD', card.owner.nationalId ?? '—'],
     ['Cấp ngày', fmtDate(card.owner.nationalIdIssuedOn)],
     ['Nơi cấp', card.owner.nationalIdIssuedPlace ?? '—'],
     ['Điện thoại', card.owner.phone ?? '—'],

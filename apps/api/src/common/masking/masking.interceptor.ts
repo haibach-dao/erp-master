@@ -3,13 +3,13 @@ import { Reflector } from '@nestjs/core';
 import type { Request } from 'express';
 import { Observable, from, mergeMap } from 'rxjs';
 import { PermissionsService } from '../../modules/authorization/permissions.service';
-import { permissionMatches } from '../../modules/authorization/policy-evaluator';
 import {
   MASK_RULES_KEY,
   NEVER_SERIALIZE,
   REVEAL_FIELDS_KEY,
   type MaskRule,
 } from './mask.decorator';
+import { maskNationalId } from '../pii/mask-national-id';
 import { SENSITIVE_FIELDS } from './sensitive-fields';
 
 const REDACTED = '***';
@@ -69,18 +69,9 @@ export class MaskingInterceptor implements NestInterceptor {
     if (userId === undefined) {
       return rules;
     }
-    const grants = await this.permissions.getGrants(userId);
     const active: MaskRule[] = [];
     for (const rule of rules) {
-      const meta = await this.permissions.getPermissionMeta(rule.permission);
-      const holds =
-        meta !== null &&
-        grants.some((g) =>
-          permissionMatches(g.permission, rule.permission, {
-            wildcardExempt: meta.wildcardExempt,
-          }),
-        );
-      if (!holds) {
+      if (!(await this.permissions.holdsForMasking(userId, rule.permission))) {
         active.push(rule);
       }
     }
@@ -119,6 +110,9 @@ function maskedValue(value: unknown, strategy: MaskRule['strategy']): unknown {
   if (strategy === 'year') {
     const date = value instanceof Date ? value : new Date(String(value));
     return Number.isNaN(date.getTime()) ? REDACTED : String(date.getUTCFullYear());
+  }
+  if (strategy === 'national_id') {
+    return typeof value === 'string' ? maskNationalId(value) : REDACTED;
   }
   return REDACTED;
 }

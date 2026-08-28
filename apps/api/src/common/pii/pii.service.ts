@@ -1,6 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { maskNationalId } from './mask-national-id';
 
 // Handles sensitive identifiers (e.g. CCCD): AES-256-GCM encryption (viewable with
 // permission), sha256 hash for duplicate detection, and masking for display (G0-E5.2/A6).
@@ -48,11 +49,10 @@ export class PiiService {
     return createHash('sha256').update(this.normalize(value)).digest('hex');
   }
 
+  /* Uỷ cho hàm thuần dùng chung với `MaskingInterceptor`. Xem `mask-national-id.ts` về
+   * lý do hai nơi phải che GIỐNG HỆT nhau. */
   mask(value: string): string {
-    if (value.length <= 6) {
-      return '***';
-    }
-    return `${value.slice(0, 3)}***${value.slice(-3)}`;
+    return maskNationalId(value);
   }
 
   private normalize(value: string): string {

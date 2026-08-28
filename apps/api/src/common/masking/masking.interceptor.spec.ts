@@ -6,6 +6,7 @@ import { MaskingInterceptor } from './masking.interceptor';
 import { MASK_RULES_KEY, REVEAL_FIELDS_KEY, type MaskRule } from './mask.decorator';
 import type { PermissionsService } from '../../modules/authorization/permissions.service';
 import type { PermissionGrant } from '../../modules/authorization/policy.types';
+import { permissionMatches } from '../../modules/authorization/policy-evaluator';
 
 function run(opts: {
   body: unknown;
@@ -24,15 +25,19 @@ function run(opts: {
     },
   } as unknown as Reflector;
 
+  /* Dựng lại ĐÚNG phép kiểm của `PermissionsService.holdsForMasking` chứ không trả thẳng
+   * true/false: các test dưới đây kiểm cả ngữ nghĩa wildcard và mã lạ, nên một mock
+   * "cứ bảo có là có" sẽ làm chúng xanh mà không kiểm gì. */
   const permissions = {
-    getGrants: vi.fn().mockResolvedValue(opts.grants ?? []),
-    getPermissionMeta: vi
-      .fn()
-      .mockResolvedValue(
-        opts.unknownCode === true
-          ? null
-          : { code: 'x', sensitivity: 'S3', wildcardExempt: opts.wildcardExempt ?? true },
-      ),
+    holdsForMasking: vi.fn().mockImplementation((_userId: string, code: string) => {
+      if (opts.unknownCode === true) {
+        return Promise.resolve(false);
+      }
+      const holds = (opts.grants ?? []).some((g) =>
+        permissionMatches(g.permission, code, { wildcardExempt: opts.wildcardExempt ?? true }),
+      );
+      return Promise.resolve(holds);
+    }),
   } as unknown as PermissionsService;
 
   const context = {
@@ -290,5 +295,56 @@ describe('MaskingInterceptor — dữ liệu nhạy cảm NĐ13 Điều 2.4', ()
     })) as Record<string, unknown>;
 
     expect(out.nationalIdIssuedOn).toBe('2021');
+  });
+});
+
+/* Số CCCD bản rõ. Thêm 28/08/2026 cùng việc thẻ mộ in được số đầy đủ — trước đó bản rõ chỉ
+ * ra khỏi hệ qua một route vốn đã gate S3, nên không có gì để che. */
+describe('MaskingInterceptor — số CCCD bản rõ', () => {
+  const NID: MaskRule = {
+    field: 'nationalId',
+    permission: 'crm.person.view_sensitive',
+    strategy: 'national_id',
+  };
+
+  it('người không cầm S3 nhận bản che giữ 3 đầu 3 cuối, KHÔNG phải ***', async () => {
+    const out = await run({
+      body: { owner: { nationalId: '079123456789' } },
+      rules: [NID],
+      userId: 'u1',
+    });
+
+    expect(out).toEqual({ owner: { nationalId: '079***789' } });
+  });
+
+  it('người cầm S3 nhận số đầy đủ', async () => {
+    const out = await run({
+      body: { owner: { nationalId: '079123456789' } },
+      rules: [NID],
+      userId: 'u1',
+      grants: [{ permission: 'crm.person.view_sensitive', scope: 'COMPANY' }],
+    });
+
+    expect(out).toEqual({ owner: { nationalId: '079123456789' } });
+  });
+
+  /* Số quá ngắn thì giữ 3 đầu 3 cuối là không che gì cả. Che HẲN, đừng che nửa vời. */
+  it('chuỗi ngắn bị che hẳn, không lộ nửa đầu nửa cuối', async () => {
+    const out = await run({ body: { nationalId: '12345' }, rules: [NID], userId: 'u1' });
+
+    expect(out).toEqual({ nationalId: '***' });
+  });
+
+  it('chưa nhập CCCD thì để nguyên null, không hoá thành ***', async () => {
+    const out = await run({ body: { nationalId: null }, rules: [NID], userId: 'u1' });
+
+    expect(out).toEqual({ nationalId: null });
+  });
+
+  /* Không đăng nhập thì che — fail closed, cùng nếp với mọi luật che khác. */
+  it('không có người dùng thì vẫn che', async () => {
+    const out = await run({ body: { nationalId: '079123456789' }, rules: [NID] });
+
+    expect(out).toEqual({ nationalId: '079***789' });
   });
 });

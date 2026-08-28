@@ -703,7 +703,10 @@ export interface GraveCard {
     fullName: string | null;
     gender: string | null;
     dateOfBirth: string | null;
-    nationalIdMasked: string | null;
+    /* Đầy đủ hay `079***789` là do API quyết theo quyền người đăng nhập — giao diện
+     * không biết và không cần biết. Đừng thêm nhánh "nếu có quyền thì...": quyết định
+     * đó nằm ở lớp che của API, một chỗ. */
+    nationalId: string | null;
     nationalIdIssuedOn: string | null;
     nationalIdIssuedPlace: string | null;
     phone: string | null;

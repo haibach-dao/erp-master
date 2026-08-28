@@ -3,7 +3,9 @@ import { ulid } from 'ulid';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import type { Caller } from '../authorization/caller';
+import { PermissionsService } from '../authorization/permissions.service';
 import { ScopeService } from '../authorization/scope.service';
+import { PiiService } from '../../common/pii/pii.service';
 import { activeBurial, activeUsageRight } from '../../common/lifecycle/active';
 import type { IssueCardDto } from './cards.dto';
 
@@ -15,13 +17,20 @@ export class CardsService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly scope: ScopeService,
+    private readonly pii: PiiService,
+    private readonly permissions: PermissionsService,
   ) {}
 
   /* Gom dữ liệu in lên thẻ.
    *
-   * KHÔNG tự che gì ở đây. Toàn bộ việc che do MaskingInterceptor làm trên đường ra, nên
-   * người in không cầm `crm.person.view_sensitive` sẽ nhận thẻ có CCCD dạng `079***123`.
-   * Che ở đây nữa là che hai lần ở hai chỗ, và hai chỗ thì sẽ có ngày lệch nhau.
+   * KHÔNG tự che gì ở đây. Trả `nationalId` BẢN RÕ và để `MaskingInterceptor` che trên
+   * đường ra: người không cầm `crm.person.view_sensitive` nhận `079***789`, người có cầm
+   * nhận số đầy đủ. Che ở đây nữa là che hai lần ở hai chỗ, và hai chỗ thì sẽ có ngày
+   * lệch nhau.
+   *
+   * Tới 28/08/2026 hàm này đọc cột `nationalIdMasked` — cột LƯU SẴN ở dạng đã che — nên
+   * thẻ ra `079***123` với MỌI người, kể cả người cầm S3, trong khi chú thích ngay trên
+   * đầu lại tả ngược lại. Không có bản rõ nào đi qua thì không có gì để mở khoá.
    */
   private async buildCard(customerId: string, caller: Caller) {
     const customer = await this.prisma.customer.findUnique({
@@ -100,6 +109,10 @@ export class CardsService {
       };
     });
 
+    /* Gán ra biến để TypeScript thu hẹp được kiểu: `customer.person?.x` qua optional chain
+     * không thu hẹp lần truy cập sau đó. */
+    const cipher = customer.person?.nationalIdCipher ?? null;
+
     const ownershipDate = rights
       .map((r) => r.effectiveFrom)
       .filter((d): d is Date => d !== null)
@@ -113,7 +126,10 @@ export class CardsService {
         fullName: customer.person?.fullName ?? customer.orgName ?? null,
         gender: customer.person?.gender ?? null,
         dateOfBirth: customer.person?.dateOfBirth ?? null,
-        nationalIdMasked: customer.person?.nationalIdMasked ?? null,
+        /* Bản RÕ, giải mã tại chỗ. `nationalId` nằm trong sổ trường nhạy cảm nên
+         * interceptor che lại thành `079***789` nếu người gọi không cầm S3 — quyết định
+         * "ai đọc được số thật" nằm ở sổ đó, một chỗ, không rải ra từng service. */
+        nationalId: cipher === null ? null : this.pii.decrypt(cipher),
         nationalIdIssuedOn: customer.person?.nationalIdIssuedOn ?? null,
         nationalIdIssuedPlace: customer.person?.nationalIdIssuedPlace ?? null,
         phone: customer.person?.phone ?? customer.phone ?? null,
@@ -132,6 +148,34 @@ export class CardsService {
       select: { printNumber: true },
     });
     return last?.printNumber ?? 0;
+  }
+
+  /* Thẻ vừa cấp có mang CCCD ĐẦY ĐỦ hay bản đã che.
+   *
+   * Ghi vào nhật ký vì mỗi tờ thẻ mang số thật là một bản sao dữ liệu cá nhân RỜI KHỎI HỆ
+   * — không thu hồi được, không biết nó đi đâu. NĐ 13/2023 đòi biết ai đưa dữ liệu của một
+   * người ra ngoài và lúc nào; "đã in một cái thẻ" không trả lời được câu đó, "đã in một
+   * cái thẻ CÓ SỐ THẬT" thì có.
+   *
+   * Hỏi đúng cái hàm mà interceptor dùng để quyết che hay không, chứ không tự kiểm lại —
+   * xem `holdsForMasking`. Hai chỗ tự kiểm là hai chỗ sẽ lệch, và lúc đó nhật ký nói một
+   * đằng còn tờ giấy in một nẻo.
+   *
+   * Nhận `userId` chứ KHÔNG nhận `Caller`, có chủ đích: đây là câu hỏi về một MÃ QUYỀN
+   * ("người này có cầm S3 không"), không phải câu hỏi về một BẢN GHI ("người này có với
+   * tới hồ sơ kia không"). Nhận `Caller` sẽ khiến ratchet quét phạm vi đòi bó phạm vi ở
+   * đây — một đòi hỏi đúng luật nhưng sai chỗ, và cách trả lời tử tế là đừng nhận cái
+   * tham số gợi ra câu hỏi đó. Phạm vi bản ghi đã bó ở `buildCard`, trước khi tới đây.
+   */
+  private async nationalIdOnCard(userId: string | null): Promise<'FULL' | 'MASKED'> {
+    /* Không biết là ai thì ghi MASKED — cùng nếp FAIL CLOSED với lớp che, vốn cũng che khi
+     * request không mang người dùng. Hai chỗ phải trả lời giống nhau kể cả ở ca biên này,
+     * nếu không thì đúng ở ca thường mà lệch ở ca hiếm — loại lệch khó thấy nhất. */
+    if (userId === null) {
+      return 'MASKED';
+    }
+    const holds = await this.permissions.holdsForMasking(userId, 'crm.person.view_sensitive');
+    return holds ? 'FULL' : 'MASKED';
   }
 
   /* XEM TRƯỚC — không ghi gì, không cấp số.
@@ -194,6 +238,7 @@ export class CardsService {
         printNumber: log.printNumber,
         printReason: log.printReason,
         approvedBy: log.approvedBy,
+        nationalIdOnCard: await this.nationalIdOnCard(caller.userId),
       },
     });
 
@@ -219,7 +264,11 @@ export class CardsService {
       action: 'GRAVE_CARD.REPRINTED',
       entityType: 'card_print_log',
       entityId: log.id,
-      afterData: { customerId: log.customerId, printNumber: log.printNumber },
+      afterData: {
+        customerId: log.customerId,
+        printNumber: log.printNumber,
+        nationalIdOnCard: await this.nationalIdOnCard(caller.userId),
+      },
     });
     return {
       ...card,
