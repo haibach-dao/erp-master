@@ -32,8 +32,17 @@ const SCHEDULE = {
   createdAt: new Date('2026-01-01'),
 };
 
-function build(opts: { schedule?: unknown; firstIssued?: string[] } = {}) {
+function build(opts: { schedule?: unknown; firstIssued?: string[]; company?: unknown } = {}) {
   const prisma = {
+    /* `company.findUnique` chỉ được gọi trên ĐƯỜNG LỖI — để gọi tên công ty trong câu từ
+     * chối. Mặc định trả một công ty có tên thật, và có ca riêng cho ca tra không ra. */
+    company: {
+      findUnique: vi
+        .fn()
+        .mockResolvedValue(
+          opts.company === undefined ? { code: 'S1787', name: 'An Lạc Viên S' } : opts.company,
+        ),
+    },
     graveCardFeeSchedule: {
       findFirst: vi.fn().mockResolvedValue(opts.schedule === undefined ? SCHEDULE : opts.schedule),
     },
@@ -213,5 +222,38 @@ describe('miễn phí GHI ĐỦ số tiền, không ghi 0', () => {
       chargedBy: 'u1',
     });
     expect((created[0] as { waiveReason: string | null }).waiveReason).toBeNull();
+  });
+});
+
+/* CÂU TỪ CHỐI PHẢI GỌI TÊN CÔNG TY.
+ *
+ * 03/09/2026 anh Bách bị chặn ở đúng đây và câu cũ chỉ nói "công ty này". Màn hình cấp thẻ
+ * không in ra khách thuộc công ty nào, còn ô chọn ở trang biểu phí liệt kê chín cái tên một
+ * chữ cái — nên anh ban hành biểu phí cho hai công ty sai liền, cả hai đều 0 khách. Câu từ
+ * chối đúng sự thật mà không hành động được cũng là một lỗi: xem ba tiêu chí ở
+ * `bach-engineering-standards` mục 3.
+ */
+describe('câu từ chối khi chưa có biểu phí', () => {
+  it('gọi TÊN và MÃ công ty, không nói trống không "công ty này"', async () => {
+    const { svc } = build({ schedule: null });
+    await expect(svc.quote(card([moDoi]), new Date())).rejects.toThrow(/An Lạc Viên S/);
+    await expect(svc.quote(card([moDoi]), new Date())).rejects.toThrow(/S1787/);
+  });
+
+  it('chỉ ra ĐI ĐÂU để gỡ, không chỉ báo là đã thất bại', async () => {
+    const { svc } = build({ schedule: null });
+    await expect(svc.quote(card([moDoi]), new Date())).rejects.toThrow(/Phí cấp thẻ mộ/);
+  });
+
+  it('tra không ra công ty thì vẫn nêu MÃ, không nuốt thành câu trống', async () => {
+    const { svc } = build({ schedule: null, company: null });
+    await expect(svc.quote(card([moDoi]), new Date())).rejects.toThrow(new RegExp(CO));
+  });
+
+  it('đường BÌNH THƯỜNG không tra bảng công ty — truy vấn phụ chỉ chạy khi lỗi', async () => {
+    const { svc, prisma } = build();
+    await svc.quote(card([moDoi]), new Date('2026-06-01'));
+    const spy = prisma.company.findUnique as unknown as { mock: { calls: unknown[] } };
+    expect(spy.mock.calls).toHaveLength(0);
   });
 });

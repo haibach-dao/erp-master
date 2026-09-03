@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import Link from 'next/link';
 import { IdCard, Printer } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -13,6 +14,8 @@ import {
   type CardFeeQuote,
   type GraveCard,
 } from '@/lib/api';
+import { useAuth } from '@/lib/auth';
+import { can } from '@/lib/permissions';
 import { formatMoney } from '@/lib/money';
 import { GraveCardSheets } from '@/components/grave-card';
 import { PageHeader } from '@/components/ui/page-header';
@@ -96,6 +99,11 @@ function FeeTable({ fee }: { fee: CardFeeQuote }) {
 
 export default function GraveCardsPage() {
   const qc = useQueryClient();
+  const { user } = useAuth();
+  /* Chỉ mời sang trang biểu phí người thực sự ban hành được. Với người khác, một đường dẫn
+   * tới màn hình họ chỉ xem được là mách một lối cụt — xem tiêu chí 3 ở
+   * [[bach-engineering-standards]] mục 3. */
+  const canSetPrice = can(user, 'cemetery.card_fee.set_price');
   const [customerId, setCustomerId] = useState('');
   const [approvedBy, setApprovedBy] = useState('');
   const [approvedTitle, setApprovedTitle] = useState('PHÓ GIÁM ĐỐC');
@@ -244,10 +252,21 @@ export default function GraveCardsPage() {
                 )}
               </div>
             )}
-            {card !== null && card.fee === null && !card.issued && (
+            {/* Câu này do API nói, không phải màn hình tự chế — nó đã gọi TÊN công ty.
+                Bản cũ in ra "khách chưa gắn công ty, HOẶC công ty chưa ban hành biểu phí":
+                đúng cả hai vế, nhưng người đọc không biết mình dính vế nào nên không biết
+                đi sửa ở đâu. 03/09/2026 nó dẫn tới ban hành biểu phí nhầm công ty hai lần. */}
+            {card !== null && card.feeBlocked !== null && !card.issued && (
               <Alert variant="warning">
-                Chưa tính được phí: khách hàng chưa gắn công ty quản lý, hoặc công ty chưa ban hành
-                biểu phí cấp thẻ. Cấp thẻ sẽ bị từ chối cho tới khi có biểu phí.
+                <span className="block">Chưa tính được phí: {card.feeBlocked}</span>
+                {canSetPrice && (
+                  <Link
+                    href="/cemetery/card-fees"
+                    className="mt-1 inline-block font-medium underline underline-offset-4"
+                  >
+                    Mở trang Phí cấp thẻ mộ →
+                  </Link>
+                )}
               </Alert>
             )}
 

@@ -747,10 +747,13 @@ export interface GraveCard {
   approvedTitle?: string | null;
   issued: boolean;
   reprint?: boolean;
-  /* Bảng kê tiền. `null` khi CHƯA TÍNH ĐƯỢC (khách chưa gắn công ty, hoặc công ty chưa ban
-   * hành biểu phí) — khác hẳn với 0đ. `formatMoney` hiện `—` cho null nhưng "0đ" cho 0, và
-   * "0đ" trên màn hình quầy đọc thành "miễn phí". */
+  /* Bảng kê tiền. `null` khi CHƯA TÍNH ĐƯỢC — khác hẳn với 0đ. `formatMoney` hiện `—` cho
+   * null nhưng "0đ" cho 0, và "0đ" trên màn hình quầy đọc thành "miễn phí". */
   fee: CardFeeQuote | null;
+  /* LÝ DO chưa tính được, do API nói ra và đã gọi TÊN công ty. `null` khi tính được bình
+   * thường. Đừng tự chế câu thay nó ở màn hình: chỉ API mới biết vướng cái nào trong hai
+   * nguyên nhân, và câu tự chế nêu cả hai là bắt người dùng tự chẩn đoán. */
+  feeBlocked: string | null;
 }
 
 /* Tiền khai `string`, KHÔNG `number`: API trả Decimal ra chuỗi, và lớp che có thể thay nó
@@ -1257,6 +1260,22 @@ export const getBurialCandidates = (gravePlotId: string): Promise<BurialCandidat
  * đổi giá là ban hành một dòng mới với ngày hiệu lực mới. */
 export const listCardFeeSchedules = (companyId: string): Promise<CardFeeSchedule[]> =>
   apiFetch(`/api/v1/cemetery/card-fees?companyId=${encodeURIComponent(companyId)}`);
+
+/* Công ty nào đã có biểu phí đang hiệu lực, công ty nào chưa — kèm số khách đang chờ.
+ *
+ * `effectiveFrom === null` nghĩa là CHƯA CÓ biểu phí hiệu lực hôm nay. Cẩn thận: nó không
+ * đồng nghĩa "chưa ban hành dòng nào" — một biểu phí hẹn hiệu lực sang tháng sau cũng ra
+ * `null` ở đây, và đúng như vậy, vì hôm nay vẫn chưa cấp thẻ được. */
+export interface CardFeeCoverage {
+  companyId: string;
+  code: string;
+  name: string;
+  customerCount: number;
+  effectiveFrom: string | null;
+}
+
+export const listCardFeeCoverage = (): Promise<CardFeeCoverage[]> =>
+  apiFetch('/api/v1/cemetery/card-fees/coverage');
 
 export const createCardFeeSchedule = (input: {
   companyId: string;

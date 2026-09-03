@@ -67,11 +67,75 @@ export class CardFeesService {
       orderBy: { effectiveFrom: 'desc' },
     });
     if (schedule === null) {
+      /* GỌI TÊN công ty trong câu từ chối, đừng nói "công ty này".
+       *
+       * 03/09/2026 anh Bách bị chặn đúng ở đây, và câu cũ ("...cho công ty này...") làm anh
+       * ban hành biểu phí cho HAI công ty sai liền — cả hai đều không có khách nào. Màn hình
+       * cấp thẻ không hề in ra khách này thuộc công ty nào, còn ô chọn công ty ở trang biểu
+       * phí thì liệt kê chín cái tên một chữ cái. Câu từ chối đúng sự thật nhưng không ai
+       * hành động được: xem ba tiêu chí ở [[bach-engineering-standards]] mục 3.
+       *
+       * Một truy vấn phụ, chỉ chạy trên ĐƯỜNG LỖI — đường bình thường không tốn gì. */
+      const company = await this.prisma.company.findUnique({
+        where: { id: companyId },
+        select: { code: true, name: true },
+      });
+      const who = company === null ? `có mã ${companyId}` : `${company.name} (${company.code})`;
       throw new ConflictException(
-        'Chưa có biểu phí cấp thẻ có hiệu lực cho công ty này — cần ban hành biểu phí trước khi cấp thẻ',
+        `Công ty ${who} chưa có biểu phí cấp thẻ có hiệu lực. Vào trang "Phí cấp thẻ mộ", chọn ĐÚNG công ty này rồi ban hành biểu phí trước khi cấp thẻ.`,
       );
     }
     return schedule;
+  }
+
+  /* CÔNG TY NÀO ĐÃ CÓ BIỂU PHÍ, CÔNG TY NÀO CHƯA — kèm số khách đang chờ.
+   *
+   * Đây là phần bù cho câu từ chối ở trên: câu kia nói "công ty X còn thiếu", còn cái này
+   * trả lời "vậy còn thiếu ở đâu nữa". Không có nó thì người ban hành biểu phí phải đoán,
+   * và đoán sai thì không có gì báo — biểu phí ban cho công ty rỗng vẫn lưu thành công.
+   *
+   * `customerCount` ở đây KHÔNG phải số liệu trang trí: công ty 0 khách mà thiếu biểu phí
+   * thì không chặn ai, còn công ty 30 khách mà thiếu thì cả quầy đứng. Hai ca đó phải nhìn
+   * là phân biệt được ngay.
+   */
+  async listCoverage(caller: Caller) {
+    const visible = await this.scope.visibleCompanyIdsFor(caller.userId, caller.permission);
+    const companies = await this.prisma.company.findMany({
+      ...(visible === null ? {} : { where: { id: { in: visible } } }),
+      select: { id: true, code: true, name: true },
+      orderBy: { name: 'asc' },
+    });
+    const ids = companies.map((c) => c.id);
+
+    /* Gom bằng HAI truy vấn cho cả danh sách, không một truy vấn cho mỗi công ty. */
+    const counts = await this.prisma.customer.groupBy({
+      by: ['companyId'],
+      where: { companyId: { in: ids } },
+      _count: { _all: true },
+    });
+    const byCompany = new Map(counts.map((c) => [c.companyId, c._count._all]));
+
+    /* "Đang hiệu lực" phải hỏi ĐÚNG câu mà `effectiveSchedule` hỏi — `effectiveFrom <= hôm
+     * nay`, chứ không phải "có tồn tại dòng nào". Biểu phí hẹn hiệu lực sang tháng sau vẫn
+     * là chưa cấp thẻ được, và trang này mà báo xanh thì nó nói dối. */
+    const now = new Date();
+    const schedules = await this.prisma.graveCardFeeSchedule.findMany({
+      where: { companyId: { in: ids }, cardType: CARD_TYPE, effectiveFrom: { lte: now } },
+      select: { companyId: true, effectiveFrom: true },
+      orderBy: { effectiveFrom: 'desc' },
+    });
+    const effectiveFrom = new Map<string, Date>();
+    for (const s of schedules) {
+      if (!effectiveFrom.has(s.companyId)) effectiveFrom.set(s.companyId, s.effectiveFrom);
+    }
+
+    return companies.map((c) => ({
+      companyId: c.id,
+      code: c.code,
+      name: c.name,
+      customerCount: byCompany.get(c.id) ?? 0,
+      effectiveFrom: effectiveFrom.get(c.id) ?? null,
+    }));
   }
 
   /* TÍNH tiền, không ghi gì.

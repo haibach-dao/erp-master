@@ -35,6 +35,18 @@ export class CardFeesController {
     return this.svc.listSchedules(companyId, this.caller(req));
   }
 
+  /* Công ty nào còn THIẾU biểu phí, kèm số khách đang chờ.
+   *
+   * Đặt TRƯỚC `charges/:cardPrintLogId` là chủ ý về thứ tự khớp route: Nest khớp theo thứ tự
+   * khai, nên một route tĩnh phải đứng trên route có tham số cùng cấp. Ở đây hai đường không
+   * đụng nhau (`coverage` vs `charges/...`), nhưng giữ nếp để lần sau thêm route tĩnh không
+   * phải nhớ lại. */
+  @Get('coverage')
+  @RequirePermission('cemetery.card_fee.view')
+  coverage(@Req() req: Request) {
+    return this.svc.listCoverage(this.caller(req));
+  }
+
   /* Ban hành — tách khỏi mã xem, và tách khỏi mã cấp thẻ. Người đặt giá không phải người
    * thu tiền: test tách nhiệm vụ ở `authz-invariants.spec.ts` canh đúng cặp này. */
   @Post()
