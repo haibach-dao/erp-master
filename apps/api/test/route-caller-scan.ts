@@ -28,8 +28,7 @@ const PASSES_CALLER = ['this.caller(', 'callerOf('];
 const HTTP_VERB = /^ {2}@(Get|Post|Put|Patch|Delete)[(]/;
 const REQUIRE_PERMISSION = /@RequirePermission[(][ ]*'([^']*)'/;
 const PUBLIC = /@Public[(]/;
-const HANDLER =
-  /^ {2}(?:public |private |protected )?(?:async )?([A-Za-z_$][A-Za-z0-9_$]*)[ ]*[(]/;
+const HANDLER = /^ {2}(?:public |private |protected )?(?:async )?([A-Za-z_$][A-Za-z0-9_$]*)[ ]*[(]/;
 
 export interface ScannedHandler {
   /** `customers/customers.controller.ts:profile` — id ổn định, dùng cho sổ nợ. */
@@ -65,7 +64,10 @@ export function scanRouteCallers(srcDir: string): RouteScan {
   const withoutCaller: ScannedHandler[] = [];
 
   for (const file of walk(srcDir)) {
-    const rel = file.replace(srcDir + sep, '').split(sep).join('/');
+    const rel = file
+      .replace(srcDir + sep, '')
+      .split(sep)
+      .join('/');
     const lines = readFileSync(file, 'utf8').split('\n');
 
     for (let i = 0; i < lines.length; i += 1) {

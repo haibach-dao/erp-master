@@ -18,12 +18,14 @@ import type { Caller } from '../authorization/caller';
 const CALLER: Caller = { userId: 'u1', permission: 'crm.person.view_sensitive' };
 const PERSON = 'per-1';
 
-function build(over: {
-  customer?: { companyId: string | null } | null;
-  burial?: { gravePlotId: string } | null;
-  plot?: { companyId: string; cemeteryId: string } | null;
-  cipher?: string | null;
-} = {}) {
+function build(
+  over: {
+    customer?: { companyId: string | null } | null;
+    burial?: { gravePlotId: string } | null;
+    plot?: { companyId: string; cemeteryId: string } | null;
+    cipher?: string | null;
+  } = {},
+) {
   const {
     customer = { companyId: 'co-1' },
     burial = null,

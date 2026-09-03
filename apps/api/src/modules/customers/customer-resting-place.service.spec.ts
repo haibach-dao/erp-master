@@ -55,18 +55,24 @@ function build(
       if (args.where.cemeteryId !== undefined) return Promise.resolve([]);
       const ids = args.where.id?.in ?? [];
       return Promise.resolve(
-        ids.filter((id) => plotCodes[id] !== undefined).map((id) => ({ id, plotCode: plotCodes[id] })),
+        ids
+          .filter((id) => plotCodes[id] !== undefined)
+          .map((id) => ({ id, plotCode: plotCodes[id] })),
       );
     });
 
   const prisma = {
     customer: { findMany: customerFindMany, count: vi.fn().mockResolvedValue(rows.length) },
     graveUsageRight: {
-      findMany: vi.fn().mockImplementation((args: { where: Record<string, unknown> }) =>
-        Promise.resolve(
-          (args.where as { holderCustomerId?: unknown }).holderCustomerId === undefined ? [] : owned,
+      findMany: vi
+        .fn()
+        .mockImplementation((args: { where: Record<string, unknown> }) =>
+          Promise.resolve(
+            (args.where as { holderCustomerId?: unknown }).holderCustomerId === undefined
+              ? []
+              : owned,
+          ),
         ),
-      ),
     },
     burialRecord: { findMany: burialFindMany },
     gravePlot: { findMany: plotFindMany },

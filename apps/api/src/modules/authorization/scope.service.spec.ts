@@ -44,12 +44,18 @@ describe('ScopeService.assertCompanyFor — the caller no longer picks their own
   it('refuses with 403 rather than returning an empty list', async () => {
     // An empty result would claim "there is nothing here", which is a different and
     // misleading statement, and it hides the attempt from anyone reading the logs.
-    await expect(build(BOUND_TO_A).assertCompanyFor('u1', CODE, 'co-b')).rejects.toThrow(/Ngoài phạm vi/);
+    await expect(build(BOUND_TO_A).assertCompanyFor('u1', CODE, 'co-b')).rejects.toThrow(
+      /Ngoài phạm vi/,
+    );
   });
 
   it('refuses an unbounded query from a company-bound caller', async () => {
-    await expect(build(BOUND_TO_A).assertCompanyFor('u1', CODE, null)).rejects.toThrow(/chỉ rõ công ty/);
-    await expect(build(BOUND_TO_A).assertCompanyFor('u1', CODE, '')).rejects.toThrow(/chỉ rõ công ty/);
+    await expect(build(BOUND_TO_A).assertCompanyFor('u1', CODE, null)).rejects.toThrow(
+      /chỉ rõ công ty/,
+    );
+    await expect(build(BOUND_TO_A).assertCompanyFor('u1', CODE, '')).rejects.toThrow(
+      /chỉ rõ công ty/,
+    );
   });
 
   it('lets a GROUP caller through for any company, including none', async () => {
@@ -60,12 +66,16 @@ describe('ScopeService.assertCompanyFor — the caller no longer picks their own
   });
 
   it('refuses an unauthenticated caller before consulting any scope', async () => {
-    await expect(build(BOUND_TO_A).assertCompanyFor(null, CODE, 'co-a')).rejects.toThrow(/Chưa xác thực/);
+    await expect(build(BOUND_TO_A).assertCompanyFor(null, CODE, 'co-a')).rejects.toThrow(
+      /Chưa xác thực/,
+    );
   });
 
   it('a caller bound to nothing reaches nothing', async () => {
     const svc = build({ level: 'NONE', companyIds: [] });
-    await expect(svc.assertCompanyFor('u1', CODE, 'co-a')).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(svc.assertCompanyFor('u1', CODE, 'co-a')).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
   });
 });
 
@@ -93,7 +103,9 @@ describe('ScopeService.assertSite — the hub axis', () => {
   });
 
   it('refuses a cemetery the caller does not cover, even inside their own company', async () => {
-    await expect(build(COVERS_ONE).assertSiteFor('u1', CODE, 'ct-2')).rejects.toThrow(/không phụ trách/);
+    await expect(build(COVERS_ONE).assertSiteFor('u1', CODE, 'ct-2')).rejects.toThrow(
+      /không phụ trách/,
+    );
   });
 
   it('covering several cemeteries at once is normal, not an exception', async () => {
@@ -164,7 +176,9 @@ function buildPerCode(opts: {
     }),
     scopeLevelFor: vi
       .fn()
-      .mockImplementation((_u: string, code: string) => Promise.resolve(opts.perCode[code] ?? 'NONE')),
+      .mockImplementation((_u: string, code: string) =>
+        Promise.resolve(opts.perCode[code] ?? 'NONE'),
+      ),
   } as unknown as PermissionsService;
   return new ScopeService(permissions, new PolicyEvaluator());
 }
@@ -197,24 +211,18 @@ describe('phạm vi theo MÃ QUYỀN — hợp giữa các vai cộng dồn QUY�
 
   it('vẫn cho qua nghĩa trang A — vai được gán tới đâu thì với tới đó', async () => {
     const svc = buildPerCode(KIEM_TOAN_KIEM_QUAN_LY);
-    await expect(
-      svc.assertSiteFor('u1', 'burial.record.cancel', 'nt-A'),
-    ).resolves.toBeUndefined();
+    await expect(svc.assertSiteFor('u1', 'burial.record.cancel', 'nt-A')).resolves.toBeUndefined();
   });
 
   it('được gán thêm vai phụ trách B thì chạm được B', async () => {
     const svc = buildPerCode({ ...KIEM_TOAN_KIEM_QUAN_LY, siteIds: ['nt-A', 'nt-B'] });
-    await expect(
-      svc.assertSiteFor('u1', 'burial.record.cancel', 'nt-B'),
-    ).resolves.toBeUndefined();
+    await expect(svc.assertSiteFor('u1', 'burial.record.cancel', 'nt-B')).resolves.toBeUndefined();
   });
 
   it('mã mà vai kiểm toán THẬT SỰ cấp ở mức GROUP thì vẫn với tới cả tập đoàn', async () => {
     // Không phải "chặn tất cho chắc": quyền đọc toàn tập đoàn là thứ vai đó có thật.
     const svc = buildPerCode(KIEM_TOAN_KIEM_QUAN_LY);
-    await expect(
-      svc.assertSiteFor('u1', 'burial.record.export', 'nt-B'),
-    ).resolves.toBeUndefined();
+    await expect(svc.assertSiteFor('u1', 'burial.record.export', 'nt-B')).resolves.toBeUndefined();
   });
 
   it('thiếu mã quyền thì TỪ CHỐI, không rơi về mức toàn-người-gọi', async () => {

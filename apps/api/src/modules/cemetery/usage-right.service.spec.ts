@@ -181,12 +181,12 @@ describe('gán mộ — hệ quả kèm theo', () => {
   });
 
   it('không tìm thấy mộ hoặc khách thì 404', async () => {
-    await expect(build({ plotMissing: true }).svc.assignUsageRight(dto, CALLER_ASSIGN)).rejects.toThrow(
-      NotFoundException,
-    );
-    await expect(build({ customerMissing: true }).svc.assignUsageRight(dto, CALLER_ASSIGN)).rejects.toThrow(
-      NotFoundException,
-    );
+    await expect(
+      build({ plotMissing: true }).svc.assignUsageRight(dto, CALLER_ASSIGN),
+    ).rejects.toThrow(NotFoundException);
+    await expect(
+      build({ customerMissing: true }).svc.assignUsageRight(dto, CALLER_ASSIGN),
+    ).rejects.toThrow(NotFoundException);
   });
 
   it('mọi lỗi chặn đều là 409, không phải 500', async () => {
@@ -195,7 +195,9 @@ describe('gán mộ — hệ quả kèm theo', () => {
       { existingRight: { id: 'x', holderCustomerId: 'y' } },
       { plotStatus: 'Occupied' },
     ]) {
-      await expect(build(opts).svc.assignUsageRight(dto, CALLER_ASSIGN)).rejects.toThrow(ConflictException);
+      await expect(build(opts).svc.assignUsageRight(dto, CALLER_ASSIGN)).rejects.toThrow(
+        ConflictException,
+      );
     }
   });
 });

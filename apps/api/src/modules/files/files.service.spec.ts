@@ -108,7 +108,9 @@ function build(opts: {
 describe('FilesService — sensitive files are gated, not merely authenticated', () => {
   it('refuses a restricted file to a caller without the permission, and audits the refusal', async () => {
     const { svc, record } = build({ file: fileRow(), grants: [] });
-    await expect(svc.getDownloadUrl('file-1', download(OTHER))).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(svc.getDownloadUrl('file-1', download(OTHER))).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
     expect(record).toHaveBeenCalledWith(
       expect.objectContaining({
         action: 'FILE.DOWNLOAD_DENIED',
@@ -141,7 +143,9 @@ describe('FilesService — sensitive files are gated, not merely authenticated',
 
   it('leaves normal files readable by any authenticated caller', async () => {
     const { svc } = build({ file: fileRow({ sensitivity: 'normal' }), grants: [] });
-    await expect(svc.getMeta('file-1', view(OTHER))).resolves.toMatchObject({ sensitivity: 'normal' });
+    await expect(svc.getMeta('file-1', view(OTHER))).resolves.toMatchObject({
+      sensitivity: 'normal',
+    });
   });
 
   it('still 404s an unknown file before any permission talk', async () => {
@@ -153,7 +157,9 @@ describe('FilesService — sensitive files are gated, not merely authenticated',
     const { svc } = build({
       file: fileRow({ sensitivity: 'normal', scanStatus: 'pending' }),
     });
-    await expect(svc.getDownloadUrl('file-1', download(OTHER))).rejects.toBeInstanceOf(ConflictException);
+    await expect(svc.getDownloadUrl('file-1', download(OTHER))).rejects.toBeInstanceOf(
+      ConflictException,
+    );
   });
 });
 

@@ -183,7 +183,11 @@ describe('sang tên phần mộ', () => {
   it('ĐÓNG quyền cũ trước rồi mới tạo quyền mới', async () => {
     const { svc, order } = build();
 
-    await svc.transferUsageRight(RIGHT, { toCustomerId: NEW_HOLDER, reason: 'thừa kế' }, CALLER_TRANSFER);
+    await svc.transferUsageRight(
+      RIGHT,
+      { toCustomerId: NEW_HOLDER, reason: 'thừa kế' },
+      CALLER_TRANSFER,
+    );
 
     expect(order).toEqual(['update:Transferred', 'create']);
   });
@@ -191,7 +195,11 @@ describe('sang tên phần mộ', () => {
   it('nối chuỗi previousRightId để đọc ngược được lịch sử chủ mộ', async () => {
     const { svc, createRight } = build();
 
-    await svc.transferUsageRight(RIGHT, { toCustomerId: NEW_HOLDER, reason: 'thừa kế' }, CALLER_TRANSFER);
+    await svc.transferUsageRight(
+      RIGHT,
+      { toCustomerId: NEW_HOLDER, reason: 'thừa kế' },
+      CALLER_TRANSFER,
+    );
 
     expect(createRight).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -204,7 +212,11 @@ describe('sang tên phần mộ', () => {
     const { svc, createRight } = build({ newHolderDeceased: true });
 
     await expect(
-      svc.transferUsageRight(RIGHT, { toCustomerId: NEW_HOLDER, reason: 'thừa kế' }, CALLER_TRANSFER),
+      svc.transferUsageRight(
+        RIGHT,
+        { toCustomerId: NEW_HOLDER, reason: 'thừa kế' },
+        CALLER_TRANSFER,
+      ),
     ).rejects.toThrow(/đã mất.*thừa kế còn sống/s);
     expect(createRight).not.toHaveBeenCalled();
   });
@@ -231,7 +243,11 @@ describe('sang tên phần mộ', () => {
   it('KHÔNG đụng trạng thái phần mộ', async () => {
     const { svc, updatePlot, createHistory } = build({ burials: 1 });
 
-    await svc.transferUsageRight(RIGHT, { toCustomerId: NEW_HOLDER, reason: 'thừa kế' }, CALLER_TRANSFER);
+    await svc.transferUsageRight(
+      RIGHT,
+      { toCustomerId: NEW_HOLDER, reason: 'thừa kế' },
+      CALLER_TRANSFER,
+    );
 
     expect(updatePlot).not.toHaveBeenCalled();
     expect(createHistory).not.toHaveBeenCalled();
@@ -240,7 +256,11 @@ describe('sang tên phần mộ', () => {
   it('audit ghi cả chủ cũ lẫn chủ mới', async () => {
     const { svc, record } = build();
 
-    await svc.transferUsageRight(RIGHT, { toCustomerId: NEW_HOLDER, reason: 'thừa kế' }, CALLER_TRANSFER);
+    await svc.transferUsageRight(
+      RIGHT,
+      { toCustomerId: NEW_HOLDER, reason: 'thừa kế' },
+      CALLER_TRANSFER,
+    );
 
     expect(record).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -254,7 +274,11 @@ describe('sang tên phần mộ', () => {
   it('mọi trường hợp chặn đều là 409', async () => {
     for (const opts of [{ newHolderDeceased: true }, { rightStatus: 'Ended' }]) {
       await expect(
-        build(opts).svc.transferUsageRight(RIGHT, { toCustomerId: NEW_HOLDER, reason: 'x' }, CALLER_TRANSFER),
+        build(opts).svc.transferUsageRight(
+          RIGHT,
+          { toCustomerId: NEW_HOLDER, reason: 'x' },
+          CALLER_TRANSFER,
+        ),
       ).rejects.toThrow(ConflictException);
     }
   });
