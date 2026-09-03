@@ -153,7 +153,8 @@ export function CustomerGraveActions({
                           {g.occupants.map((oc) => (
                             <li key={oc.burialRecordId} className="text-sm leading-snug">
                               <span className="text-xs text-muted-foreground">
-                                {oc.slotNumber === null ? 'Chưa rõ cốt' : `Cốt ${oc.slotNumber}`} ·{' '}
+                                {oc.slotNumber === null ? 'Chưa rõ cốt' : `Cốt ${oc.slotNumber}`}{' '}
+                                ·{' '}
                               </span>
                               <span className="font-medium">{oc.fullName}</span>
                               {/* Hồ sơ CHƯA hoàn tất thì phải nói ra: in một cái tên trơn là
@@ -389,8 +390,8 @@ function PlotDetailDialog({ plot, onClose }: { plot: CustomerPlot; onClose: () =
 
         {o !== undefined && o.unnumberedBurials > 0 ? (
           <Alert variant="warning">
-            Có {o.unnumberedBurials} hồ sơ an táng CHƯA gán cốt số. Chúng vẫn chiếm chỗ, nên số
-            cốt trống ở trên đã trừ đi rồi.
+            Có {o.unnumberedBurials} hồ sơ an táng CHƯA gán cốt số. Chúng vẫn chiếm chỗ, nên số cốt
+            trống ở trên đã trừ đi rồi.
           </Alert>
         ) : null}
 
@@ -633,8 +634,7 @@ function BuryDialog({
    * "Chưa chọn người" KHÔNG dựng Alert cảnh báo: đó là trạng thái bình thường lúc vừa mở,
    * báo động ở đó là dạy người dùng bỏ qua cảnh báo. Nhưng nó VẪN phải hiện ra chữ. */
   const disabledReason =
-    blocked ??
-    (personId === '' ? 'Bấm chọn một người trong danh sách để bật nút An táng.' : null);
+    blocked ?? (personId === '' ? 'Bấm chọn một người trong danh sách để bật nút An táng.' : null);
 
   return (
     <Dialog

@@ -5,13 +5,22 @@ import { PrismaService } from '../../prisma/prisma.service';
 import type { Caller } from '../authorization/caller';
 import { ScopeService } from '../authorization/scope.service';
 import { AuditService } from '../audit/audit.service';
-import { activeBurial, activeUsageRight } from '../../common/lifecycle/active';
+import {
+  activeBurial,
+  activeTag,
+  activeUsageRight,
+  completedBurial,
+} from '../../common/lifecycle/active';
+import { effectiveCapacity } from '../../common/cemetery/capacity';
 import type {
   ChangeStatusDto,
   CreateCemeteryDto,
   CreateCompanyDto,
   CreateGravePlotDto,
   CreateGraveTypeDto,
+  ListGravePlotsDto,
+  SetGravePlotCapacityDto,
+  SetGraveTypeCapacityDto,
 } from './cemetery.dto';
 
 @Injectable()
@@ -109,15 +118,20 @@ export class CemeteryService {
     );
   }
 
-  async listGravePlots(
-    companyId: string,
-    caller: Caller,
-    status?: string,
-    cemeteryId?: string,
-  ) {
+  async listGravePlots(filters: ListGravePlotsDto, caller: Caller) {
+    const { companyId, status, cemeteryId, tagTypeId } = filters;
     await this.scope.assertCompanyFor(caller.userId, caller.permission, companyId);
     const where: Prisma.GravePlotWhereInput = { companyId };
     if (status !== undefined) where.status = status;
+    /* Lọc theo thẻ nhãn viết được thành mệnh đề LỒNG NHAU vì `GravePlotTag` có khoá ngoại
+     * THẬT tới `GravePlot` — khác hai trục "đứng tên mộ" bên tra cứu khách hàng, vốn phải
+     * hỏi hai lượt rồi giao tập id vì id ở đó lỏng.
+     *
+     * `...activeTag` là bắt buộc: thiếu nó thì mộ đã GỠ thẻ vẫn hiện ra, tức kết quả nói
+     * mộ đang mang một nhãn mà ai đó đã cố ý bỏ đi. */
+    if (tagTypeId !== undefined && tagTypeId !== '') {
+      where.tags = { some: { tagTypeId, ...activeTag } };
+    }
     if (cemeteryId !== undefined) {
       // Asking for one cemetery: it has to be one the caller covers.
       await this.scope.assertSiteFor(caller.userId, caller.permission, cemeteryId);
@@ -138,7 +152,7 @@ export class CemeteryService {
     // Effective capacity = per-plot override or the grave type default (G0-A1).
     return plots.map((p) => ({
       ...p,
-      effectiveCapacity: p.capacityOverride ?? p.graveType.defaultCapacity,
+      effectiveCapacity: effectiveCapacity(p),
     }));
   }
 
@@ -280,6 +294,122 @@ export class CemeteryService {
       entityId: id,
       beforeData: { mapX: plot.mapX, mapY: plot.mapY },
       afterData: { mapX: updated.mapX, mapY: updated.mapY },
+    });
+    return updated;
+  }
+
+  /* SỐ CỐT của một phần mộ — sửa được, và tách hẳn khỏi đường đặt toạ độ dù dùng cùng mã
+   * quyền `cemetery.plot.update`.
+   *
+   * Tách vì hai việc khác hậu quả: toạ độ là số hoá bản vẽ, sai thì mộ vẽ lệch chỗ trên sơ
+   * đồ. Số cốt là DỮ LIỆU TÍNH TIỀN — từ 02/09/2026 tiền in lại thẻ là 50.000đ × số cốt.
+   * Gộp vào `:id/position` thì nhật ký chỉ nói "đặt toạ độ" trong khi việc vừa xảy ra là
+   * đổi cơ số nhân của một khoản thu.
+   *
+   * Tới 02/09/2026 số cốt CHỈ ghi được lúc tạo mộ, không có đường nào sửa — nên mọi mộ đôi,
+   * mộ ba của An Lạc Viên đang mang số cốt sai, và thẻ in ra sai dòng "số phần mộ tối đa".
+   */
+  async setPlotCapacity(id: string, dto: SetGravePlotCapacityDto, caller: Caller) {
+    const plot = await this.prisma.gravePlot.findUnique({
+      where: { id },
+      include: { graveType: { select: { defaultCapacity: true } } },
+    });
+    if (plot === null) {
+      throw new NotFoundException('Không tìm thấy lô mộ');
+    }
+    await this.assertPlotScope(plot, caller);
+
+    /* Chặn hạ số cốt xuống DƯỚI số người đang nằm. Không chặn thì hệ tự nhận một mộ 1 cốt
+     * đang chứa 2 người — và mọi phép tính "còn mấy chỗ trống" sau đó ra số âm. Đếm bằng
+     * `completedBurial` (người đã thực sự nằm), không phải `activeBurial()`: hồ sơ đang dở
+     * thì chưa ai nằm, chặn theo nó là chặn oan. */
+    const occupied = await this.prisma.burialRecord.count({
+      where: { gravePlotId: id, ...completedBurial },
+    });
+    const next = dto.capacityOverride ?? plot.graveType.defaultCapacity;
+    if (next < occupied) {
+      throw new ConflictException(
+        `Phần mộ đang có ${occupied} cốt an táng — không hạ số cốt xuống ${next} được`,
+      );
+    }
+
+    const before = effectiveCapacity(plot);
+    const updated = await this.prisma.gravePlot.update({
+      where: { id },
+      data: { capacityOverride: dto.capacityOverride },
+      include: { graveType: { select: { defaultCapacity: true } } },
+    });
+    await this.audit.record({
+      actorType: 'USER',
+      actorId: caller.userId,
+      action: 'GRAVE_PLOT.CAPACITY_SET',
+      entityType: 'grave_plot',
+      entityId: id,
+      beforeData: { capacityOverride: plot.capacityOverride, effectiveCapacity: before },
+      afterData: {
+        capacityOverride: updated.capacityOverride,
+        effectiveCapacity: effectiveCapacity(updated),
+      },
+    });
+    return { ...updated, effectiveCapacity: effectiveCapacity(updated) };
+  }
+
+  /* SỐ CỐT MẶC ĐỊNH của một LOẠI mộ.
+   *
+   * Đây là chỗ nguy hiểm nhất trong cả nhánh này: một dòng ở đây đổi sức chứa hiệu dụng
+   * của MỌI phần mộ chưa có ghi đè riêng, cùng lúc, không đi qua từng mộ. Vì vậy nó là S3,
+   * và vì vậy nó phải đếm trước xem có mộ nào sẽ tụt xuống dưới số người đang nằm.
+   *
+   * `GraveType` chỉ có `companyId`, KHÔNG có `cemeteryId` — nên hỏi phạm vi bằng đúng một
+   * `assertCompanyFor`. Bịa ra một `cemeteryId` để gọi thêm `assertSiteFor` là hỏi một câu
+   * mà dữ liệu không trả lời được.
+   */
+  async setGraveTypeCapacity(id: string, dto: SetGraveTypeCapacityDto, caller: Caller) {
+    const graveType = await this.prisma.graveType.findUnique({ where: { id } });
+    if (graveType === null) {
+      throw new NotFoundException('Không tìm thấy loại mộ');
+    }
+    await this.scope.assertCompanyFor(caller.userId, caller.permission, graveType.companyId);
+
+    /* Chỉ những mộ ĂN THEO mặc định mới bị ảnh hưởng — mộ có ghi đè riêng thì con số này
+     * không với tới. Đếm theo từng mộ vì câu trả lời phải nói được BAO NHIÊU mộ vi phạm;
+     * "không hạ được" mà không kèm số thì người dùng không biết phải đi sửa những mộ nào. */
+    if (dto.defaultCapacity < graveType.defaultCapacity) {
+      const inherited = await this.prisma.gravePlot.findMany({
+        where: { graveTypeId: id, capacityOverride: null },
+        select: { id: true, plotCode: true },
+      });
+      const counts = await this.prisma.burialRecord.groupBy({
+        by: ['gravePlotId'],
+        where: { gravePlotId: { in: inherited.map((p) => p.id) }, ...completedBurial },
+        _count: { _all: true },
+      });
+      const violating = counts.filter((c) => c._count._all > dto.defaultCapacity);
+      if (violating.length > 0) {
+        const codes = violating
+          .map((c) => inherited.find((p) => p.id === c.gravePlotId)?.plotCode)
+          .filter((code): code is string => code !== undefined)
+          .slice(0, 5);
+        throw new ConflictException(
+          `${violating.length} phần mộ loại này đang có nhiều hơn ${dto.defaultCapacity} cốt an táng` +
+            ` (${codes.join(', ')}${violating.length > codes.length ? '…' : ''})` +
+            ' — hạ số cốt mặc định sẽ làm chúng vượt sức chứa',
+        );
+      }
+    }
+
+    const updated = await this.prisma.graveType.update({
+      where: { id },
+      data: { defaultCapacity: dto.defaultCapacity },
+    });
+    await this.audit.record({
+      actorType: 'USER',
+      actorId: caller.userId,
+      action: 'GRAVE_TYPE.CAPACITY_SET',
+      entityType: 'grave_type',
+      entityId: id,
+      beforeData: { defaultCapacity: graveType.defaultCapacity },
+      afterData: { defaultCapacity: updated.defaultCapacity },
     });
     return updated;
   }
@@ -698,7 +828,7 @@ export class CemeteryService {
       orderBy: [{ slotNumber: 'asc' }, { createdAt: 'asc' }],
     });
 
-    const capacity = plot.capacityOverride ?? plot.graveType.defaultCapacity;
+    const capacity = effectiveCapacity(plot);
     const takenSlots = burials.map((b) => b.slotNumber).filter((n): n is number => n !== null);
 
     return {

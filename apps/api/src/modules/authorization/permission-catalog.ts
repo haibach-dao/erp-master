@@ -80,6 +80,13 @@ export const ACTIONS = [
   'rotate',
   'configure',
   'ai_ingest',
+  /* Thêm 2026-09-02 cùng biểu phí cấp thẻ mộ. KHÔNG dùng lại ba từ gần nghĩa đã có:
+   * `approve` là duyệt việc người khác ĐỀ NGHỊ, `override` là vượt một quy tắc kỹ thuật,
+   * còn `waive` là THA một khoản tiền công ty đã có quyền thu. Hậu quả của nó là tài
+   * chính và nó không cần ai đề nghị trước, nên phải cấp riêng và — quan trọng hơn —
+   * đếm được riêng trong nhật ký: "tháng này ai đã tha bao nhiêu khoản" là câu kế toán
+   * sẽ hỏi, và câu đó không trả lời được nếu miễn phí nấp dưới `override`. */
+  'waive',
 ] as const;
 
 export type Action = (typeof ACTIONS)[number];
@@ -133,6 +140,11 @@ export const PERMISSION_CATALOG: readonly PermissionDef[] = [
   p('cemetery.site.create', 'S2', 'Tạo nghĩa trang'),
   p('cemetery.grave_type.view', 'S1', 'Xem loại mộ'),
   p('cemetery.grave_type.create', 'S1', 'Tạo loại mộ'),
+  /* S3 trong khi `.view`/`.create` chỉ S1, và đó không phải nhầm: sửa `defaultCapacity`
+   * đổi sức chứa hiệu dụng của MỌI phần mộ chưa có `capacityOverride` cùng một lúc — và
+   * từ 02/09/2026 con số đó là thứ nhân ra tiền in lại thẻ. Một lần gõ nhầm ở đây là thu
+   * sai trên toàn bộ mộ cùng loại, âm thầm, không lỗi nào bật lên. */
+  p('cemetery.grave_type.update', 'S3', 'Sửa số cốt mặc định của loại mộ'),
   p('cemetery.price.view', 'S2', 'Xem giá niêm yết lô mộ'),
   p('cemetery.price.set_price', 'S3', 'Đặt giá lô mộ'),
   p('cemetery.plot.view', 'S1', 'Xem lô mộ'),
@@ -148,6 +160,26 @@ export const PERMISSION_CATALOG: readonly PermissionDef[] = [
    * qua thẻ đều thành một lần cấp — đúng lỗi hệ cũ mắc phải. */
   p('cemetery.card.view', 'S2', 'Xem trước thẻ quản lý mộ (không cấp số)'),
   p('cemetery.card.print', 'S3', 'Cấp/in thẻ quản lý mộ — tăng số lần cấp, ghi nhật ký'),
+  /* Biểu phí cấp thẻ (chốt 02/09/2026): cấp giấy lần đầu 200.000đ phẳng, mỗi lần in lại
+   * 50.000đ × SỐ CỐT CỦA PHẦN MỘ.
+   *
+   * Ba mã, không một mã, vì đây là ba việc mà gộp lại thì mất luôn khả năng tách nhiệm vụ:
+   * BAN HÀNH đơn giá là quyết định chính sách; THU theo đơn giá đó là việc ở quầy; THA một
+   * khoản đã có quyền thu là việc thứ ba và là chỗ tiền rò ra. Người thu tiền mà tự đặt
+   * được giá, hoặc tự tha được tiền, thì không còn ai đối chứng.
+   *
+   * `set_price` là S3 dù chỉ THÊM dòng (bảng append-only): đơn giá mới áp cho mọi lần cấp
+   * sau đó, nên một dòng gõ sai là thu sai hàng loạt, không thu hồi được. */
+  p('cemetery.card_fee.view', 'S2', 'Xem biểu phí cấp thẻ mộ và số tiền phí từng lần cấp'),
+  p('cemetery.card_fee.set_price', 'S3', 'Ban hành dòng biểu phí cấp thẻ mộ (chỉ thêm)'),
+  p('cemetery.card_fee.waive', 'S3', 'Miễn phí cấp thẻ — lỗi công ty / khách nộp lại thẻ cũ'),
+  /* THẺ NHÃN CHO PHẦN MỘ (đợt 1: chỉ xem và lọc, không chặn nghiệp vụ nào).
+   *
+   * `assign` gắn VÀ gỡ chung một mã ở đợt 1 — tách được, nhưng tách khi thẻ chưa chặn gì
+   * là đẻ ra một mã không ai dùng khác đi. Ngày nào thẻ chặn được một việc thì tách gỡ ra
+   * riêng, vì lúc đó "gỡ thẻ" mới là hành vi mở khoá một thứ đang bị chặn. */
+  p('cemetery.plot_tag.view', 'S1', 'Xem thẻ nhãn trên phần mộ'),
+  p('cemetery.plot_tag.assign', 'S2', 'Gắn và gỡ thẻ nhãn cho phần mộ'),
   /* Quyền sử dụng phần mộ = ai đứng tên mộ HÔM NAY.
    *
    * `assign` là S3 vì nó tạo ra quyền sở hữu mà KHÔNG đi qua hợp đồng — bình thường
@@ -189,6 +221,17 @@ export const PERMISSION_CATALOG: readonly PermissionDef[] = [
   p('crm.customer.search', 'S2', 'Tra cứu khách hàng theo tiêu chí tự nhập'),
   p('crm.customer.create', 'S2', 'Tạo khách hàng'),
   p('crm.customer.update', 'S2', 'Sửa hồ sơ khách hàng'),
+  /* THẺ NHÃN CHO KHÁCH HÀNG — S2 cả hai, và `view` KHÔNG phải S1 như thẻ mộ.
+   *
+   * Vì sao chặt hơn thẻ mộ: thẻ mộ nói về một VẬT, thẻ khách nói về một CON NGƯỜI. Kể cả
+   * khi danh mục đã ép mỗi thẻ phải nói về hồ sơ hoặc giao dịch, bộ thẻ của một người vẫn
+   * là một bức chân dung — "thiếu CCCD, thiếu giấy chứng tử, thiếu file hợp đồng" đọc
+   * liền nhau nói nhiều hơn từng cái rời. Ai đọc được nó là một quyết định, không mặc định.
+   *
+   * QUYỀN MỞ DANH MỤC nằm ở `config.customer_tag.update` (S3), tách hẳn khỏi `assign` này:
+   * người ở quầy GẮN được thẻ có sẵn, nhưng không TẠO được một thẻ mới nói về con người. */
+  p('crm.customer_tag.view', 'S2', 'Xem thẻ nhãn trên hồ sơ khách hàng'),
+  p('crm.customer_tag.assign', 'S2', 'Gắn và gỡ thẻ nhãn cho khách hàng'),
   /* XOÁ HẲN, không phải đóng hồ sơ. S3 vì không đảo ngược được.
    *
    * Vì sao vẫn có: dữ liệu nhập thử và dữ liệu nhập sai lúc đầu phải dọn được, nếu không
@@ -316,6 +359,21 @@ export const PERMISSION_CATALOG: readonly PermissionDef[] = [
   p('iam.secret.rotate', 'S3', 'Xoay khoá mã hoá'),
 
   // --- config ---
+  /* QUẢN TRỊ HAI DANH MỤC THẺ NHÃN — hai mã, đúng như hai danh mục ở tầng dữ liệu.
+   *
+   * Anh Bách chốt 03/09/2026: thẻ mộ và thẻ khách TÁCH RIÊNG, cả hai TOÀN HỆ. Hai mã ở đây
+   * là nửa quan trọng của việc tách ấy: mở một thẻ MỘ mới ("cần sửa bia") là việc vận hành
+   * thường ngày; mở một thẻ KHÁCH mới là lúc có thể lọt vào hệ một câu nói về con người.
+   * Hai mức rủi ro thì phải cấp được cho hai nhóm người khác nhau.
+   *
+   * S3 cả hai, và mức đó KHÔNG hạ được: danh mục là dữ liệu TOÀN HỆ, không chia theo công
+   * ty. Một dòng mở ở đây dùng được ở MỌI công ty.
+   *
+   * KHÔNG dùng lại `config.reference.update` ngay dưới: mã đó hiện chưa route nào dùng,
+   * nhưng QT_NGHIEP_VU ĐANG CẦM `config.reference.view`. Gắn chức năng mới vào một mã đã
+   * cấp là cho một vai thêm năng lực mà chưa ai duyệt lần nào. */
+  p('config.plot_tag.update', 'S3', 'Quản trị danh mục thẻ nhãn phần mộ (toàn hệ)'),
+  p('config.customer_tag.update', 'S3', 'Quản trị danh mục thẻ nhãn khách hàng (toàn hệ)'),
   p('config.reference.view', 'S3', 'Xem danh mục cấu hình'),
   p('config.reference.update', 'S3', 'Sửa danh mục cấu hình'),
   p('config.flag.view', 'S3', 'Xem cờ hệ thống'),
@@ -394,6 +452,14 @@ const CEMETERY_READ_ALL = [
   'cemetery.price.view',
   'cemetery.hold.view',
   'cemetery.plot.view_history',
+  /* Xem biểu phí thẻ đi cùng gói ĐỌC nghĩa trang: người ở quầy phải trả lời được "cấp thẻ
+   * này hết bao nhiêu" trước khi khách quyết. Nó cũng chảy sang KTNB_KIEM_TOAN và
+   * DPO_DLCN — đúng chủ ý, hai ghế đó chỉ đọc. */
+  'cemetery.card_fee.view',
+  /* Xem thẻ nhãn mộ đi cùng gói ĐỌC: thẻ mộ nói về VẬT — "bia nứt", "nền lún" — nên ai đọc
+   * được danh sách mộ thì đọc được tình trạng của nó. Thẻ KHÁCH thì KHÔNG đi cùng gói này,
+   * nó phải cấp riêng cho từng vai: xem chú thích ở `crm.customer_tag.view`. */
+  'cemetery.plot_tag.view',
 ];
 
 /* Mọi mã trong danh mục, trừ chính `*.*.*`.
@@ -446,6 +512,12 @@ export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
     'cemetery.usage_right.view',
     'cemetery.card.view',
     'cemetery.card.print',
+    /* Thẻ nhãn khách — front desk là nơi PHÁT HIỆN ra "thiếu CCCD", "thiếu giấy chứng tử",
+     * nên họ phải ghi lại được. Họ GẮN thẻ có sẵn nhưng KHÔNG mở được danh mục
+     * (`config.customer_tag.update` là S3, ở ghế khác) — nên không ai ở quầy tạo được một
+     * thẻ mới nói về con người. Đó là toàn bộ ý nghĩa của việc tách hai mã này. */
+    'crm.customer_tag.view',
+    'crm.customer_tag.assign',
     ...FILE_BASIC,
   ]),
 
@@ -530,6 +602,19 @@ export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
 
   NV_BAO_TRI: role('Chăm sóc mộ & bảo trì', 'Bảo trì tại một nghĩa trang', 'SITE', [
     ...CATALOG_READ,
+    /* MÃ GHI ĐẦU TIÊN của vai này, thêm 03/09/2026 cùng thẻ nhãn.
+     *
+     * Đo được trước khi thêm: cả 9 mã cũ của vai đều là `.view` / `.search` / upload tệp —
+     * người DUY NHẤT nhìn thấy bia nứt không có cách nào ghi lại điều mình thấy. Thẻ
+     * `#can-sua-bia`, thứ hữu ích nhất trong cả tính năng, sẽ không ai gắn được.
+     *
+     * An toàn ở đợt 1 vì thẻ CHƯA chặn nghiệp vụ nào: gắn thẻ không khoá đường bán, không
+     * đổi trạng thái mộ, không đụng tiền. Phạm vi vai là SITE nên chỉ gắn được trong nghĩa
+     * trang mình phụ trách.
+     *
+     * NGÀY NÀO THẺ CHẶN ĐƯỢC MỘT VIỆC, phải rà lại đúng dòng này: lúc đó gắn thẻ trở thành
+     * hành vi khoá được đường bán, và nó không còn thuộc về một vai chỉ-đọc-cộng-một-mã. */
+    'cemetery.plot_tag.assign',
     'cemetery.plot.search',
     'cemetery.plot.view_history',
     'burial.record.view',
@@ -565,6 +650,9 @@ export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
   QL_NGHIA_TRANG: role('Quản lý nghĩa trang', 'Ghế THẨM ĐỊNH tác nghiệp', 'SITE', [
     ...CEMETERY_READ_ALL,
     'cemetery.plot.set_status',
+    /* Gắn thẻ mộ: ghế thẩm định tác nghiệp là người đi thực địa cùng bảo trì, và là người
+     * xác nhận việc đã xong để gỡ thẻ. Phạm vi SITE bó họ vào nghĩa trang mình phụ trách. */
+    'cemetery.plot_tag.assign',
     /* Toạ độ sơ đồ là dữ liệu MẶT BẰNG — người quản lý nghĩa trang là người biết thực địa,
      * và vai này có phạm vi SITE nên chỉ sửa được sơ đồ nghĩa trang mình phụ trách. */
     'cemetery.plot.update',
@@ -617,6 +705,13 @@ export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
 
   GD_CONG_TY: role('Ban giám đốc công ty', 'Ghế CHO HIỆU LỰC', 'COMPANY', [
     ...CEMETERY_READ_ALL,
+    /* Tha một khoản đã có quyền thu là quyết định về tiền, nên nó ở ghế CHO HIỆU LỰC chứ
+     * không ở quầy. Cố ý KHÔNG cấp cho CSKH_TIEP_DON và THU_NGAN: người thu tiền mà tự
+     * tha được tiền thì không còn ai đối chứng. */
+    'cemetery.card_fee.waive',
+    /* Số cốt của loại mộ là dữ liệu tính tiền và chỉ có `companyId`, không có `cemeteryId`
+     * — nên nó thuộc ghế COMPANY này, không thuộc QL_NGHIA_TRANG vốn là ghế SITE. */
+    'cemetery.grave_type.update',
     'cemetery.plot.set_status',
     'cemetery.plot.export',
     'cemetery.hold.release',
@@ -667,6 +762,10 @@ export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
 
   HD_GIA: role('Hội đồng giá', 'Duyệt giá — tách hẳn khỏi người bán', 'COMPANY', [
     ...CEMETERY_READ_ALL,
+    /* Ban hành biểu phí thẻ về đúng ghế duyệt giá, KHÔNG về ghế thu tiền. Đây là mã
+     * `set_price` đầu tiên thực sự có vai cầm — hai mã đặt giá còn lại
+     * (`cemetery.price.set_price`, `cemetery.plot.override`) hiện chưa vai nào giữ. */
+    'cemetery.card_fee.set_price',
     'contract.amount.view_sensitive',
     'service.catalog.view',
     'service.price.view',
@@ -775,6 +874,12 @@ export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
       'authz.matrix.export',
       /* Bỏ 28/08/2026 — xem chú thích ở `authz.change.submit` trong danh mục. */
       'config.reference.view',
+      /* Hai danh mục thẻ về đúng ghế "giữ danh mục". Vai này CỐ Ý không có mã `assign` nào
+       * — người mở danh mục không phải người gắn thẻ, và ngược lại. Đó là cặp tách nhiệm vụ
+       * mà `authz-invariants` canh: ai vừa mở được thẻ mới vừa gắn được thì tự định đoạt
+       * trọn vẹn cái nhãn dán lên một con người. */
+      'config.plot_tag.update',
+      'config.customer_tag.update',
       'notification.template.view',
       'notification.template.update',
     ],

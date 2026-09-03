@@ -171,6 +171,19 @@
     margin: 0;
   }
 
+  /* Trình duyệt MẶC ĐỊNH không in màu nền — nó coi nền là thứ trang trí tốn mực. Với thẻ
+   * mộ thì ba vùng nền đang có (ô "THÔNG TIN CHỦ MỘ", đầu bảng người an táng, ô sơ đồ
+   * trống) in ra trắng trơn, và quan trọng hơn: dấu chìm "KHÔNG CÓ GIÁ TRỊ" trên bản xem
+   * trước cũng sẽ biến mất — đúng lúc cần nó nhất, trên tờ giấy đã rời khỏi màn hình.
+   *
+   * `exact` bảo trình duyệt in đúng màu đã khai. Đặt ở đây, một chỗ, thay vì rải lên từng
+   * thành phần: dấu chìm nào thêm sau cũng được bảo vệ mà không ai phải nhớ luật này. */
+  .print-root,
+  .print-root * {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
   .print-hide {
     display: none !important;
   }

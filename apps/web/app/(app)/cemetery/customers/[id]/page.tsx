@@ -47,6 +47,7 @@ import { birthOrder, bothDirections, relationshipLabel } from '@/lib/relationshi
 import { cn } from '@/lib/utils';
 import { CustomerGraveActions } from '@/components/customer-grave-actions';
 import { Tabs, TabPanel, type TabItem } from '@/components/ui/tabs';
+import { CustomerTagsCard } from '@/components/customer-tags';
 import { PageHeader } from '@/components/ui/page-header';
 import { Alert } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -502,6 +503,13 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
               )}
             </CardContent>
           </Card>
+
+          {/* Thẻ nhãn đặt ở tab NHÂN THÂN vì đây là chỗ người dùng nhìn để hiểu hồ sơ này
+              đang thiếu gì. Không đặt ở tab riêng: một tab chỉ để xem hai cái nhãn là một
+              cú bấm thừa cho thứ phải thấy ngay. */}
+          <div className="mt-6">
+            <CustomerTagsCard customerId={c.id} />
+          </div>
         </TabPanel>
 
         <TabPanel id="lien-lac" value={tab}>

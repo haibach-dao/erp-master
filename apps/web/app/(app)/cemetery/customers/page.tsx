@@ -20,6 +20,7 @@ import {
 import { PageHeader } from '@/components/ui/page-header';
 import { Alert } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
+import { CustomerTagChips } from '@/components/customer-tags';
 import { Button } from '@/components/ui/button';
 import { Dialog } from '@/components/ui/dialog';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -37,7 +38,17 @@ import {
 export default function CustomersPage() {
   const qc = useQueryClient();
   const router = useRouter();
-  const [filters, setFilters] = useState<CustomerFilters>(EMPTY_CUSTOMER_FILTERS);
+  /* Nhận `?tagTypeId=` từ đường dẫn: con số trên trang Thẻ nhãn bấm sang đây và bộ lọc phải đã
+   * áp sẵn. Đọc `window.location.search` chứ không `useSearchParams()` — hook đó buộc trang
+   * phải nằm trong `<Suspense>`, mà toàn bộ apps/web chưa dùng nó ở đâu; thêm vào đây là kéo
+   * theo một thay đổi bố cục cho một tính năng nhỏ. Initializer chỉ chạy một lần ở client. */
+  const [filters, setFilters] = useState<CustomerFilters>(() => ({
+    ...EMPTY_CUSTOMER_FILTERS,
+    tagTypeId:
+      typeof window === 'undefined'
+        ? ''
+        : (new URLSearchParams(window.location.search).get('tagTypeId') ?? ''),
+  }));
   const [open, setOpen] = useState(false);
   const [warnings, setWarnings] = useState<DedupWarning[]>([]);
   const [form, setForm] = useState(EMPTY_CUSTOMER_FORM);
@@ -142,15 +153,18 @@ export default function CustomersPage() {
                 nên cột "đứng tên" của họ luôn là "—" và việc đã an táng không thấy đâu. */}
             <TableHead>Nơi an nghỉ</TableHead>
             <TableHead>Tình trạng</TableHead>
+            {/* CHỈ ĐỌC ở đây. Cả dòng bấm được để mở hồ sơ, nên một cái nút trong ô sẽ
+                tranh chấp với cú bấm đó — gắn và gỡ thẻ nằm ở trang hồ sơ. */}
+            <TableHead>Thẻ nhãn</TableHead>
             <TableHead>Điện thoại</TableHead>
             <TableHead />
           </TableRow>
         </TableHeader>
         <TableBody>
-          {list.isPending ? <TableSkeleton rows={6} cols={10} /> : null}
+          {list.isPending ? <TableSkeleton rows={6} cols={11} /> : null}
 
           {list.data?.items.length === 0 ? (
-            <TableMessage colSpan={10}>
+            <TableMessage colSpan={11}>
               {/* Ba câu khác nhau cho ba tình huống khác nhau. Gộp thành "không có dữ liệu"
                   là bắt người dùng tự đoán họ đang gặp cái nào — và việc phải làm để thoát
                   ra thì mỗi cái một khác: tạo mới / sửa từ khoá / nới bộ lọc. */}
@@ -248,6 +262,9 @@ export default function CustomersPage() {
                     {c.isDeceased ? 'Đã mất' : 'Còn sống'}
                   </Badge>
                 )}
+              </TableCell>
+              <TableCell>
+                <CustomerTagChips tags={c.tags} />
               </TableCell>
               <TableCell>{c.phone ?? '—'}</TableCell>
               <TableCell className="w-8 text-muted-foreground">

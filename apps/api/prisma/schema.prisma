@@ -323,11 +323,146 @@ model GravePlot {
   graveType     GraveType                @relation(fields: [graveTypeId], references: [id])
   statusHistory GravePlotStatusHistory[]
   holds         GraveHold[]
+  tags          GravePlotTag[]
 
   @@unique([companyId, plotCode])
   @@index([companyId, status])
   @@index([cemeteryId])
   @@map("grave_plots")
+  @@schema("cemetery")
+}
+
+/**
+ * DANH MỤC THẺ NHÃN CHO PHẦN MỘ — toàn hệ, KHÔNG chia theo công ty.
+ *
+ * Anh Bách chốt 03/09/2026: hai danh mục TÁCH RIÊNG (thẻ mộ và thẻ khách), nhưng cả hai
+ * đều dùng chung cho MỌI công ty. "Cần sửa bia" là cùng một ý ở mọi nghĩa trang, nên khai
+ * lại nó cho từng công ty là việc thừa.
+ *
+ * VÌ SAO TÁCH HAI BẢNG, chứ không một bảng có cột "thẻ này dùng cho mộ hay cho khách":
+ * tách làm cho ranh giới đạo đức thành ranh giới CẤU TRÚC. Một thẻ nói về con người không
+ * thể lỡ tay gắn lên mộ, và ngược lại — không phải vì có một cột kiểm đúng hay một câu `if`
+ * trong service, mà vì khoá ngoại không nối tới được. Đã đo bằng psql: gắn một thẻ khách
+ * lên bảng thẻ mộ bị khoá ngoại từ chối.
+ *
+ * Thẻ mộ nói về một VẬT, nên nó KHÔNG có cột `subject` như bên khách. Không có gì phải rào:
+ * "bia nứt", "nền lún" không thể trở thành một nhận định về ai.
+ */
+model GravePlotTagType {
+  id          String  @id
+  code        String  @unique
+  name        String
+  description String?
+
+  /// Active | Retired. NGỪNG DÙNG chứ không xoá: thẻ đã gắn vẫn phải đọc được tên.
+  status String @default("Active")
+
+  createdBy String?  @map("created_by")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  tags GravePlotTag[]
+
+  @@index([status])
+  @@map("grave_plot_tag_types")
+  @@schema("cemetery")
+}
+
+/**
+ * DANH MỤC THẺ NHÃN CHO KHÁCH HÀNG — toàn hệ, KHÔNG chia theo công ty.
+ *
+ * Khác danh mục thẻ mộ đúng MỘT cột, và cột đó là lý do thứ hai để hai bảng phải tách:
+ * `subject`. Mỗi thẻ khách bắt buộc khai nó nói về HỒ SƠ hay về GIAO DỊCH — danh sách ĐÓNG,
+ * CHECK ở migration.
+ *
+ * VÌ SAO: thẻ gắn lên mộ nói về một vật; thẻ gắn lên khách nói về một CON NGƯỜI, mà gia
+ * đình họ vừa có người mất. Một thẻ kiểu "khách khó tính" hay "khả năng chi trả thấp" gán
+ * một PHẨM CHẤT cho người — không ngày kết thúc, không ai xác minh, không ai gỡ. Cột này
+ * chặn nó NGAY Ở CSDL: một thẻ nói về tính cách KHÔNG CÓ GIÁ TRỊ NÀO ĐỂ KHAI.
+ *
+ * Thêm nữa: tôn giáo, dân tộc, sức khoẻ là dữ liệu cá nhân NHẠY CẢM theo NĐ 13/2023, và hệ
+ * đã che ba trường đó ở mức S3. Một bảng thẻ tự do sẽ là cửa sau vòng qua đúng lớp che ấy.
+ *
+ * THƯỚC ĐO cho mọi thẻ khách: phải chịu được việc ĐỌC TO TRƯỚC MẶT CHÍNH KHÁCH.
+ */
+model CustomerTagType {
+  id          String  @id
+  code        String  @unique
+  name        String
+  description String?
+
+  /// HO_SO | GIAO_DICH — danh sách ĐÓNG, CHECK ở migration. Xem khối chú thích trên.
+  subject String
+
+  status String @default("Active")
+
+  createdBy String?  @map("created_by")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  tags CustomerTag[]
+
+  @@index([status, subject])
+  @@map("customer_tag_types")
+  @@schema("cemetery")
+}
+
+/**
+ * THẺ ĐANG GẮN TRÊN MỘT PHẦN MỘ.
+ *
+ * Gỡ thẻ là GHI `removedAt`, không xoá dòng — anh Bách chốt "lưu vết". `#can-sua-bia` gỡ ra
+ * rồi thì vẫn phải trả lời được "bia này đã sửa chưa, ai xác nhận, ngày nào".
+ *
+ * Một mộ không mang HAI thẻ cùng loại cùng lúc — partial unique index `WHERE removed_at IS
+ * NULL`, không phải `@@unique` thường: gắn lại thẻ đã từng gỡ là việc bình thường.
+ */
+model GravePlotTag {
+  id          String @id
+  gravePlotId String @map("grave_plot_id")
+  tagTypeId   String @map("tag_type_id")
+
+  assignedBy String?  @map("assigned_by")
+  assignedAt DateTime @default(now()) @map("assigned_at") @db.Timestamptz(6)
+
+  removedBy String?   @map("removed_by")
+  removedAt DateTime? @map("removed_at") @db.Timestamptz(6)
+  /// Vì sao gỡ. Chữ tự do CHỈ ĐỂ ĐỌC LẠI, không lọc theo nó.
+  removeReason String? @map("remove_reason")
+
+  gravePlot GravePlot        @relation(fields: [gravePlotId], references: [id])
+  tagType   GravePlotTagType @relation(fields: [tagTypeId], references: [id])
+
+  @@index([gravePlotId, removedAt])
+  @@index([tagTypeId])
+  @@map("grave_plot_tags")
+  @@schema("cemetery")
+}
+
+/**
+ * THẺ ĐANG GẮN TRÊN MỘT KHÁCH HÀNG.
+ *
+ * Cùng hình dạng với thẻ mộ, nhưng ở đây lưu vết KHÔNG chỉ tiện cho nghiệp vụ — nó là NGHĨA
+ * VỤ. NĐ 13/2023 cho chủ thể dữ liệu quyền biết dữ liệu của mình được xử lý thế nào; "ai đã
+ * gắn nhãn này lên tôi, ngày nào, ai gỡ" phải trả lời được.
+ */
+model CustomerTag {
+  id         String @id
+  customerId String @map("customer_id")
+  tagTypeId  String @map("tag_type_id")
+
+  assignedBy String?  @map("assigned_by")
+  assignedAt DateTime @default(now()) @map("assigned_at") @db.Timestamptz(6)
+
+  removedBy    String?   @map("removed_by")
+  removedAt    DateTime? @map("removed_at") @db.Timestamptz(6)
+  removeReason String?   @map("remove_reason")
+
+  customer Customer        @relation(fields: [customerId], references: [id])
+  tagType  CustomerTagType @relation(fields: [tagTypeId], references: [id])
+
+  @@index([customerId, removedAt])
+  @@index([tagTypeId])
+  @@map("customer_tags")
   @@schema("cemetery")
 }
 
@@ -527,8 +662,9 @@ model Customer {
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  person Person?     @relation(fields: [personId], references: [id])
+  person Person?      @relation(fields: [personId], references: [id])
   holds  GraveHold[]
+  tags   CustomerTag[]
 
   @@index([phone])
   @@index([email])
@@ -776,6 +912,103 @@ model CardPrintLog {
   @@unique([customerId, cardType, printNumber])
   @@index([customerId, issuedAt])
   @@map("card_print_logs")
+  @@schema("cemetery")
+}
+
+/**
+ * Biểu phí cấp thẻ mộ — anh Bách chốt 02/09/2026:
+ *   cấp giấy LẦN ĐẦU 200.000đ phẳng (không nhân với gì)
+ *   mỗi lần IN LẠI  50.000đ × SỐ CỐT CỦA PHẦN MỘ
+ *
+ * Hai mức giá này là CHÍNH SÁCH, không phải hằng số kỹ thuật — chúng sẽ đổi. Nên chúng
+ * không nằm trong mã và cũng không nằm trong một cột "giá hiện tại" sửa đè được: mỗi lần
+ * đổi giá là một DÒNG MỚI có `effectiveFrom`. Bảng append-only (trigger chặn UPDATE/DELETE),
+ * đúng nếp copy-based: đổi = bản mới, không sửa bản gốc.
+ *
+ * CỐ Ý KHÔNG có `effectiveTo`. Đóng hiệu lực bằng `UPDATE` thì trigger chặn — nên "biểu phí
+ * đang hiệu lực" được định nghĩa là dòng có `effectiveFrom <= ngày cấp` LỚN NHẤT. Hệ quả:
+ * không dùng được `inEffect()` ở `common/lifecycle/active.ts` (hàm đó đòi cặp from/to);
+ * phép chọn viết ở đúng một chỗ, `CardFeesService.effectiveSchedule`.
+ *
+ * `effectiveFrom` là @db.Date chứ không Timestamptz: biểu phí có hiệu lực theo NGÀY, và
+ * giữ giờ trong đó là mời gọi lệch múi giờ quyết định hôm nay thu giá cũ hay giá mới.
+ */
+model GraveCardFeeSchedule {
+  id        String @id
+  companyId String @map("company_id")
+  cardType  String @default("GRAVE") @map("card_type")
+
+  /// Tiền cấp giấy lần đầu — PHẲNG, không nhân với số cốt.
+  firstIssueFee Decimal @map("first_issue_fee") @db.Decimal(14, 0) // VND
+  /// Đơn giá MỘT cốt cho mỗi lần in lại.
+  reprintFeePerRemains Decimal @map("reprint_fee_per_remains") @db.Decimal(14, 0) // VND
+
+  effectiveFrom DateTime @map("effective_from") @db.Date
+  /// Số quyết định / văn bản hiệu lực làm căn cứ. Không có căn cứ thì không ban hành giá.
+  decisionRef String?  @map("decision_ref")
+  createdBy   String?  @map("created_by")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  /// Một công ty không ban hành hai biểu phí cùng ngày hiệu lực — nếu không thì "biểu phí
+  /// đang hiệu lực" là câu hỏi có hai câu trả lời.
+  @@unique([companyId, cardType, effectiveFrom])
+  @@index([companyId, effectiveFrom])
+  @@map("grave_card_fee_schedules")
+  @@schema("cemetery")
+}
+
+/**
+ * Khoản phí của MỘT phần mộ trong MỘT lần cấp thẻ.
+ *
+ * Một dòng cho mỗi phần mộ, không phải một dòng cho mỗi lần cấp: thẻ mộ gom TOÀN BỘ phần
+ * mộ mà khách đứng tên, nên một lần cấp có thể vừa là "lần đầu" với mộ mới mua vừa là
+ * "in lại" với mộ đã có thẻ. Gộp thành một số tiền thì không ai truy được vì sao ra số đó.
+ *
+ * `unitPrice`, `remainsCount`, `feeAmount` là ẢNH CHỤP, cố ý ghi lặp lại dù suy ra được:
+ * đơn giá sẽ đổi, số cốt của mộ sẽ sửa. Tính lại về sau nghĩa là tờ thẻ khách đang cầm và
+ * con số trong hệ có ngày không khớp — và lúc đó khách đúng, hệ sai.
+ *
+ * Miễn phí ghi ĐỦ số tiền kèm `waived = true`, KHÔNG ghi 0đ. Ghi 0 thì không phân biệt
+ * được "đã tha một khoản 150.000đ" với "biểu phí bằng 0", và câu kế toán sẽ hỏi — tháng
+ * này tha bao nhiêu, ai tha — không còn dữ liệu để trả lời.
+ *
+ * Cũng append-only. Nghĩa là quyết định miễn phí phải xong TRƯỚC khi bấm cấp thẻ; sửa sai
+ * là ghi dòng mới, và đường đó chưa dựng ở đợt này.
+ */
+model GraveCardFeeCharge {
+  id        String @id
+  companyId String @map("company_id")
+
+  /// Cột trần, không @relation — cùng nếp `CardPrintLog` vốn không khai quan hệ nào.
+  cardPrintLogId String @map("card_print_log_id")
+  customerId     String @map("customer_id")
+  /// Chiều PHẦN MỘ mà `CardPrintLog` không có. Đây là chỗ neo "lần đầu của cặp (khách, mộ)".
+  gravePlotId String @map("grave_plot_id")
+
+  /// FIRST_ISSUE | REPRINT — CHECK ở migration.
+  feeKind       String @map("fee_kind")
+  feeScheduleId String @map("fee_schedule_id")
+
+  unitPrice    Decimal @map("unit_price") @db.Decimal(14, 0)
+  /// 1 với FIRST_ISSUE (giá phẳng); = số cốt của phần mộ với REPRINT.
+  remainsCount Int     @map("remains_count")
+  feeAmount    Decimal @map("fee_amount") @db.Decimal(14, 0)
+
+  waived Boolean @default(false)
+  /// COMPANY_FAULT | OLD_CARD_RETURNED — danh sách đóng, CHECK ở migration. Không phải
+  /// chuỗi tự do: đọc lý do miễn từ ô người dùng tự gõ là mở đường gõ chữ để khỏi mất tiền.
+  waiveReason String? @map("waive_reason")
+
+  chargedBy String?  @map("charged_by")
+  chargedAt DateTime @default(now()) @map("charged_at") @db.Timestamptz(6)
+
+  /// Luật "một cặp (khách, mộ) chỉ có ĐÚNG MỘT lần đầu" ép bằng partial unique index viết
+  /// tay ở migration (`grave_card_fee_charges_first_issue`) — Prisma không diễn đạt được
+  /// unique có điều kiện. Đây là chỗ DUY NHẤT ép được luật đó; đừng suy từ `printNumber == 1`.
+  @@index([cardPrintLogId])
+  @@index([customerId, gravePlotId])
+  @@index([companyId, chargedAt])
+  @@map("grave_card_fee_charges")
   @@schema("cemetery")
 }
 

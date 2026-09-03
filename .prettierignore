@@ -4,3 +4,8 @@ dist
 coverage
 pnpm-lock.yaml
 enterprise-platform-blueprint
+
+# Cấu hình RIÊNG của từng máy, không nằm trong repo (mỗi người một bản). Prettier không
+# đọc gitignore, nên thiếu dòng này thì `pnpm format:check` ở local đỏ trong khi CI xanh —
+# và một lệnh kiểm nói khác kết quả thật là lệnh không ai còn tin.
+.claude/settings.local.json

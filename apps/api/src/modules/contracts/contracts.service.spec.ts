@@ -164,7 +164,9 @@ describe('activate — đi thẳng được, nhưng phải để lại vết', (
 
   it('vẫn CHẶN trạng thái không thể cho hiệu lực', async () => {
     const { svc, tx } = build(contract({ status: 'Cancelled' }));
-    await expect(svc.activate('ct-1', activator(MANAGER))).rejects.toThrow(/Không thể cho hiệu lực/);
+    await expect(svc.activate('ct-1', activator(MANAGER))).rejects.toThrow(
+      /Không thể cho hiệu lực/,
+    );
     expect(tx.externalContract.update).not.toHaveBeenCalled();
   });
 
@@ -317,7 +319,6 @@ describe('huỷ hợp đồng — đảo đúng hệ quả của activate', () =
 
     expect(assertSiteFor).toHaveBeenCalledWith('u1', 'contract.record.cancel', SITE);
   });
-
 });
 
 /* Gate mã quyền trả lời "có được làm việc này hay không". Nó KHÔNG trả lời "lên hợp đồng
@@ -428,14 +429,10 @@ describe('phạm vi — hợp đồng bó theo CẢ nghĩa trang, không chỉ c
    * kiểm được" phải dẫn tới CHẶN. Cho qua ở đây là fail-open, đúng lớp lỗi đang chặn
    * `createDeceased`. */
   it('không quy được phần mộ thì TỪ CHỐI, không phải bỏ qua phép kiểm', async () => {
-    const { svc, update, plotFindUnique, assertSiteFor } = build(
-      contract({ status: 'Uploaded' }),
-    );
+    const { svc, update, plotFindUnique, assertSiteFor } = build(contract({ status: 'Uploaded' }));
     plotFindUnique.mockResolvedValue(null);
 
-    await expect(svc.verify('ct-1', verifier(MANAGER))).rejects.toThrow(
-      /không kiểm được phạm vi/,
-    );
+    await expect(svc.verify('ct-1', verifier(MANAGER))).rejects.toThrow(/không kiểm được phạm vi/);
     expect(assertSiteFor).not.toHaveBeenCalled();
     expect(update).not.toHaveBeenCalled();
   });

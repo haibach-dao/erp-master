@@ -14,6 +14,7 @@ import {
   inEffect,
 } from '../../common/lifecycle/active';
 import type { CancelBurialDto, CreateBurialDto, CreateDeceasedDto } from './burials.dto';
+import { effectiveCapacity } from '../../common/cemetery/capacity';
 
 /* Chủ mộ tự an táng vào chính phần mộ mình đứng tên. Không phải một mã trong
  * `relationship_types` — ở đó không có "quan hệ với chính mình" — nên dùng một hằng
@@ -166,7 +167,7 @@ export class BurialsService {
     }
     return {
       plotStatus: plot.status,
-      cap: plot.capacityOverride ?? plot.graveType.defaultCapacity,
+      cap: effectiveCapacity(plot),
     };
   }
 
@@ -590,7 +591,7 @@ export class BurialsService {
       if (plot === null) {
         throw new NotFoundException('Không tìm thấy vị trí mộ');
       }
-      const cap = plot.capacityOverride ?? plot.graveType.defaultCapacity;
+      const cap = effectiveCapacity(plot);
       const completedCount = await tx.burialRecord.count({
         where: { gravePlotId: burial.gravePlotId, ...completedBurial },
       });

@@ -73,9 +73,23 @@ function build(
   const svc = new HoldsService(
     prisma,
     { record: vi.fn().mockResolvedValue(undefined) } as unknown as AuditService,
-    { assertCompanyFor, assertSiteFor, visibleCompanyIdsFor, listSiteFilterFor } as unknown as ScopeService,
+    {
+      assertCompanyFor,
+      assertSiteFor,
+      visibleCompanyIdsFor,
+      listSiteFilterFor,
+    } as unknown as ScopeService,
   );
-  return { svc, holdCreate, holdUpdate, plotUpdate, holdFindMany, plotFindUnique, assertCompanyFor, assertSiteFor };
+  return {
+    svc,
+    holdCreate,
+    holdUpdate,
+    plotUpdate,
+    holdFindMany,
+    plotFindUnique,
+    assertCompanyFor,
+    assertSiteFor,
+  };
 }
 
 describe('giữ chỗ — GIỮ bó theo phần mộ', () => {

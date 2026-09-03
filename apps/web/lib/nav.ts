@@ -5,14 +5,17 @@ import {
   FileText,
   IdCard,
   KeyRound,
-  LayoutDashboard,
   Landmark,
+  LayoutDashboard,
   Map,
+  Receipt,
   ScrollText,
   ShieldCheck,
   Sparkles,
-  Users,
+  Tag as TagsIcon,
+  Tags,
   UserCog,
+  Users,
   Waypoints,
 } from 'lucide-react';
 
@@ -25,7 +28,9 @@ export type NavItem = {
 };
 
 export type NavGroup = {
-  /** `null` = nhóm không tiêu đề, dùng cho mục đứng một mình ở đầu. */
+  /** Khoá ổn định cho trạng thái đóng/mở và `aria-controls`. Không đổi khi sửa nhãn. */
+  id: string;
+  /** `null` = nhóm KHÔNG có tiêu đề và KHÔNG thu gọn được — dùng cho mục đứng riêng ở đầu. */
   label: string | null;
   items: NavItem[];
 };
@@ -37,10 +42,12 @@ export type NavGroup = {
  */
 export const NAV: NavGroup[] = [
   {
+    id: 'home',
     label: null,
     items: [{ href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, permissions: null }],
   },
   {
+    id: 'cemetery',
     label: 'Nghĩa trang',
     items: [
       {
@@ -87,7 +94,47 @@ export const NAV: NavGroup[] = [
       },
     ],
   },
+  /* DANH MỤC tách thành nhóm riêng, không nằm lẫn trong "Nghĩa trang".
+   *
+   * Hai lý do, và lý do thứ hai mới là chính:
+   * 1. Nhóm "Nghĩa trang" đã lên 10 mục — dài quá thì người ta thôi đọc và chỉ quét lấy
+   *    mục quen tay.
+   * 2. Đây là những màn hình ĐẶT LUẬT (mở thẻ mới, ban hành đơn giá), không phải màn hình
+   *    làm việc hằng ngày. Chúng dùng thưa nhưng hậu quả rộng: một dòng ở đây áp cho mọi
+   *    công ty. Để lẫn giữa các mục tác nghiệp là mời người ta ghé vào theo thói quen.
+   */
   {
+    id: 'catalog',
+    label: 'Danh mục',
+    items: [
+      /* HAI mục riêng, không một mục "Thẻ nhãn" gộp.
+       *
+       * Tách ở thanh điều hướng là tầng cuối của một ranh giới đã tách ở mọi tầng dưới —
+       * và nó buộc người ta phải ĐI TỚI một chỗ khác để mở thẻ dán lên con người, thay vì
+       * gặp ô đó ngay cạnh ô mở thẻ mộ dùng hằng ngày. Hai `permissions` khác nhau cũng
+       * nghĩa là người chỉ làm thực địa sẽ không thấy mục thẻ khách. */
+      {
+        href: '/cemetery/plot-tags',
+        label: 'Thẻ nhãn phần mộ',
+        icon: Tags,
+        permissions: ['cemetery.plot_tag.view'],
+      },
+      {
+        href: '/cemetery/customer-tags',
+        label: 'Thẻ nhãn khách hàng',
+        icon: TagsIcon,
+        permissions: ['crm.customer_tag.view'],
+      },
+      {
+        href: '/cemetery/card-fees',
+        label: 'Biểu phí thẻ mộ',
+        icon: Receipt,
+        permissions: ['cemetery.card_fee.view'],
+      },
+    ],
+  },
+  {
+    id: 'operations',
     label: 'Vận hành',
     items: [
       {
@@ -100,6 +147,7 @@ export const NAV: NavGroup[] = [
     ],
   },
   {
+    id: 'admin',
     label: 'Quản trị',
     items: [
       {
@@ -147,6 +195,15 @@ export function activeItem(pathname: string): NavItem | undefined {
   return ALL_ITEMS.filter((i) => pathname === i.href || pathname.startsWith(`${i.href}/`)).sort(
     (a, b) => b.href.length - a.href.length,
   )[0];
+}
+
+/** Nhóm chứa mục đang mở — sidebar dùng để LUÔN bung đúng nhóm người dùng đang đứng. */
+export function activeGroupId(pathname: string): string | undefined {
+  const item = activeItem(pathname);
+  if (item === undefined) {
+    return undefined;
+  }
+  return NAV.find((g) => g.items.includes(item))?.id;
 }
 
 export type Crumb = { label: string; href?: string };

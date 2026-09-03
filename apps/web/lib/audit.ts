@@ -37,6 +37,20 @@ const ACTION: Record<string, string> = {
   'GRAVE.ALLOCATED': 'Phân bổ phần mộ',
   'GRAVE.HOLD_EXPIRED': 'Hết hạn giữ chỗ',
   'GRAVE_PLOT.POSITION_SET': 'Đặt toạ độ sơ đồ',
+  'GRAVE_PLOT.CAPACITY_SET': 'Sửa số cốt phần mộ',
+  'GRAVE_TYPE.CAPACITY_SET': 'Sửa số cốt loại mộ',
+
+  // Thẻ nhãn — thẻ KHÁCH tách riêng khỏi thẻ MỘ ở đây cũng như ở mọi tầng khác, vì
+  // "ai đã gắn nhãn này lên một con người" là câu người rà soát tìm tới, không phải
+  // một dòng lẫn trong đống thao tác trên vật.
+  'PLOT_TAG_TYPE.CREATED': 'Mở thẻ nhãn phần mộ',
+  'PLOT_TAG_TYPE.UPDATED': 'Sửa thẻ nhãn phần mộ',
+  'PLOT_TAG.ASSIGNED': 'Gắn thẻ cho phần mộ',
+  'PLOT_TAG.REMOVED': 'Gỡ thẻ khỏi phần mộ',
+  'CUSTOMER_TAG_TYPE.CREATED': 'Mở thẻ nhãn khách hàng',
+  'CUSTOMER_TAG_TYPE.UPDATED': 'Sửa thẻ nhãn khách hàng',
+  'CUSTOMER_TAG.ASSIGNED': 'Gắn thẻ cho khách hàng',
+  'CUSTOMER_TAG.REMOVED': 'Gỡ thẻ khỏi khách hàng',
   'CONTRACT.CREATED': 'Soạn hợp đồng',
   'CONTRACT.VERIFIED': 'Thẩm định hợp đồng',
   'CONTRACT.ACTIVATED': 'Cho hợp đồng hiệu lực',

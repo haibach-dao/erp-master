@@ -168,6 +168,21 @@ describe('tách nhiệm vụ ở mức vai (doc 16 §E.3)', () => {
     ['service.price.set_price', 'service.subscription.create'],
     ['service.transaction.view', 'service.transaction.adjust'],
     ['file.object.set_sensitivity', 'file.object.download_sensitive'],
+    /* Biểu phí thẻ mộ — ba cặp, vì tiền rò ra ở cả ba chỗ nối:
+     * ĐẶT GIÁ + THU: người ở quầy tự hạ đơn giá xuống rồi thu, không ai đối chứng.
+     * THA + THU: người thu tiền tự tha tiền — không cần gian dối phức tạp, chỉ cần bấm.
+     * THA + ĐẶT GIÁ: gộp lại là một người tự định đoạt trọn vẹn khoản thu của khách. */
+    ['cemetery.card_fee.set_price', 'cemetery.card.print'],
+    ['cemetery.card_fee.waive', 'cemetery.card.print'],
+    ['cemetery.card_fee.waive', 'cemetery.card_fee.set_price'],
+    /* Sửa số cốt của loại mộ là sửa CƠ SỐ NHÂN của tiền in lại. Ai vừa sửa được cơ số vừa
+     * thu được thì đặt giá lại toàn bộ mà không cần chạm tới biểu phí. */
+    ['cemetery.grave_type.update', 'cemetery.card.print'],
+    /* Thẻ nhãn — ai vừa MỞ được thẻ mới vừa GẮN được thì tự định đoạt trọn vẹn cái nhãn dán
+     * lên một phần mộ hoặc lên một con người. Cặp thứ hai nặng hơn: một thẻ khách tự tạo,
+     * tự gắn, là một câu nói về người mà không ai ngoài người tạo nó rà qua. */
+    ['config.plot_tag.update', 'cemetery.plot_tag.assign'],
+    ['config.customer_tag.update', 'crm.customer_tag.assign'],
   ])('không vai nào cầm cả %s lẫn %s', (a, b) => {
     expect(rolesHoldingBoth(a, b)).toEqual([]);
   });

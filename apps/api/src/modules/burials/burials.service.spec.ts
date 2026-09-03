@@ -28,7 +28,9 @@ const COMPANY = 'cty-1';
  * Giả lập ở mức NGỮ NGHĨA chứ không trả cứng `undefined`: trả cứng thì test vẫn xanh kể cả
  * khi service quên truyền `caller.permission` xuống, mà đó chính là điều đáng kiểm nhất.
  */
-function scopeStub(opts: { allowedSites?: string[] | null; allowedCompanies?: string[] | null } = {}) {
+function scopeStub(
+  opts: { allowedSites?: string[] | null; allowedCompanies?: string[] | null } = {},
+) {
   const { allowedSites = null, allowedCompanies = null } = opts;
   const seen: { code: string | null; siteId?: string | null; companyId?: string | null }[] = [];
   const assertSiteFor = vi.fn((_u: string | null, code: string | null, siteId: string | null) => {
@@ -369,7 +371,9 @@ describe('an táng — chọn cốt trong phần mộ', () => {
   it('cốt vượt sức chứa thì chặn, câu lỗi nói rõ mộ có mấy cốt', async () => {
     const { svc, create } = build({ capacity: 2 });
 
-    await expect(svc.createBurial({ ...dto, slotNumber: 3 }, CALLER_CREATE)).rejects.toThrow(/chỉ có 2 cốt/);
+    await expect(svc.createBurial({ ...dto, slotNumber: 3 }, CALLER_CREATE)).rejects.toThrow(
+      /chỉ có 2 cốt/,
+    );
     expect(create).not.toHaveBeenCalled();
   });
 
@@ -925,11 +929,7 @@ describe('phạm vi hồ sơ an táng — theo VAI ĐƯỢC GÁN, không theo ch
       },
     } as unknown as PrismaService;
     const { scope, assertSiteFor } = scopeStub({ allowedSites: opts.allowedSites });
-    const svc = new BurialsService(
-      prisma,
-      { record: vi.fn() } as unknown as AuditService,
-      scope,
-    );
+    const svc = new BurialsService(prisma, { record: vi.fn() } as unknown as AuditService, scope);
     return { svc, update, findMany, assertSiteFor, plotFindMany: prisma.gravePlot.findMany };
   }
 
@@ -989,7 +989,9 @@ describe('phạm vi hồ sơ an táng — theo VAI ĐƯỢC GÁN, không theo ch
     await svc.list(CALLER_VIEW);
 
     expect(plotFindMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: expect.objectContaining({ cemeteryId: { in: [CEMETERY_A] } }) }),
+      expect.objectContaining({
+        where: expect.objectContaining({ cemeteryId: { in: [CEMETERY_A] } }),
+      }),
     );
     expect(findMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: expect.objectContaining({ gravePlotId: { in: [PLOT] } }) }),

@@ -80,6 +80,34 @@ export const CUSTOMER_BLOCKING_REFERENCES: readonly BlockingReference[] = [
     activeWhere: () => ({ ...activeBurial() }),
     message: (n) => `là chủ mộ trong ${n} hồ sơ an táng`,
   },
+  /* Khoản phí cấp thẻ CHẶN xoá khách, không xoá theo.
+   *
+   * Bảng phí là append-only ở tầng CSDL — trigger chặn cả DELETE — nên "xoá theo" thậm chí
+   * không chạy được, nó sẽ nổ ra một lỗi Postgres thô ngay giữa giao dịch xoá khách.
+   *
+   * Nhưng lý do thật thì thuộc nghiệp vụ, không thuộc kỹ thuật: đây là tiền khách đã trả.
+   * Xoá hồ sơ khách mà mang theo khoản đã thu là mất khả năng đối chứng với chính người đã
+   * trả tiền, và mất một dòng trong sổ đối soát của kế toán.
+   *
+   * KHÔNG có `activeWhere`: mọi khoản đều chặn, không có khái niệm khoản "hết hiệu lực".
+   */
+  {
+    model: 'GraveCardFeeCharge',
+    column: 'customerId',
+    activeWhere: () => ({}),
+    message: (n) => `có ${n} khoản phí cấp thẻ đã ghi nhận`,
+    identify: async (client, customerId) => {
+      const rows = (await client.graveCardFeeCharge!.findMany({
+        where: { customerId },
+        select: { feeAmount: true, chargedAt: true },
+        orderBy: { chargedAt: 'desc' },
+        take: 3,
+      })) as { feeAmount: unknown; chargedAt: Date }[];
+      return rows.map(
+        (r) => `${String(r.feeAmount)}đ ngày ${r.chargedAt.toLocaleDateString('vi-VN')}`,
+      );
+    },
+  },
   {
     model: 'ContractParty',
     column: 'customerId',
@@ -137,6 +165,17 @@ export const CUSTOMER_BLOCKING_REFERENCES: readonly BlockingReference[] = [
 export const CUSTOMER_CASCADE_REFERENCES = [
   { model: 'GraveUsageRight', column: 'holderCustomerId', label: 'quyền sử dụng (lịch sử)' },
   { model: 'GraveHold', column: 'customerId', label: 'phiếu giữ chỗ (lịch sử)' },
+  /* Thẻ nhãn XOÁ THEO, không chặn xoá — khác hẳn khoản phí cấp thẻ ngay ở nhóm trên.
+   *
+   * Khoản phí là TIỀN KHÁCH ĐÃ TRẢ: xoá hồ sơ mà mang theo nó là mất khả năng đối chứng
+   * với chính người đã trả. Thẻ nhãn thì ngược lại — nó là SIÊU DỮ LIỆU của bản ghi, một
+   * cái nhãn ta tự dán lên hồ sơ. Chặn xoá một khách hàng vì họ đang mang nhãn "thiếu CCCD"
+   * là để cái nhãn của ta quan trọng hơn hồ sơ nó dán vào.
+   *
+   * Và với thẻ khách, xoá theo còn là điều ĐÚNG về quyền dữ liệu: khách yêu cầu xoá hồ sơ
+   * thì mọi nhãn ta từng gán cho họ phải đi cùng, không được nằm lại. Dấu vết ai gắn ai gỡ
+   * vẫn còn ở nhật ký kiểm toán — chỗ đúng để giữ nó. */
+  { model: 'CustomerTag', column: 'customerId', label: 'thẻ nhãn đã gắn' },
 ] as const;
 
 /* Tham chiếu phải GỠ RA (đặt về NULL), không chặn và cũng không xoá theo.

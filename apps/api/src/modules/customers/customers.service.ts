@@ -12,7 +12,12 @@ import { PiiService } from '../../common/pii/pii.service';
 import { AuditService } from '../audit/audit.service';
 import { ScopeService } from '../authorization/scope.service';
 import type { Caller } from '../authorization/caller';
-import { activeBurial, activeSubRecord, activeUsageRight } from '../../common/lifecycle/active';
+import {
+  activeBurial,
+  activeSubRecord,
+  activeTag,
+  activeUsageRight,
+} from '../../common/lifecycle/active';
 import {
   CUSTOMER_BLOCKING_REFERENCES,
   CUSTOMER_CASCADE_REFERENCES,
@@ -22,6 +27,7 @@ import {
   PERSON_BLOCKING_REFERENCES,
   PERSON_CASCADE_REFERENCES,
 } from '../../common/lifecycle/person-references';
+import { effectiveCapacity } from '../../common/cemetery/capacity';
 import type {
   AddPersonAddressDto,
   AddPersonBankAccountDto,
@@ -64,6 +70,8 @@ export interface CustomerFilters {
   type?: string;
   /** `Customer.status`: active | inactive. */
   status?: string;
+  /** Đang mang thẻ nhãn này. Một thẻ mỗi lần ở đợt 1. */
+  tagTypeId?: string;
   limit?: number;
 }
 
@@ -567,8 +575,7 @@ export class CustomersService {
           block: plot?.block ?? null,
           row: plot?.row ?? null,
           status: plot?.status ?? null,
-          capacity:
-            plot === undefined ? null : (plot.capacityOverride ?? plot.graveType.defaultCapacity),
+          capacity: plot === undefined ? null : effectiveCapacity(plot),
           effectiveFrom: r.effectiveFrom,
           /* Trả cả `gender` và `dateOfBirth`: nhãn quan hệ ("anh trai" hay "em trai") suy
            * từ giới tính VÀ so tuổi với chủ mộ, nên thiếu hai trường này thì giao diện phải
@@ -945,6 +952,15 @@ export class CustomersService {
       ...(notBlank(filters.type) ? { type: filters.type } : {}),
       ...(notBlank(filters.status) ? { status: filters.status } : {}),
       ...(ownership === null ? {} : ownership),
+      /* Thẻ nhãn viết được thành mệnh đề LỒNG NHAU — khác hẳn hai trục "đứng tên mộ" ở
+       * trên, vốn phải hỏi hai lượt vì id lỏng. `CustomerTag.customerId` có khoá ngoại
+       * THẬT và có `@relation`, nên `some` chạy được trong đúng một câu truy vấn.
+       *
+       * `...activeTag` là bắt buộc: thiếu nó thì thẻ đã GỠ vẫn lọt vào kết quả — tức là
+       * hiện lại một cái nhãn mà ai đó đã cố ý bỏ đi. */
+      ...(notBlank(filters.tagTypeId)
+        ? { tags: { some: { tagTypeId: filters.tagTypeId as string, ...activeTag } } }
+        : {}),
       ...freeTextWhere(filters.q ?? ''),
     };
 
@@ -969,6 +985,18 @@ export class CustomersService {
                * hai câu trả lời không thể mâu thuẫn vì chúng là cùng một sự thật. */
               deceased: { select: { dateOfDeath: true } },
             },
+          },
+          /* Thẻ nhãn kèm luôn trong CÙNG truy vấn, không để giao diện hỏi từng dòng: 50
+           * dòng là 50 lượt gọi, và người dùng nhìn một bảng nhấp nháy dần. Được phép làm
+           * vậy ở đây vì `CustomerTag` có khoá ngoại thật tới `Customer` — khác hai trục
+           * "đứng tên mộ" ngay trên, vốn nối bằng id lỏng nên phải hỏi hai lượt.
+           *
+           * `...activeTag`: thẻ đã gỡ KHÔNG được hiện lại. Đây là chỗ dễ quên nhất, và với
+           * thẻ khách thì quên nghĩa là dán lại lên một người cái nhãn ai đó đã cố ý bỏ. */
+          tags: {
+            where: { ...activeTag },
+            select: { tagTypeId: true, tagType: { select: { name: true, subject: true } } },
+            orderBy: { assignedAt: 'asc' },
           },
         },
         orderBy: { customerCode: 'asc' },
@@ -1116,8 +1144,7 @@ export class CustomersService {
         /* Mảng, không phải một giá trị: một người CHỈ nên nằm ở một chỗ, và
          * `assertNotAlreadyBuried` ép đúng điều đó — nhưng dữ liệu cũ có thể đã lệch, và
          * một màn hình rút xuống "lấy cái đầu tiên" sẽ giấu đúng cái sai cần thấy. */
-        restingPlaces:
-          personId === undefined ? [] : (restingByPerson.get(personId) ?? []),
+        restingPlaces: personId === undefined ? [] : (restingByPerson.get(personId) ?? []),
         isDeceased: (c.person as { deceased?: unknown } | null)?.deceased != null,
       };
     });

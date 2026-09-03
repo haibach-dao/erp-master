@@ -127,6 +127,9 @@ export interface Customer360 {
    * "đứng tên mộ" và "nằm trong mộ" là hai câu hỏi khác nhau, và một người có thể ở cả hai,
    * một trong hai, hay không cái nào. Gộp lại là cách hồ sơ an táng trở nên vô hình. */
   restingPlaces: { plotCode: string; slotNumber: number | null }[];
+  /* Thẻ ĐANG mang. API `include` sẵn trong cùng truy vấn danh sách — không hỏi thêm lượt
+   * nào cho mỗi dòng. Chỉ thẻ chưa gỡ; thẻ đã gỡ không hiện lại. */
+  tags: { tagTypeId: string; tagType: { name: string; subject: string } }[];
   isDeceased: boolean;
 }
 
@@ -175,6 +178,8 @@ export interface CustomerFilters {
   companyId?: string;
   type?: string;
   status?: string;
+  /** Đang mang thẻ nhãn này. MỘT thẻ mỗi lần ở đợt 1. */
+  tagTypeId?: string;
   limit?: number;
 }
 
@@ -199,6 +204,7 @@ function filterParams(f: CustomerFilters): string {
   if (f.companyId !== undefined && f.companyId !== '') p.set('companyId', f.companyId);
   if (f.type !== undefined && f.type !== '') p.set('type', f.type);
   if (f.status !== undefined && f.status !== '') p.set('status', f.status);
+  if (f.tagTypeId !== undefined && f.tagTypeId !== '') p.set('tagTypeId', f.tagTypeId);
   if (f.limit !== undefined) p.set('limit', String(f.limit));
   return p.toString();
 }
@@ -280,8 +286,18 @@ export const createGraveType = (
     body: JSON.stringify({ companyId, code, name, defaultCapacity }),
   });
 
-export const listGravePlots = (companyId: string): Promise<GravePlot[]> =>
-  apiFetch(`/api/v1/cemetery/grave-plots?companyId=${encodeURIComponent(companyId)}`);
+export const listGravePlots = (
+  companyId: string,
+  filters?: { status?: string; cemeteryId?: string; tagTypeId?: string },
+): Promise<GravePlot[]> => {
+  const p = new URLSearchParams({ companyId });
+  if (filters?.status !== undefined && filters.status !== '') p.set('status', filters.status);
+  if (filters?.cemeteryId !== undefined && filters.cemeteryId !== '')
+    p.set('cemeteryId', filters.cemeteryId);
+  if (filters?.tagTypeId !== undefined && filters.tagTypeId !== '')
+    p.set('tagTypeId', filters.tagTypeId);
+  return apiFetch(`/api/v1/cemetery/grave-plots?${p.toString()}`);
+};
 export const createGravePlot = (input: {
   companyId: string;
   cemeteryId: string;
@@ -731,7 +747,51 @@ export interface GraveCard {
   approvedTitle?: string | null;
   issued: boolean;
   reprint?: boolean;
+  /* Bảng kê tiền. `null` khi CHƯA TÍNH ĐƯỢC (khách chưa gắn công ty, hoặc công ty chưa ban
+   * hành biểu phí) — khác hẳn với 0đ. `formatMoney` hiện `—` cho null nhưng "0đ" cho 0, và
+   * "0đ" trên màn hình quầy đọc thành "miễn phí". */
+  fee: CardFeeQuote | null;
 }
+
+/* Tiền khai `string`, KHÔNG `number`: API trả Decimal ra chuỗi, và lớp che có thể thay nó
+ * bằng '***' khi người xem không cầm `cemetery.card_fee.view`. Khai `number` là ép mọi chỗ
+ * hiện tiền đi qua `Number('***')` = NaN. Luôn hiện qua `formatMoney`. */
+export interface CardFeeLine {
+  gravePlotId: string;
+  plotCode: string;
+  feeKind: 'FIRST_ISSUE' | 'REPRINT';
+  feeScheduleId: string;
+  unitPrice: string;
+  remainsCount: number;
+  feeAmount: string;
+}
+
+export interface CardFeeQuote {
+  scheduleId: string;
+  effectiveFrom: string;
+  lines: CardFeeLine[];
+  totalAmount: string;
+  /** Chỉ có sau khi đã cấp. */
+  waived?: boolean;
+  waiveReason?: string | null;
+}
+
+export interface CardFeeSchedule {
+  id: string;
+  companyId: string;
+  cardType: string;
+  firstIssueFee: string;
+  reprintFeePerRemains: string;
+  effectiveFrom: string;
+  decisionRef: string | null;
+  createdBy: string | null;
+  createdAt: string;
+}
+
+export const CARD_FEE_WAIVE_REASONS = [
+  { value: 'COMPANY_FAULT', label: 'Lỗi thuộc về công ty' },
+  { value: 'OLD_CARD_RETURNED', label: 'Khách nộp lại thẻ cũ' },
+] as const;
 
 export interface CardIssuance {
   id: string;
@@ -748,7 +808,13 @@ export const previewGraveCard = (customerId: string): Promise<GraveCard> =>
 
 export const issueGraveCard = (
   customerId: string,
-  input: { printReason?: string; approvedBy?: string; approvedTitle?: string },
+  input: {
+    printReason?: string;
+    approvedBy?: string;
+    approvedTitle?: string;
+    waive?: boolean;
+    waiveReason?: string;
+  },
 ): Promise<GraveCard> =>
   apiFetch(`/api/v1/cemetery/cards/${encodeURIComponent(customerId)}/issue`, {
     method: 'POST',
@@ -1186,3 +1252,172 @@ export interface BurialCandidates {
 
 export const getBurialCandidates = (gravePlotId: string): Promise<BurialCandidates> =>
   apiFetch(`/api/v1/burials/candidates?gravePlotId=${encodeURIComponent(gravePlotId)}`);
+
+/* Biểu phí cấp thẻ — chỉ ĐỌC và THÊM. Không có hàm sửa hay xoá vì bảng append-only ở CSDL;
+ * đổi giá là ban hành một dòng mới với ngày hiệu lực mới. */
+export const listCardFeeSchedules = (companyId: string): Promise<CardFeeSchedule[]> =>
+  apiFetch(`/api/v1/cemetery/card-fees?companyId=${encodeURIComponent(companyId)}`);
+
+export const createCardFeeSchedule = (input: {
+  companyId: string;
+  firstIssueFee: number;
+  reprintFeePerRemains: number;
+  effectiveFrom: string;
+  decisionRef?: string;
+}): Promise<CardFeeSchedule> =>
+  apiFetch('/api/v1/cemetery/card-fees', { method: 'POST', body: JSON.stringify(input) });
+
+/* Số cốt — hai đường riêng vì hai mức hậu quả khác nhau: sửa một phần mộ chỉ đổi mộ đó,
+ * sửa loại mộ đổi mọi phần mộ chưa có ghi đè. */
+export const setGravePlotCapacity = (
+  id: string,
+  capacityOverride: number | null,
+): Promise<GravePlot> =>
+  apiFetch(`/api/v1/cemetery/grave-plots/${encodeURIComponent(id)}/capacity`, {
+    method: 'POST',
+    body: JSON.stringify({ capacityOverride }),
+  });
+
+export const setGraveTypeCapacity = (id: string, defaultCapacity: number): Promise<GraveType> =>
+  apiFetch(`/api/v1/cemetery/grave-types/${encodeURIComponent(id)}/capacity`, {
+    method: 'POST',
+    body: JSON.stringify({ defaultCapacity }),
+  });
+
+/* ---------------------------------------------------------------------------
+ * THẺ NHÃN — HAI danh mục TÁCH RIÊNG (thẻ mộ, thẻ khách), cả hai TOÀN HỆ.
+ * Anh Bách chốt 03/09/2026.
+ *
+ * Hai bộ kiểu và hai bộ hàm, cố ý KHÔNG gộp bằng generic. Ranh giới giữa "thẻ dán lên vật"
+ * và "thẻ dán lên người" là ranh giới CẤU TRÚC ở tầng dữ liệu (hai bảng, hai khoá ngoại);
+ * gộp ở tầng này là mở lại đúng cái cửa mà tầng kia đang đóng.
+ * ------------------------------------------------------------------------- */
+
+interface TagTypeBase {
+  id: string;
+  code: string;
+  name: string;
+  description: string | null;
+  status: 'Active' | 'Retired';
+  createdAt: string;
+  /** Số bản ghi ĐANG mang thẻ này — server đếm, giao diện không tự cộng. */
+  usageCount: number;
+}
+
+/** Thẻ MỘ không có `subject`: nó nói về một VẬT, không có gì phải rào. */
+export type PlotTagType = TagTypeBase;
+
+/** Thẻ KHÁCH bắt buộc khai nói về HỒ SƠ hay GIAO DỊCH — đây là rào, không phải phân loại. */
+export interface CustomerTagType extends TagTypeBase {
+  subject: 'HO_SO' | 'GIAO_DICH';
+}
+
+export const CUSTOMER_TAG_SUBJECTS = [
+  { value: 'HO_SO', label: 'Hồ sơ, giấy tờ', hint: 'Thiếu CCCD, thiếu giấy chứng tử…' },
+  { value: 'GIAO_DICH', label: 'Giao dịch đã xảy ra', hint: 'Mua trước chưa an táng…' },
+] as const;
+
+export const CUSTOMER_TAG_SUBJECT_LABEL: Record<string, string> = {
+  HO_SO: 'Hồ sơ',
+  GIAO_DICH: 'Giao dịch',
+};
+
+export interface AssignedPlotTag {
+  id: string;
+  tagTypeId: string;
+  assignedBy: string | null;
+  assignedAt: string;
+  tagType: PlotTagType;
+}
+
+export interface AssignedCustomerTag {
+  id: string;
+  tagTypeId: string;
+  assignedBy: string | null;
+  assignedAt: string;
+  tagType: CustomerTagType;
+}
+
+const TAGS = '/api/v1/cemetery/tags';
+
+/* Không có hàm XOÁ ở đâu: danh mục chỉ NGỪNG DÙNG, thẻ đã gắn chỉ GỠ (lưu vết). */
+export const listPlotTagTypes = (): Promise<PlotTagType[]> => apiFetch(`${TAGS}/plot-types`);
+
+export const createPlotTagType = (input: {
+  code: string;
+  name: string;
+  description?: string;
+}): Promise<PlotTagType> =>
+  apiFetch(`${TAGS}/plot-types`, { method: 'POST', body: JSON.stringify(input) });
+
+export const updatePlotTagType = (
+  id: string,
+  input: { name?: string; description?: string; status?: 'Active' | 'Retired' },
+): Promise<PlotTagType> =>
+  apiFetch(`${TAGS}/plot-types/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  });
+
+export const listCustomerTagTypes = (): Promise<CustomerTagType[]> =>
+  apiFetch(`${TAGS}/customer-types`);
+
+export const createCustomerTagType = (input: {
+  code: string;
+  name: string;
+  subject: string;
+  description?: string;
+}): Promise<CustomerTagType> =>
+  apiFetch(`${TAGS}/customer-types`, { method: 'POST', body: JSON.stringify(input) });
+
+export const updateCustomerTagType = (
+  id: string,
+  input: { name?: string; description?: string; status?: 'Active' | 'Retired' },
+): Promise<CustomerTagType> =>
+  apiFetch(`${TAGS}/customer-types/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  });
+
+export const listPlotTags = (gravePlotId: string): Promise<AssignedPlotTag[]> =>
+  apiFetch(`${TAGS}/plots/${encodeURIComponent(gravePlotId)}`);
+
+export const assignPlotTag = (gravePlotId: string, tagTypeId: string): Promise<AssignedPlotTag> =>
+  apiFetch(`${TAGS}/plots/${encodeURIComponent(gravePlotId)}`, {
+    method: 'POST',
+    body: JSON.stringify({ tagTypeId }),
+  });
+
+/* Gỡ đi qua POST `/remove`, không qua DELETE — đây không phải xoá một tài nguyên mà là ghi
+ * thêm một sự kiện "đã gỡ, bởi ai, vì sao", và nó mang được `body` chứa lý do. */
+export const removePlotTag = (
+  gravePlotId: string,
+  tagTypeId: string,
+  reason?: string,
+): Promise<AssignedPlotTag> =>
+  apiFetch(
+    `${TAGS}/plots/${encodeURIComponent(gravePlotId)}/${encodeURIComponent(tagTypeId)}/remove`,
+    { method: 'POST', body: JSON.stringify(reason === undefined ? {} : { reason }) },
+  );
+
+export const listCustomerTags = (customerId: string): Promise<AssignedCustomerTag[]> =>
+  apiFetch(`${TAGS}/customers/${encodeURIComponent(customerId)}`);
+
+export const assignCustomerTag = (
+  customerId: string,
+  tagTypeId: string,
+): Promise<AssignedCustomerTag> =>
+  apiFetch(`${TAGS}/customers/${encodeURIComponent(customerId)}`, {
+    method: 'POST',
+    body: JSON.stringify({ tagTypeId }),
+  });
+
+export const removeCustomerTag = (
+  customerId: string,
+  tagTypeId: string,
+  reason?: string,
+): Promise<AssignedCustomerTag> =>
+  apiFetch(
+    `${TAGS}/customers/${encodeURIComponent(customerId)}/${encodeURIComponent(tagTypeId)}/remove`,
+    { method: 'POST', body: JSON.stringify(reason === undefined ? {} : { reason }) },
+  );

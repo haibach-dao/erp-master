@@ -17,22 +17,13 @@
     {
       "name": "web",
       "runtimeExecutable": "pnpm",
-      "runtimeArgs": [
-        "--filter",
-        "@erp/web",
-        "dev"
-      ],
+      "runtimeArgs": ["--filter", "@erp/web", "dev"],
       "port": 3000
     },
     {
       "name": "web-3100",
       "runtimeExecutable": "npx",
-      "runtimeArgs": [
-        "next",
-        "dev",
-        "-p",
-        "3100"
-      ],
+      "runtimeArgs": ["next", "dev", "-p", "3100"],
       "port": 3100,
       "cwd": "apps/web",
       "env": {
@@ -42,9 +33,7 @@
     {
       "name": "ma-tran-quyen",
       "runtimeExecutable": "node",
-      "runtimeArgs": [
-        ".local/serve.js"
-      ],
+      "runtimeArgs": [".local/serve.js"],
       "port": 4321
     }
   ]
