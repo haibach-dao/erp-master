@@ -13,15 +13,15 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: 11.19.0
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: pnpm
@@ -78,15 +78,15 @@ jobs:
     env:
       DATABASE_URL: postgresql://erp:erp@127.0.0.1:5432/erp?schema=public
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: 11.19.0
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: pnpm
@@ -102,19 +102,18 @@ jobs:
       - name: Migrations áp được từ số không
         run: pnpm --filter @erp/api db:migrate
 
+      # Bước so ngay dưới dựng lại cả chuỗi migration vào một CSDL BÓNG rồi mới so, và nó KHÔNG
+      # tự tạo CSDL đó — thiếu bước này thì chết với `P1003 Database erp_shadow does not exist`.
+      # Lúc đo ở local tôi tạo tay nên không thấy thiếu; lần chạy thật đầu tiên trên CI mới lộ ra.
+      - name: Tạo CSDL bóng cho bước so sánh
+        run: PGPASSWORD=erp psql -h 127.0.0.1 -U erp -d postgres -c 'CREATE DATABASE erp_shadow'
+
       # 2. `schema.prisma` KHỚP với chuỗi migration. Lệch ở đây nghĩa là Prisma Client sinh ra
       #    một kiểu mà CSDL không có — mã biên dịch xanh rồi vỡ lúc chạy.
       #    ĐÃ ĐO 03/09/2026 trước khi biến thành bước chặn: "No difference detected", exit 0.
       #    Lo ngại ban đầu là partial unique index và CHECK (có trong migration, không diễn tả
       #    được trong schema.prisma) sẽ gây đỏ giả — KHÔNG: `migrate diff` không nhìn thấy chúng
       #    ở cả hai phía nên chúng triệt tiêu nhau.
-      # `migrate diff --from-migrations` dựng lại chuỗi migration vào một CSDL BÓNG rồi mới so,
-      # và nó KHÔNG tự tạo CSDL đó — thiếu bước này thì bước dưới chết với `P1003 Database
-      # erp_shadow does not exist`. Lúc đo ở local tôi tạo tay nên không thấy; lần chạy thật đầu
-      # tiên trên CI mới lộ ra.
-      - name: Tạo CSDL bóng cho bước so sánh
-        run: PGPASSWORD=erp psql -h 127.0.0.1 -U erp -d postgres -c 'CREATE DATABASE erp_shadow'
-
       - name: schema.prisma khớp với migrations
         run: >-
           pnpm --filter @erp/api exec prisma migrate diff
