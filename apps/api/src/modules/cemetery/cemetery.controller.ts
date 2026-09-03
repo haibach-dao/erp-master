@@ -8,14 +8,17 @@ import { callerOf, type Caller } from '../authorization/caller';
 import { MaskUnless } from '../../common/masking/mask.decorator';
 import { CemeteryService } from './cemetery.service';
 import {
+  AssignUsageRightDto,
   ChangeStatusDto,
   CreateCemeteryDto,
   CreateCompanyDto,
   CreateGravePlotDto,
   CreateGraveTypeDto,
-  SetPlotPositionDto,
-  AssignUsageRightDto,
+  ListGravePlotsDto,
   ReleaseUsageRightDto,
+  SetGravePlotCapacityDto,
+  SetGraveTypeCapacityDto,
+  SetPlotPositionDto,
   TransferUsageRightDto,
 } from './cemetery.dto';
 
@@ -82,15 +85,13 @@ export class CemeteryController {
     return this.svc.createGravePlot(dto, this.caller(req));
   }
 
+  /* Bộ lọc gom vào DTO 03/09/2026 cùng lúc thêm trục thẻ nhãn. Trước đó `status` là chuỗi
+   * THÔ từ `@Query()` gán thẳng vào `where` — client gửi gì cũng lọt xuống truy vấn, và
+   * thêm một trục mới mà giữ nếp đó là nhân bản đúng lỗi ấy. */
   @Get('grave-plots')
   @RequirePermission('cemetery.plot.view')
-  listGravePlots(
-    @Req() req: Request,
-    @Query('companyId') companyId: string,
-    @Query('status') status?: string,
-    @Query('cemeteryId') cemeteryId?: string,
-  ) {
-    return this.svc.listGravePlots(companyId, this.caller(req), status, cemeteryId);
+  listGravePlots(@Query() filters: ListGravePlotsDto, @Req() req: Request) {
+    return this.svc.listGravePlots(filters, this.caller(req));
   }
 
   @Post('grave-plots/:id/status')
@@ -112,6 +113,33 @@ export class CemeteryController {
   @RequirePermission('cemetery.plot.update')
   setPosition(@Param('id') id: string, @Body() dto: SetPlotPositionDto, @Req() req: Request) {
     return this.svc.setPlotPosition(id, dto, this.caller(req));
+  }
+
+  /* Số cốt — route riêng dù dùng CÙNG mã quyền với toạ độ. Cùng mã vì cả hai đều là "sửa
+   * lô mộ" và cùng thuộc người biết thực địa; route riêng vì hậu quả khác nhau và nhật ký
+   * phải nói đúng việc vừa xảy ra. Từ 02/09/2026 số cốt nhân ra tiền in lại thẻ, nên một
+   * dòng nhật ký ghi "đặt toạ độ" cho một lần đổi số cốt là dòng nhật ký nói sai. */
+  @Post('grave-plots/:id/capacity')
+  @RequirePermission('cemetery.plot.update')
+  setPlotCapacity(
+    @Param('id') id: string,
+    @Body() dto: SetGravePlotCapacityDto,
+    @Req() req: Request,
+  ) {
+    return this.svc.setPlotCapacity(id, dto, this.caller(req));
+  }
+
+  /* Số cốt mặc định của LOẠI mộ — mã quyền riêng và là S3, không dùng lại
+   * `cemetery.grave_type.create` (S1). Tạo một loại mộ mới không đụng gì đang chạy; sửa số
+   * cốt của loại mộ đổi sức chứa hiệu dụng của MỌI phần mộ chưa có ghi đè, cùng lúc. */
+  @Post('grave-types/:id/capacity')
+  @RequirePermission('cemetery.grave_type.update')
+  setGraveTypeCapacity(
+    @Param('id') id: string,
+    @Body() dto: SetGraveTypeCapacityDto,
+    @Req() req: Request,
+  ) {
+    return this.svc.setGraveTypeCapacity(id, dto, this.caller(req));
   }
 
   @Get('cemeteries/:id/plot-map')

@@ -8,6 +8,7 @@ import {
   IsString,
   Min,
   MinLength,
+  ValidateIf,
 } from 'class-validator';
 import { GRAVE_PLOT_STATUSES } from './cemetery.constants';
 
@@ -48,6 +49,57 @@ export class CreateGravePlotDto {
   @IsInt()
   @Min(1)
   capacityOverride?: number;
+}
+
+/* Số cốt của LOẠI mộ. Một dòng ở đây đổi sức chứa hiệu dụng của mọi phần mộ chưa có ghi
+ * đè riêng — và từ 02/09/2026 nó là cơ số nhân của tiền in lại thẻ. Vì thế nó là DTO
+ * riêng, route riêng, mã quyền riêng, chứ không phải một trường tuỳ chọn nhét vào một
+ * `UpdateGraveTypeDto` chung chung nơi nó lẫn giữa việc đổi tên với đổi mã. */
+export class SetGraveTypeCapacityDto {
+  @ApiProperty({ description: 'Số cốt mặc định của loại mộ' })
+  @IsInt()
+  @Min(1)
+  defaultCapacity!: number;
+}
+
+/* Số cốt GHI ĐÈ của một phần mộ cụ thể — mộ xây khác chuẩn của loại.
+ *
+ * Nhận `null` TƯỜNG MINH, và đó là điểm phải để ý: `null` nghĩa là "thôi ghi đè, quay về
+ * mặc định của loại mộ", một ý định khác hẳn với "không gửi trường này". Đừng mượn luật
+ * "chuỗi rỗng nghĩa là xoá" mà PATCH khách hàng đang dùng — đây là số, và chuỗi rỗng
+ * quy về 0 thì thành mộ 0 cốt. */
+export class SetGravePlotCapacityDto {
+  @ApiProperty({
+    nullable: true,
+    description: 'Số cốt riêng của phần mộ; null để dùng mặc định của loại mộ',
+  })
+  @ValidateIf((_o, value) => value !== null)
+  @IsInt()
+  @Min(1)
+  capacityOverride!: number | null;
+}
+
+/* Bộ lọc danh sách lô mộ.
+ *
+ * Trước 03/09/2026 ba tham số này đến thẳng từ `@Query()` rời, và `status` là chuỗi THÔ gán
+ * vào `where` không qua một `@IsIn` nào — client gửi gì cũng lọt xuống truy vấn. Thêm trục
+ * thẻ nhãn mà giữ nguyên nếp đó là nhân bản đúng lỗi ấy, nên gom vào DTO ở đây.
+ */
+export class ListGravePlotsDto {
+  @ApiProperty() @IsString() @MinLength(1) companyId!: string;
+
+  @ApiPropertyOptional({ enum: GRAVE_PLOT_STATUSES })
+  @IsOptional()
+  @IsIn(GRAVE_PLOT_STATUSES)
+  status?: string;
+
+  @ApiPropertyOptional() @IsOptional() @IsString() cemeteryId?: string;
+
+  /* Một thẻ mỗi lần ở đợt 1 — xem lý do ở `SearchCustomersDto.tagTypeId`. */
+  @ApiPropertyOptional({ description: 'Đang mang thẻ nhãn này (id dòng danh mục)' })
+  @IsOptional()
+  @IsString()
+  tagTypeId?: string;
 }
 
 export class ChangeStatusDto {

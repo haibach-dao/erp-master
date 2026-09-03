@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { RotateCcw, Search } from 'lucide-react';
 import {
   listCemeteries,
+  listCustomerTagTypes,
   listCompanies,
   type CustomerFilters,
   type GraveOwnerFilter,
@@ -33,6 +34,7 @@ export const EMPTY_CUSTOMER_FILTERS: CustomerFilters = {
   companyId: '',
   cemeteryId: '',
   type: '',
+  tagTypeId: '',
 };
 
 /* Đếm số trục ĐANG lọc, để người dùng thấy ngay mình đang nhìn một tập đã bị thu hẹp.
@@ -44,6 +46,7 @@ export function activeFilterCount(f: CustomerFilters): number {
   if (f.companyId !== undefined && f.companyId !== '') n += 1;
   if (f.cemeteryId !== undefined && f.cemeteryId !== '') n += 1;
   if (f.type !== undefined && f.type !== '') n += 1;
+  if (f.tagTypeId !== undefined && f.tagTypeId !== '') n += 1;
   return n;
 }
 
@@ -61,12 +64,20 @@ export function CustomerFiltersBar({
     queryFn: () => listCemeteries(companyId),
     enabled: companyId !== '',
   });
+  /* Danh mục thẻ KHÁCH — toàn hệ, nên KHÔNG chờ chọn công ty. Bảng riêng với thẻ mộ, nên
+   * không cần lọc gì: ô này không bao giờ mời chọn một thẻ dùng cho mộ. */
+  const tagTypes = useQuery({ queryKey: ['customerTagTypes'], queryFn: listCustomerTagTypes });
 
   const set = (patch: Partial<CustomerFilters>) => onChange({ ...value, ...patch });
   const active = activeFilterCount(value);
 
   /* Đổi công ty thì XOÁ nghĩa trang đang chọn. Giữ lại là giữ một id thuộc công ty cũ, và
    * server sẽ từ chối nó — người dùng nhận 403 cho một thao tác họ không hề làm. */
+  /* Đổi công ty thì xoá NGHĨA TRANG đang chọn — id đó thuộc công ty cũ, giữ lại là để
+   * server từ chối một thao tác người dùng không hề làm.
+   *
+   * KHÔNG xoá thẻ nhãn: từ 03/09/2026 danh mục thẻ là toàn hệ, một thẻ dùng được ở mọi công
+   * ty. Xoá nó khi đổi công ty là vứt đi một bộ lọc vẫn còn đúng. */
   const setCompany = (id: string) => set({ companyId: id, cemeteryId: '' });
 
   return (
@@ -85,7 +96,7 @@ export function CustomerFiltersBar({
         />
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
         <Field label="Tình trạng" htmlFor="f-life">
           <Select
             id="f-life"
@@ -139,6 +150,23 @@ export function CustomerFiltersBar({
             {companies.data?.map((c) => (
               <option key={c.id} value={c.id}>
                 {c.name}
+              </option>
+            ))}
+          </Select>
+        </Field>
+
+        <Field label="Thẻ nhãn" htmlFor="f-tag" hint="Một thẻ mỗi lần">
+          <Select
+            id="f-tag"
+            value={value.tagTypeId ?? ''}
+            onChange={(e) => set({ tagTypeId: e.target.value })}
+            disabled={tagTypes.isPending}
+          >
+            <option value="">Tất cả</option>
+            {(tagTypes.data ?? []).map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+                {t.status === 'Retired' ? ' (ngừng dùng)' : ''}
               </option>
             ))}
           </Select>

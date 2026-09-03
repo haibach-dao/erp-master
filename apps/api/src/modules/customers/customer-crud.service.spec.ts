@@ -51,6 +51,10 @@ function build(
   const tx = {
     graveUsageRight: { deleteMany: del('graveUsageRight') },
     graveHold: { deleteMany: del('graveHold') },
+    /* Thẻ nhãn XOÁ THEO: nó là siêu dữ liệu của bản ghi, không phải giấy tờ đã trao khách.
+     * Khách yêu cầu xoá hồ sơ thì mọi nhãn ta từng gán phải đi cùng; dấu vết ai gắn ai gỡ
+     * ở lại nhật ký kiểm toán, chỗ đúng để giữ nó. */
+    customerTag: { deleteMany: del('customerTag') },
     /* Hồ sơ an táng đứng ở CẢ HAI nhóm: `deleteMany` dọn hồ sơ ĐÃ HUỶ của người mất này,
      * `updateMany` gỡ con trỏ chủ mộ khỏi hồ sơ đã huỷ của NGƯỜI KHÁC. */
     burialRecord: { deleteMany: del('burialRecord'), updateMany: detach('burialRecord') },
@@ -135,6 +139,18 @@ function build(
         ),
     },
     cardPrintLog: { count: vi.fn().mockResolvedValue(n('cards')) },
+    /* Khoản phí cấp thẻ CHẶN xoá khách: đây là tiền khách đã trả, xoá hồ sơ mà mang theo
+     * khoản đã thu là mất khả năng đối chứng với chính người đã trả. `identify` nêu số
+     * tiền và ngày để lời từ chối chỉ đích danh, không chỉ đếm. */
+    graveCardFeeCharge: {
+      count: vi.fn().mockResolvedValue(n('cardFees')),
+      findMany: vi.fn().mockResolvedValue(
+        Array.from({ length: Math.min(n('cardFees'), 3) }, () => ({
+          feeAmount: '200000',
+          chargedAt: new Date('2026-09-02'),
+        })),
+      ),
+    },
     serviceSubscription: { count: vi.fn().mockResolvedValue(n('subscriptions')) },
     serviceTransaction: { count: vi.fn().mockResolvedValue(n('transactions')) },
     contractParty: {
@@ -226,6 +242,7 @@ describe('xoá khách hàng — khi sạch thì dọn hết, không để lại 
          cùng — để lại thì thành con trỏ treo, vì hai bảng đó không có khoá ngoại. */
       'graveUsageRight',
       'graveHold',
+      'customerTag',
       /* Hồ sơ an táng ĐÃ HUỶ của chính người này. PHẢI đứng trước `deceasedPerson`: khoá
          ngoại giữa hai bảng là ON DELETE RESTRICT, sai thứ tự là `P2003`. Đây là thứ tự
          khai trong `PERSON_CASCADE_REFERENCES`, và test này khoá nó lại. */
@@ -259,7 +276,7 @@ describe('xoá khách hàng — khi sạch thì dọn hết, không để lại 
 
     await svc.deleteCustomer(CUSTOMER, 'u1');
 
-    expect(deleted).toEqual(['graveUsageRight', 'graveHold', 'customer']);
+    expect(deleted).toEqual(['graveUsageRight', 'graveHold', 'customerTag', 'customer']);
   });
 
   /* Xoá người này rút họ khỏi cây gia đình của người kia. Nói ra con số thay vì lặng lẽ

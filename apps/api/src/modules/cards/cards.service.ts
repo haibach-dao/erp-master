@@ -6,8 +6,10 @@ import type { Caller } from '../authorization/caller';
 import { PermissionsService } from '../authorization/permissions.service';
 import { ScopeService } from '../authorization/scope.service';
 import { PiiService } from '../../common/pii/pii.service';
+import { CardFeesService } from './card-fees.service';
 import { activeBurial, activeUsageRight } from '../../common/lifecycle/active';
 import type { IssueCardDto } from './cards.dto';
+import { effectiveCapacity } from '../../common/cemetery/capacity';
 
 const CARD_TYPE = 'GRAVE';
 
@@ -19,6 +21,7 @@ export class CardsService {
     private readonly scope: ScopeService,
     private readonly pii: PiiService,
     private readonly permissions: PermissionsService,
+    private readonly fees: CardFeesService,
   ) {}
 
   /* Gom dữ liệu in lên thẻ.
@@ -70,7 +73,7 @@ export class CardsService {
       if (plot === undefined) {
         throw new NotFoundException(`Không tìm thấy phần mộ ${right.gravePlotId}`);
       }
-      const capacity = plot.capacityOverride ?? plot.graveType.defaultCapacity;
+      const capacity = effectiveCapacity(plot);
       const occupants = burials
         .filter((b) => b.gravePlotId === plot.id)
         .map((b) => ({
@@ -189,8 +192,41 @@ export class CardsService {
     return {
       ...card,
       nextPrintNumber: (await this.lastPrintNumber(customerId)) + 1,
+      /* Bảng kê tiền DỰ KIẾN — người ở quầy phải trả lời được "cấp thẻ này hết bao nhiêu"
+       * trước khi khách quyết.
+       *
+       * Trả `null` khi chưa tính được (khách chưa gắn công ty, hoặc công ty chưa ban hành
+       * biểu phí). KHÔNG trả 0 và KHÔNG trả chuỗi rỗng: `formatMoney` hiện `—` cho `null`
+       * nhưng hiện "0 ₫" cho 0 — và "0 ₫" trên màn hình quầy đọc thành "miễn phí". */
+      fee: await this.quoteOrNull(card),
       issued: false,
     };
+  }
+
+  /* Bảng kê tiền, hoặc `null` nếu chưa tính được.
+   *
+   * `preview` CỐ Ý không chặn khách chưa gắn công ty (khác `issue`), vì xem trước là đường
+   * ĐỌC — chặn ở đó thì người dùng không xem được thẻ chỉ vì hồ sơ còn thiếu một trường.
+   * Nhưng không có công ty thì không có biểu phí, nên tiền là câu chưa trả lời được.
+   */
+  private async quoteOrNull(card: {
+    customerId: string;
+    companyId: string | null;
+    plots: readonly { gravePlotId: string; plotCode: string; capacity: number }[];
+  }) {
+    if (card.companyId === null) {
+      return null;
+    }
+    try {
+      return await this.fees.quote(
+        { customerId: card.customerId, companyId: card.companyId, plots: card.plots },
+        new Date(),
+      );
+    } catch {
+      /* Chưa ban hành biểu phí thì XEM TRƯỚC vẫn phải mở được — người ở quầy cần thấy thẻ.
+       * Chỉ `issue` mới được phép chặn, và nó chặn thật. */
+      return null;
+    }
   }
 
   /* CẤP THẺ — sinh số và ghi nhật ký. Đây mới là hành vi để lại dấu vết.
@@ -206,13 +242,20 @@ export class CardsService {
     }
     const companyId = card.companyId;
 
-    const log = await this.prisma.$transaction(async (tx) => {
+    /* Hai việc phải xong TRƯỚC khi mở giao dịch, và cả hai đều gọi ra ngoài Prisma:
+     * kiểm quyền miễn phí, và tra biểu phí. Giữ giao dịch mở trong lúc chờ chúng là giữ
+     * khoá hàng lâu hơn cần thiết — cùng lý do `changeGravePlotStatus` kiểm phạm vi trước
+     * khi mở giao dịch. */
+    const waive = await this.fees.resolveWaive(dto, caller.userId);
+    const quote = await this.fees.quote({ customerId, companyId, plots: card.plots }, new Date());
+
+    const { log, chargeIds } = await this.prisma.$transaction(async (tx) => {
       const last = await tx.cardPrintLog.findFirst({
         where: { customerId, cardType: CARD_TYPE },
         orderBy: { printNumber: 'desc' },
         select: { printNumber: true },
       });
-      return tx.cardPrintLog.create({
+      const created = await tx.cardPrintLog.create({
         data: {
           id: ulid(),
           companyId,
@@ -225,6 +268,23 @@ export class CardsService {
           issuedBy: caller.userId,
         },
       });
+      /* Dòng phí ghi trong CÙNG giao dịch với dòng cấp thẻ. Tách ra hai giao dịch nghĩa là
+       * có ngày tồn tại một lần cấp thẻ không có khoản phí, hoặc một khoản phí không gắn
+       * lần cấp nào — hai bản ghi kể hai câu chuyện khác nhau về cùng một việc.
+       *
+       * Đây cũng là chỗ partial unique index `grave_card_fee_charges_first_issue` ép luật
+       * "một cặp (khách, mộ) chỉ có đúng một lần đầu": hai quầy bấm cùng lúc thì một người
+       * thua ở tầng CSDL, chứ không phải cả hai cùng thu tiền lần đầu. */
+      const ids = await this.fees.recordCharges(tx, {
+        companyId,
+        cardPrintLogId: created.id,
+        customerId,
+        quote,
+        waived: waive.waived,
+        waiveReason: waive.waiveReason,
+        chargedBy: caller.userId,
+      });
+      return { log: created, chargeIds: ids };
     });
 
     await this.audit.record({
@@ -242,14 +302,54 @@ export class CardsService {
       },
     });
 
-    return { ...card, printNumber: log.printNumber, cardPrintLogId: log.id, issued: true };
+    /* Dòng nhật ký RIÊNG cho tiền, không nhét vào `GRAVE_CARD.ISSUED`.
+     *
+     * Vì hai câu hỏi khác nhau tìm đến hai dòng khác nhau: "ai đã cấp thẻ cho khách này"
+     * và "tháng này ai đã tha bao nhiêu khoản". Câu thứ hai là câu kế toán hỏi, và nó chỉ
+     * trả lời được nếu miễn phí là một HÀNH ĐỘNG đếm được — không phải một trường nấp
+     * trong afterData của một hành động khác. */
+    await this.audit.record({
+      actorType: 'USER',
+      actorId: caller.userId,
+      action: waive.waived ? 'GRAVE_CARD.FEE_WAIVED' : 'GRAVE_CARD.FEE_CHARGED',
+      entityType: 'grave_card_fee_charge',
+      entityId: chargeIds[0] ?? log.id,
+      afterData: {
+        cardPrintLogId: log.id,
+        customerId,
+        totalAmount: quote.totalAmount,
+        feeScheduleId: quote.scheduleId,
+        waiveReason: waive.waiveReason,
+        lines: quote.lines.map((l) => ({
+          plotCode: l.plotCode,
+          feeKind: l.feeKind,
+          unitPrice: l.unitPrice,
+          remainsCount: l.remainsCount,
+          feeAmount: l.feeAmount,
+        })),
+      },
+    });
+
+    return {
+      ...card,
+      printNumber: log.printNumber,
+      cardPrintLogId: log.id,
+      fee: { ...quote, waived: waive.waived, waiveReason: waive.waiveReason },
+      issued: true,
+    };
   }
 
-  /* IN LẠI một thẻ đã cấp — đọc đúng dòng cũ, KHÔNG sinh số mới.
+  /* IN LẠI một thẻ đã cấp — đọc đúng dòng cũ, KHÔNG sinh số mới, KHÔNG thu tiền.
    *
    * Giấy rách, máy in kẹt, khách làm mất bản in trước khi ký: đó là in lại cùng một lần
    * cấp, không phải cấp lần mới. Không có đường này thì mỗi sự cố máy in đều làm số trên
    * thẻ nhảy, và số đó là thứ khách dùng để đối chứng.
+   *
+   * KHÔNG thu tiền ở đây, và đó là một quyết định, không phải một chỗ bỏ sót. Bậc "in lại
+   * 50.000đ × số cốt" của anh Bách là bậc của một LẦN CẤP MỚI — thẻ phải in lại vì nội
+   * dung đã đổi (thêm cốt, đổi thông tin). Còn đường này in lại ĐÚNG tờ giấy cũ vì máy in
+   * kẹt; thu tiền cho một lần máy in kẹt là bắt khách trả cho lỗi của công ty, mà chính
+   * anh Bách đã xếp "lỗi thuộc về công ty" vào ca MIỄN phí.
    */
   async reprint(cardPrintLogId: string, caller: Caller) {
     const log = await this.prisma.cardPrintLog.findUnique({ where: { id: cardPrintLogId } });
@@ -258,6 +358,7 @@ export class CardsService {
     }
     await this.scope.assertCompanyFor(caller.userId, caller.permission, log.companyId);
     const card = await this.buildCard(log.customerId, caller);
+    await this.assertReprintUnchanged(log.id, card.plots);
     await this.audit.record({
       actorType: 'USER',
       actorId: caller.userId,
@@ -279,6 +380,44 @@ export class CardsService {
       issued: true,
       reprint: true,
     };
+  }
+
+  /* IN LẠI chỉ được phép khi NỘI DUNG CHƯA ĐỔI.
+   *
+   * Đây là chỗ bịt một cửa trốn tiền có thật, đo được ngày 02/09/2026: `reprint` dựng thẻ
+   * lại từ dữ liệu HIỆN TẠI (nó gọi `buildCard`, không đọc lại nội dung đã in — schema cố
+   * ý không chụp lại). Nên khách mua thêm một phần mộ rồi bấm "In lại" là nhận được tờ thẻ
+   * MỚI, đã có mộ mới, mà không sinh số cấp và không mất một đồng.
+   *
+   * So bằng đúng bộ phần mộ đã ghi trong dòng phí của lần cấp đó — không cần chụp lại nội
+   * dung thẻ, vì bảng phí đã phải lưu chiều phần mộ để tính tiền. Một dữ liệu, hai việc.
+   *
+   * Lần cấp CŨ (trước khi có biểu phí) không có dòng phí nào; những lần đó cho qua, vì
+   * không có căn cứ để nói nội dung đã đổi — và từ chối in lại thẻ cũ là chặn cả đường
+   * đối chứng với khách.
+   */
+  private async assertReprintUnchanged(
+    cardPrintLogId: string,
+    plots: readonly { gravePlotId: string }[],
+  ): Promise<void> {
+    const charges = await this.prisma.graveCardFeeCharge.findMany({
+      where: { cardPrintLogId },
+      select: { gravePlotId: true },
+    });
+    if (charges.length === 0) {
+      return;
+    }
+    const issued = new Set(charges.map((c) => c.gravePlotId));
+    const now = new Set(plots.map((p) => p.gravePlotId));
+    const added = [...now].filter((id) => !issued.has(id));
+    const removed = [...issued].filter((id) => !now.has(id));
+    if (added.length > 0 || removed.length > 0) {
+      throw new ConflictException(
+        'Phần mộ của khách đã thay đổi so với lần cấp này' +
+          ` (thêm ${added.length}, bớt ${removed.length})` +
+          ' — phải CẤP THẺ lần mới, không in lại được',
+      );
+    }
   }
 
   async listIssuances(customerId: string, caller: Caller) {

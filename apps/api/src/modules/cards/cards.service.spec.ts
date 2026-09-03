@@ -6,6 +6,7 @@ import type { AuditService } from '../audit/audit.service';
 import type { ScopeService } from '../authorization/scope.service';
 import type { PermissionsService } from '../authorization/permissions.service';
 import type { PiiService } from '../../common/pii/pii.service';
+import type { CardFeesService } from './card-fees.service';
 import type { Caller } from '../authorization/caller';
 
 /* Caller mang theo MÃ QUYỀN đang thi hành, không chỉ userId — phạm vi được tính theo
@@ -123,24 +124,49 @@ function build(
       create: createLog,
       findMany: vi.fn().mockResolvedValue([]),
     },
-    $transaction: vi
-      .fn()
-      .mockImplementation((fn: (t: unknown) => unknown) =>
-        fn({ cardPrintLog: { findFirst: findFirstLog, create: createLog } }),
-      ),
+    graveCardFeeCharge: { findMany: vi.fn().mockResolvedValue([]) },
+    $transaction: vi.fn().mockImplementation((fn: (t: unknown) => unknown) =>
+      fn({
+        cardPrintLog: { findFirst: findFirstLog, create: createLog },
+        graveCardFeeCharge: { createMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      }),
+    ),
   } as unknown as PrismaService;
 
   const assertCompanyFor = vi.fn().mockResolvedValue(undefined);
   const decrypt = vi.fn().mockReturnValue('079123456789');
   const holdsForMasking = vi.fn().mockResolvedValue(holdsSensitive);
+  /* Biểu phí mock ở đây, không mock ở tầng Prisma: nhóm test này kiểm LUỒNG CẤP THẺ
+   * (xem trước không ghi gì, số cấp không nhảy, nhật ký nói đúng CCCD). Phép tính tiền có
+   * bộ test riêng ở `card-fees.service.spec.ts` — trộn hai việc vào một mock thì mỗi lần
+   * đổi biểu phí lại làm đỏ những test không liên quan tới tiền. */
+  const quote = vi.fn().mockResolvedValue({
+    scheduleId: 'sch-1',
+    effectiveFrom: new Date('2026-01-01'),
+    lines: [],
+    totalAmount: '0',
+  });
+  const resolveWaive = vi.fn().mockResolvedValue({ waived: false, waiveReason: null });
+  const recordCharges = vi.fn().mockResolvedValue([]);
   const svc = new CardsService(
     prisma,
     { record } as unknown as AuditService,
     { assertCompanyFor } as unknown as ScopeService,
     { decrypt } as unknown as PiiService,
     { holdsForMasking } as unknown as PermissionsService,
+    { quote, resolveWaive, recordCharges } as unknown as CardFeesService,
   );
-  return { svc, record, createLog, assertCompanyFor, decrypt, holdsForMasking };
+  return {
+    svc,
+    record,
+    createLog,
+    assertCompanyFor,
+    decrypt,
+    holdsForMasking,
+    quote,
+    resolveWaive,
+    recordCharges,
+  };
 }
 
 /* Lỗi đắt nhất của bản hệ cũ: mở thẻ ra xem cũng ghi một dòng nhật ký, nên bấm Hủy ở hộp

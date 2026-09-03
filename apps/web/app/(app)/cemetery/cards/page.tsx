@@ -4,13 +4,16 @@ import { useState } from 'react';
 import { IdCard, Printer } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  CARD_FEE_WAIVE_REASONS,
   issueGraveCard,
   listCardIssuances,
   previewGraveCard,
   reprintGraveCard,
   searchCustomers,
+  type CardFeeQuote,
   type GraveCard,
 } from '@/lib/api';
+import { formatMoney } from '@/lib/money';
 import { GraveCardSheets } from '@/components/grave-card';
 import { PageHeader } from '@/components/ui/page-header';
 import { Alert } from '@/components/ui/alert';
@@ -34,6 +37,63 @@ function errText(e: unknown): string {
   return e instanceof Error ? e.message : 'Có lỗi xảy ra';
 }
 
+const FEE_KIND_LABEL: Record<string, string> = {
+  FIRST_ISSUE: 'Cấp giấy lần đầu',
+  REPRINT: 'In lại',
+};
+
+/* BẢNG KÊ TIỀN — một dòng mỗi phần mộ, vì thẻ gom mọi mộ của khách và cùng một lần cấp có
+ * thể vừa là lần đầu với mộ này vừa là in lại với mộ kia.
+ *
+ * In cả `đơn giá × số cốt` chứ không chỉ thành tiền: người ở quầy phải giải thích được con
+ * số cho gia đình đang đứng trước mặt, và "150.000đ" thì không giải thích được còn
+ * "50.000đ × 3 cốt" thì có. Mọi số đi qua `formatMoney` — nó trả '***' khi người xem không
+ * được phép thấy tiền, thay vì 'NaNđ'. */
+function FeeTable({ fee }: { fee: CardFeeQuote }) {
+  return (
+    <div className="rounded-md border border-border">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Phần mộ</TableHead>
+            <TableHead>Bậc giá</TableHead>
+            <TableHead align="right">Cách tính</TableHead>
+            <TableHead align="right">Thành tiền</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {fee.lines.map((line) => (
+            <TableRow key={line.gravePlotId}>
+              <TableCell>{line.plotCode}</TableCell>
+              <TableCell>{FEE_KIND_LABEL[line.feeKind] ?? line.feeKind}</TableCell>
+              <TableCell align="right" className="num">
+                {line.feeKind === 'FIRST_ISSUE'
+                  ? 'một suất, không nhân'
+                  : `${formatMoney(line.unitPrice)} × ${line.remainsCount} cốt`}
+              </TableCell>
+              <TableCell align="right" className="num">
+                {formatMoney(line.feeAmount)}
+              </TableCell>
+            </TableRow>
+          ))}
+          <TableRow>
+            <TableCell colSpan={3} className="font-medium">
+              Tổng thu
+            </TableCell>
+            <TableCell align="right" className="num font-semibold">
+              {fee.waived === true ? (
+                <span className="line-through opacity-60">{formatMoney(fee.totalAmount)}</span>
+              ) : (
+                formatMoney(fee.totalAmount)
+              )}
+            </TableCell>
+          </TableRow>
+        </TableBody>
+      </Table>
+    </div>
+  );
+}
+
 export default function GraveCardsPage() {
   const qc = useQueryClient();
   const [customerId, setCustomerId] = useState('');
@@ -43,6 +103,8 @@ export default function GraveCardsPage() {
   /* Thẻ đang hiện trên màn hình. Giữ ở state chứ không lấy thẳng từ query vì nó đến từ ba
    * nguồn khác nhau — xem trước, vừa cấp, in lại — và ba nguồn đó không cùng khoá cache. */
   const [card, setCard] = useState<GraveCard | null>(null);
+  const [waive, setWaive] = useState(false);
+  const [waiveReason, setWaiveReason] = useState('');
 
   const customers = useQuery({ queryKey: ['customers', ''], queryFn: () => searchCustomers('') });
   const issuances = useQuery({
@@ -62,6 +124,7 @@ export default function GraveCardsPage() {
         ...(printReason !== '' ? { printReason } : {}),
         ...(approvedBy !== '' ? { approvedBy } : {}),
         ...(approvedTitle !== '' ? { approvedTitle } : {}),
+        ...(waive ? { waive: true, waiveReason } : {}),
       }),
     onSuccess: (issued) => {
       setCard(issued);
@@ -76,6 +139,15 @@ export default function GraveCardsPage() {
 
   const busy = preview.isPending || issue.isPending || reprint.isPending;
   const error = preview.error ?? issue.error ?? reprint.error;
+
+  /* MỘT chỗ quyết định nút Cấp thẻ có bấm được không, và nó trả về CHÍNH câu giải thích.
+   * Tách hai thứ đó ra là cách người ta có một nút xám mà không ai nói vì sao. */
+  const issueBlocked: string | null =
+    customerId === ''
+      ? 'chưa chọn khách hàng.'
+      : waive && waiveReason === ''
+        ? 'đã chọn miễn phí nhưng chưa nêu lý do.'
+        : null;
 
   return (
     <div className="space-y-6">
@@ -98,7 +170,12 @@ export default function GraveCardsPage() {
                   value={customerId}
                   onChange={(e) => {
                     setCustomerId(e.target.value);
+                    /* Reset TIỀN cùng lúc với thẻ. Không reset thì bảng kê của khách trước
+                     * còn trên màn hình khi đã chọn khách sau — và nó trông y như tiền của
+                     * khách đang chọn. */
                     setCard(null);
+                    setWaive(false);
+                    setWaiveReason('');
                   }}
                 >
                   <option value="">— Chọn khách hàng —</option>
@@ -128,6 +205,52 @@ export default function GraveCardsPage() {
               </Field>
             </div>
 
+            {card !== null && card.fee !== null && (
+              <div className="space-y-3">
+                <FeeTable fee={card.fee} />
+                {!card.issued && (
+                  <div className="space-y-2">
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        className="size-4 accent-[var(--primary)]"
+                        checked={waive}
+                        onChange={(e) => {
+                          setWaive(e.target.checked);
+                          if (!e.target.checked) setWaiveReason('');
+                        }}
+                      />
+                      Miễn phí lần cấp này
+                    </label>
+                    {waive && (
+                      <Field
+                        label="Lý do miễn"
+                        hint="Khách làm MẤT thẻ thì vẫn thu — không có trong danh sách này."
+                      >
+                        <Select
+                          value={waiveReason}
+                          onChange={(e) => setWaiveReason(e.target.value)}
+                        >
+                          <option value="">— Chọn lý do —</option>
+                          {CARD_FEE_WAIVE_REASONS.map((r) => (
+                            <option key={r.value} value={r.value}>
+                              {r.label}
+                            </option>
+                          ))}
+                        </Select>
+                      </Field>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+            {card !== null && card.fee === null && !card.issued && (
+              <Alert variant="warning">
+                Chưa tính được phí: khách hàng chưa gắn công ty quản lý, hoặc công ty chưa ban hành
+                biểu phí cấp thẻ. Cấp thẻ sẽ bị từ chối cho tới khi có biểu phí.
+              </Alert>
+            )}
+
             <div className="flex flex-wrap gap-2">
               <Button
                 variant="secondary"
@@ -137,7 +260,7 @@ export default function GraveCardsPage() {
                 Xem trước
               </Button>
               <Button
-                disabled={customerId === '' || busy}
+                disabled={issueBlocked !== null || busy}
                 onClick={() => issue.mutate()}
                 title="Sinh số lần cấp mới và ghi nhật ký"
               >
@@ -148,6 +271,14 @@ export default function GraveCardsPage() {
                 In
               </Button>
             </div>
+            {/* Nút bị chặn phải NÓI lý do. Gom về một biểu thức thay vì nhét thêm điều kiện
+                vào `disabled`: mỗi lần thêm một điều kiện mà không nói ra là một lần người
+                dùng nhìn một cái nút xám không biết vì sao. */}
+            {issueBlocked !== null && (
+              <p className="text-xs text-muted-foreground" aria-live="polite">
+                Chưa cấp thẻ được: {issueBlocked}
+              </p>
+            )}
 
             {card !== null && card.issued && (
               <Alert variant="success">

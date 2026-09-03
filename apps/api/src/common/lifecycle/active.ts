@@ -92,6 +92,17 @@ export function holdStale(now: Date = new Date()) {
  * nhất quán" rồi làm hỏng một trong hai. */
 export const completedBurial = { status: 'Completed' } as const;
 
+/* THẺ NHÃN ĐANG GẮN — chưa bị gỡ.
+ *
+ * Gỡ thẻ là GHI `removedAt` chứ không xoá dòng (anh Bách chốt 03/09/2026 "lưu vết"), nên
+ * mọi câu hỏi "mộ này đang mang thẻ gì" đều phải lọc `removedAt: null`. Quên lọc là đếm cả
+ * thẻ đã gỡ — và với thẻ khách thì đó là hiện lại một cái nhãn mà ai đó đã cố ý bỏ đi.
+ *
+ * Khai ở đây thay vì gõ `{ removedAt: null }` tại chỗ: cùng lý do như mọi mảnh khác trong
+ * file này, và lưới `status-filter-scan.ts` cũng đòi vậy.
+ */
+export const activeTag = { removedAt: null } as const;
+
 /* Khoảng hiệu lực theo ngày: bắt đầu rồi và chưa kết thúc.
  *
  * `null` ở hai đầu nghĩa là "không giới hạn", nên phải cho qua — không cho qua thì mọi

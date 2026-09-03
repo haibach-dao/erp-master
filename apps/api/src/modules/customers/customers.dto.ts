@@ -213,6 +213,14 @@ export class SearchCustomersDto {
 
   @ApiPropertyOptional() @IsOptional() @IsString() companyId?: string;
 
+  /* Lọc theo MỘT thẻ nhãn. Đợt 1 cố ý chỉ một: "chọn hai thẻ" nghĩa là có CẢ HAI hay có ÍT
+   * NHẤT MỘT — hai mệnh đề Prisma khác hẳn, hai kết quả khác nhau trên cùng dữ liệu, và
+   * chưa ai trả lời. Một thẻ là hoãn câu đó một cách sòng phẳng. */
+  @ApiPropertyOptional({ description: 'Đang mang thẻ nhãn này (id dòng danh mục)' })
+  @IsOptional()
+  @IsString()
+  tagTypeId?: string;
+
   @ApiPropertyOptional({ enum: ['INDIVIDUAL', 'ORGANIZATION', 'AGENT', 'PROSPECT'] })
   @IsOptional()
   @IsIn(['INDIVIDUAL', 'ORGANIZATION', 'AGENT', 'PROSPECT'])

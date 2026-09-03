@@ -265,3 +265,40 @@ describe('bộ lọc khách hàng — tìm tự do, trần số dòng, và nói 
     expect(res.truncated).toBe(false);
   });
 });
+
+/* THẺ NHÃN — trục lọc thêm 03/09/2026.
+ *
+ * Hai bất biến ở đây, và cái thứ hai là cái dễ mất: thẻ ĐÃ GỠ không được lọt vào kết quả,
+ * cũng không được hiện lại trong cột thẻ. Quên `removedAt: null` nghĩa là dán lại lên một
+ * người cái nhãn ai đó đã cố ý bỏ đi.
+ */
+describe('bộ lọc khách hàng — thẻ nhãn', () => {
+  it('lọc theo một thẻ sinh mệnh đề `some` và CHỈ tính thẻ chưa gỡ', async () => {
+    const { svc, findMany } = build();
+    await svc.search({ tagTypeId: 'tt-1' }, CALLER);
+    expect(whereOf(findMany).tags).toEqual({
+      some: { tagTypeId: 'tt-1', removedAt: null },
+    });
+  });
+
+  it('không chọn thẻ thì KHÔNG thêm mệnh đề nào', async () => {
+    const { svc, findMany } = build();
+    await svc.search({}, CALLER);
+    expect(whereOf(findMany).tags).toBeUndefined();
+  });
+
+  it('chuỗi rỗng cũng không lọc — ô "Tất cả" của giao diện gửi xuống chuỗi rỗng', async () => {
+    const { svc, findMany } = build();
+    await svc.search({ tagTypeId: '' }, CALLER);
+    expect(whereOf(findMany).tags).toBeUndefined();
+  });
+
+  /* Thẻ đi kèm CÙNG truy vấn danh sách, không hỏi thêm lượt nào cho mỗi dòng: 50 dòng mà
+   * mỗi dòng một lượt gọi là một bảng nhấp nháy dần. */
+  it('thẻ đang mang được include sẵn, và chỉ thẻ chưa gỡ', async () => {
+    const { svc, findMany } = build();
+    await svc.search({}, CALLER);
+    const include = (findMany.mock.calls[0]?.[0] as { include: Record<string, unknown> }).include;
+    expect(include.tags).toMatchObject({ where: { removedAt: null } });
+  });
+});

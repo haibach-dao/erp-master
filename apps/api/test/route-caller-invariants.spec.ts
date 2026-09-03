@@ -28,6 +28,21 @@ const NO_RECORD_SCOPE: Readonly<Record<string, string>> = {
     'Danh mục MÃ QUYỀN — tập đóng, giống bảng tham chiếu. Màn hình cần nó để mời chọn mã thay vì gõ tay.',
   'modules/cemetery/cemetery.controller.ts:relationshipTypes':
     'Dữ liệu tham chiếu (quan hệ nhân thân), không thuộc công ty nào.',
+  /* Danh mục THẺ NHÃN — cùng loại với danh mục vai ngay trên: bảng `tags` KHÔNG có
+   * `companyId` (anh Bách chốt 03/09/2026 một danh mục dùng chung, không chia theo công
+   * ty), nên không có bản ghi đích nào để bó. Rào ở đây là MÃ QUYỀN `config.*_tag.update`
+   * (S3) cho các đường ghi, không phải phạm vi.
+   *
+   * Mọi đường GẮN/GỠ thẻ thì ngược lại — chúng có phần mộ hoặc khách hàng để bó, và bó
+   * thật (`assertPlotScope` / `assertCustomerScope`). */
+  'modules/tags/tags.controller.ts:listPlotTagTypes':
+    'Danh mục thẻ nhãn phần mộ — dữ liệu toàn hệ, bảng không có `companyId`.',
+  'modules/tags/tags.controller.ts:listCustomerTagTypes':
+    'Danh mục thẻ nhãn khách hàng — dữ liệu toàn hệ, bảng không có `companyId`.',
+  /* CHỈ `list` nằm ở đây. `create`/`update` CÓ truyền người gọi xuống — nhưng chỉ để ghi
+   * `createdBy` và người thao tác vào nhật ký, không phải để bó phạm vi: service nhận
+   * `actorId: string | null` chứ không nhận `Caller`, nên lưới quét phạm vi cũng không
+   * đòi hỏi gì ở đó. Danh mục toàn hệ thì không có phạm vi để bó. */
   'modules/cemetery/cemetery.controller.ts:createCompany':
     'Đang TẠO công ty — chưa có công ty nào để bó theo. Bản chất là việc mức GROUP; gate `org.company.create` chỉ cấp cho vai toàn tập đoàn.',
   'modules/files/files.controller.ts:presign':

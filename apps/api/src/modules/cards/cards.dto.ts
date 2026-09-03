@@ -1,7 +1,73 @@
-import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsString, MaxLength } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import {
+  IsBoolean,
+  IsIn,
+  IsInt,
+  IsISO8601,
+  IsOptional,
+  IsString,
+  MaxLength,
+  Min,
+} from 'class-validator';
+import { CARD_FEE_WAIVE_REASONS } from './cards.constants';
 
-export class IssueCardDto {
+/* Miễn phí — dùng chung cho cấp thẻ và in lại.
+ *
+ * `waiveReason` là danh sách ĐÓNG, không phải chuỗi tự do như `printReason` ngay dưới. Hai
+ * trường trông giống nhau nhưng khác hẳn về hậu quả: `printReason` chỉ để đọc lại về sau,
+ * còn `waiveReason` quyết định có mất tiền hay không. Một ô cho người ở quầy tự gõ là một ô
+ * để gõ chữ cho khỏi mất tiền.
+ *
+ * Chú ý `main.ts` bật `ValidationPipe({ whitelist: true })`: trường không khai ở đây bị vứt
+ * ÂM THẦM, không lỗi, không log. Nên gõ sai tên trường ở client nghĩa là "không miễn" chứ
+ * không phải một thông báo lỗi.
+ */
+class WaiveFields {
+  @ApiPropertyOptional({ description: 'Miễn phí lần cấp này' })
+  @IsOptional()
+  @IsBoolean()
+  waive?: boolean;
+
+  @ApiPropertyOptional({ enum: CARD_FEE_WAIVE_REASONS, description: 'Bắt buộc khi waive=true' })
+  @IsOptional()
+  @IsIn(CARD_FEE_WAIVE_REASONS)
+  waiveReason?: string;
+}
+
+export class ReprintCardDto extends WaiveFields {}
+
+/* Ban hành một dòng biểu phí. Bảng append-only nên KHÔNG có DTO sửa — đổi giá là ban hành
+ * dòng mới với `effectiveFrom` mới.
+ *
+ * Tiền nhận `number` nguyên đồng (nếp `CreateGraveTypeDto.referencePrice`), rồi service quy
+ * sang `Prisma.Decimal`. Nhận chuỗi ở đây thì mỗi client tự chọn cách viết "200000" hay
+ * "200.000" và service phải đoán.
+ */
+export class CreateCardFeeScheduleDto {
+  @ApiProperty() @IsString() companyId!: string;
+
+  @ApiProperty({ description: 'Tiền cấp giấy lần đầu — VND (integer đồng), giá PHẲNG' })
+  @IsInt()
+  @Min(0)
+  firstIssueFee!: number;
+
+  @ApiProperty({ description: 'Đơn giá MỘT cốt cho mỗi lần in lại — VND (integer đồng)' })
+  @IsInt()
+  @Min(0)
+  reprintFeePerRemains!: number;
+
+  @ApiProperty({ description: 'Ngày bắt đầu hiệu lực (ISO 8601)' })
+  @IsISO8601()
+  effectiveFrom!: string;
+
+  @ApiPropertyOptional({ description: 'Số quyết định / văn bản hiệu lực làm căn cứ' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  decisionRef?: string;
+}
+
+export class IssueCardDto extends WaiveFields {
   @ApiPropertyOptional({ description: 'Lý do cấp: cấp lần đầu, đổi thông tin, mất thẻ...' })
   @IsOptional()
   @IsString()

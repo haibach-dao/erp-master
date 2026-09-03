@@ -17,6 +17,7 @@ import { FilesModule } from './modules/files/files.module';
 import { ContractsModule } from './modules/contracts/contracts.module';
 import { BurialsModule } from './modules/burials/burials.module';
 import { CardsModule } from './modules/cards/cards.module';
+import { TagsModule } from './modules/tags/tags.module';
 import { ServicesModule } from './modules/services/services.module';
 import { HealthModule } from './health/health.module';
 import { MaskingInterceptor } from './common/masking/masking.interceptor';
@@ -50,6 +51,7 @@ const AUTH_RATE_LIMIT = {
     ContractsModule,
     BurialsModule,
     CardsModule,
+    TagsModule,
     ServicesModule,
     HealthModule,
   ],

@@ -5,12 +5,28 @@ import { JwtAuthGuard } from '../iam/guards/jwt-auth.guard';
 import { PermissionGuard } from '../authorization/permission.guard';
 import { RequirePermission } from '../authorization/require-permission.decorator';
 import { callerOf, type Caller } from '../authorization/caller';
+import { MaskUnless } from '../../common/masking/mask.decorator';
 import { CardsService } from './cards.service';
 import { IssueCardDto } from './cards.dto';
 
+/* Che tiền phí ở MỨC CONTROLLER, không rải lên từng route.
+ *
+ * Khai một lần ở đây thì route thêm sau này được che sẵn; khai trên từng hàm là một danh
+ * sách phải nhớ, và một danh sách phải nhớ là một danh sách sẽ thiếu.
+ *
+ * Mã quyền CHÉP từ `permission-catalog.ts`, không gõ tay: không test nào kiểm chuỗi trong
+ * `@MaskUnless` (`masking-invariants.spec.ts` chỉ soi `SENSITIVE_FIELDS`), nên một mã gõ sai
+ * ở đây che vĩnh viễn với MỌI người — kể cả ADMIN — mà không lỗi, không cảnh báo.
+ *
+ * `maskTree` đi vào cả mảng và object lồng nhau, nên ba trường này bắt được cả
+ * `fee.totalAmount` lẫn từng `fee.lines[].feeAmount`.
+ */
 @ApiTags('grave-cards')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, PermissionGuard)
+@MaskUnless({ field: 'totalAmount', permission: 'cemetery.card_fee.view' })
+@MaskUnless({ field: 'feeAmount', permission: 'cemetery.card_fee.view' })
+@MaskUnless({ field: 'unitPrice', permission: 'cemetery.card_fee.view' })
 @Controller('cemetery/cards')
 export class CardsController {
   constructor(private readonly svc: CardsService) {}
