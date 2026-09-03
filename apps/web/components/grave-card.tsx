@@ -44,12 +44,48 @@ const NOTICES = [
   'Các hoạt động trong Nghĩa trang phải tuân thủ Quy chế quản lý nghĩa trang do Công ty ban hành.',
 ];
 
-function Sheet({ children }: { children: React.ReactNode }) {
+/* Dấu chìm cho BẢN XEM TRƯỚC.
+ *
+ * Hệ này cố ý cho in cả bản chưa cấp: nhân viên phải đưa được tờ nháp cho gia đình xem
+ * trước khi ký. Cái phải chặn không phải việc in ra tờ giấy, mà là tờ giấy đó bị NHẦM là
+ * thẻ thật — nên bản nháp mang dấu chìm, còn thẻ đã cấp thì sạch.
+ *
+ * Ba quyết định trong đây đều để nó SỐNG SÓT trên giấy, không chỉ trên màn hình:
+ * (1) Chữ, không phải ảnh nền. Nền bị trình duyệt bỏ khi in (đã khai `print-color-adjust`
+ *     ở `globals.css`, nhưng chữ thì không phụ thuộc vào khai đó — hai lớp bảo vệ).
+ * (2) Màu hex tuyệt đối, không token theme. Tờ thẻ ép `bg-white text-black`, còn token đổi
+ *     giá trị ở chế độ tối — dùng token là có ngày dấu chìm trắng trên giấy trắng.
+ * (3) `pointer-events-none` để nó không ăn cú bấm nào của người dùng.
+ */
+function PreviewWatermark() {
+  return (
+    <div
+      aria-hidden="true"
+      className="pointer-events-none absolute inset-0 flex items-center justify-center overflow-hidden"
+    >
+      <p
+        className="m-0 -rotate-45 whitespace-nowrap text-[54px] font-extrabold uppercase tracking-[6px]"
+        style={{ color: 'rgba(157, 59, 40, 0.16)' }}
+      >
+        Bản xem trước · không có giá trị
+      </p>
+    </div>
+  );
+}
+
+function Sheet({
+  children,
+  watermark,
+}: {
+  children: React.ReactNode;
+  watermark?: boolean | undefined;
+}) {
   return (
     <div className="print-sheet relative mx-auto mb-6 flex h-[210mm] w-[297mm] bg-white text-black shadow-sm ring-1 ring-neutral-300">
       {/* Đường gập giữa tờ */}
       <div className="absolute bottom-[5mm] left-1/2 top-[5mm] border-l border-dashed border-neutral-300" />
       {children}
+      {watermark === true && <PreviewWatermark />}
     </div>
   );
 }
@@ -329,13 +365,21 @@ export function GraveCardSheets({ card }: { card: GraveCard }) {
   const raw = card.printNumber ?? card.nextPrintNumber ?? 1;
   const printNumber = String(raw).padStart(2, '0');
 
+  /* Dấu chìm hỏi `issued`, KHÔNG hỏi `reprint`. In lại một thẻ ĐÃ CẤP trả về
+   * `issued: true, reprint: true` — đó là thẻ thật, giấy rách hay máy in kẹt thôi, nên nó
+   * không được mang dấu chìm. Chỉ bản chưa cấp mới mang. */
+  const watermark = !card.issued;
+
+  /* Đặt dấu chìm trên TỪNG tờ, không phải một cái ở `.print-root`. `.print-sheet` có
+   * `page-break-after: always`, nên một dấu chìm ở gốc chỉ ra được trang đầu — trang hai
+   * (sơ đồ và bảng người an táng) sẽ ra sạch và trông y như thẻ thật. */
   return (
     <div className="print-root">
-      <Sheet>
+      <Sheet watermark={watermark}>
         <BackCover />
         <FrontCover card={card} printNumber={printNumber} />
       </Sheet>
-      <Sheet>
+      <Sheet watermark={watermark}>
         <MapFace plots={card.plots} />
         <OccupantsFace plots={card.plots} ownerDateOfBirth={card.owner.dateOfBirth} />
       </Sheet>
