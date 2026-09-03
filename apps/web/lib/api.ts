@@ -565,6 +565,35 @@ export interface RoleAssignmentRow {
   grantReason: string | null;
 }
 
+/* LỆCH DANH MỤC QUYỀN giữa mã nguồn và CSDL đang chạy — chỉ SỐ ĐẾM.
+ *
+ * Đọc từ `/health`, KHÔNG qua `apiFetch`: `/health` nằm ngoài tiền tố `/api/v1` (xem
+ * `setGlobalPrefix(..., { exclude: ['health'] })` ở `main.ts`) và là route `@Public`, không cần
+ * token. Cố ý không mở một route mới cho việc này — `authz-invariants` neo danh sách route công
+ * khai đúng bằng ba mục, và một mục thứ tư chỉ để hiện một cái banner là không đáng.
+ *
+ * Không có TÊN MÃ ở đây, và đó là chủ ý của phía máy chủ chứ không phải thiếu sót: `/health` ai
+ * gõ được địa chỉ cũng đọc, nên nó không phát bản đồ bề mặt quyền. Muốn biết mã nào thì chạy
+ * `pnpm --filter @erp/api check:permissions` — banner nói đúng câu đó.
+ *
+ * `null` nghĩa là CHƯA ĐO ĐƯỢC (API vừa lên, hoặc lần đối chiếu lúc boot hỏng), KHÔNG phải
+ * "không lệch". Hai thứ đó không được hiển thị giống nhau. */
+export interface AuthzCatalogHealth {
+  checkedAt: string | null;
+  missing: number | null;
+  orphan: number | null;
+  meta: number | null;
+}
+
+export const getAuthzCatalogHealth = async (): Promise<AuthzCatalogHealth> => {
+  const res = await fetch(`${BASE}/health`);
+  if (!res.ok) {
+    throw new ApiError(res.status, 'Không đọc được trạng thái danh mục quyền từ /health');
+  }
+  const body = (await res.json()) as { authzCatalog?: AuthzCatalogHealth };
+  return body.authzCatalog ?? { checkedAt: null, missing: null, orphan: null, meta: null };
+};
+
 export const listRoles = (): Promise<RoleRow[]> => apiFetch('/api/v1/authz/roles');
 
 export const listPermissionCatalog = (): Promise<PermissionRow[]> =>
@@ -747,10 +776,13 @@ export interface GraveCard {
   approvedTitle?: string | null;
   issued: boolean;
   reprint?: boolean;
-  /* Bảng kê tiền. `null` khi CHƯA TÍNH ĐƯỢC (khách chưa gắn công ty, hoặc công ty chưa ban
-   * hành biểu phí) — khác hẳn với 0đ. `formatMoney` hiện `—` cho null nhưng "0đ" cho 0, và
-   * "0đ" trên màn hình quầy đọc thành "miễn phí". */
+  /* Bảng kê tiền. `null` khi CHƯA TÍNH ĐƯỢC — khác hẳn với 0đ. `formatMoney` hiện `—` cho
+   * null nhưng "0đ" cho 0, và "0đ" trên màn hình quầy đọc thành "miễn phí". */
   fee: CardFeeQuote | null;
+  /* LÝ DO chưa tính được, do API nói ra và đã gọi TÊN công ty. `null` khi tính được bình
+   * thường. Đừng tự chế câu thay nó ở màn hình: chỉ API mới biết vướng cái nào trong hai
+   * nguyên nhân, và câu tự chế nêu cả hai là bắt người dùng tự chẩn đoán. */
+  feeBlocked: string | null;
 }
 
 /* Tiền khai `string`, KHÔNG `number`: API trả Decimal ra chuỗi, và lớp che có thể thay nó
@@ -1257,6 +1289,59 @@ export const getBurialCandidates = (gravePlotId: string): Promise<BurialCandidat
  * đổi giá là ban hành một dòng mới với ngày hiệu lực mới. */
 export const listCardFeeSchedules = (companyId: string): Promise<CardFeeSchedule[]> =>
   apiFetch(`/api/v1/cemetery/card-fees?companyId=${encodeURIComponent(companyId)}`);
+
+/* NGƯỜI KÝ THẺ MỘ — danh mục toàn hệ, KHÔNG chia theo công ty (anh Bách chốt 03/09/2026).
+ *
+ * Người của INDEVCO ký ở ô BÊN PHẢI tờ thẻ. Ô bên trái là chủ mộ và tên khách in thẳng từ
+ * hồ sơ, không đi qua danh mục này.
+ *
+ * Lúc CẤP thẻ vẫn gửi `approvedBy`/`approvedTitle` dạng CHUỖI chứ không gửi id — tờ giấy
+ * khách cầm ghi tên gì thì nhật ký phải đọc ra đúng tên đó, kể cả khi người ấy về sau đổi
+ * chức danh hay nghỉ việc. Danh mục chỉ để chọn cho nhanh và khỏi gõ sai.
+ */
+export interface CardSigner {
+  id: string;
+  fullName: string;
+  title: string;
+  isDefault: boolean;
+  status: string;
+  createdAt: string;
+}
+
+export const listCardSigners = (): Promise<CardSigner[]> =>
+  apiFetch('/api/v1/cemetery/card-signers');
+
+export const createCardSigner = (input: {
+  fullName: string;
+  title: string;
+  isDefault?: boolean;
+}): Promise<CardSigner> =>
+  apiFetch('/api/v1/cemetery/card-signers', { method: 'POST', body: JSON.stringify(input) });
+
+export const updateCardSigner = (
+  id: string,
+  input: { fullName?: string; title?: string; status?: string; isDefault?: boolean },
+): Promise<CardSigner> =>
+  apiFetch(`/api/v1/cemetery/card-signers/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  });
+
+/* Công ty nào đã có biểu phí đang hiệu lực, công ty nào chưa — kèm số khách đang chờ.
+ *
+ * `effectiveFrom === null` nghĩa là CHƯA CÓ biểu phí hiệu lực hôm nay. Cẩn thận: nó không
+ * đồng nghĩa "chưa ban hành dòng nào" — một biểu phí hẹn hiệu lực sang tháng sau cũng ra
+ * `null` ở đây, và đúng như vậy, vì hôm nay vẫn chưa cấp thẻ được. */
+export interface CardFeeCoverage {
+  companyId: string;
+  code: string;
+  name: string;
+  customerCount: number;
+  effectiveFrom: string | null;
+}
+
+export const listCardFeeCoverage = (): Promise<CardFeeCoverage[]> =>
+  apiFetch('/api/v1/cemetery/card-fees/coverage');
 
 export const createCardFeeSchedule = (input: {
   companyId: string;

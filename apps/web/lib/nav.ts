@@ -1,5 +1,6 @@
 import type { LucideIcon } from 'lucide-react';
 import {
+  PenLine,
   Building2,
   ClipboardCheck,
   FileText,
@@ -107,6 +108,12 @@ export const NAV: NavGroup[] = [
     id: 'catalog',
     label: 'Danh mục',
     items: [
+      {
+        href: '/cemetery/card-signers',
+        label: 'Người ký thẻ mộ',
+        icon: PenLine,
+        permissions: ['cemetery.card_signer.view'],
+      },
       /* HAI mục riêng, không một mục "Thẻ nhãn" gộp.
        *
        * Tách ở thanh điều hướng là tầng cuối của một ranh giới đã tách ở mọi tầng dưới —

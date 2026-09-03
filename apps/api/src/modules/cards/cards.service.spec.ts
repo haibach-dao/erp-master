@@ -415,3 +415,35 @@ describe('thẻ mộ — nhật ký nói rõ thẻ có mang CCCD đầy đủ ha
     );
   });
 });
+
+/* XEM TRƯỚC khi CHƯA TÍNH ĐƯỢC TIỀN — phải nói ra LÝ DO, và phải phân biệt được
+ * "luật nghiệp vụ chặn" với "hệ hỏng".
+ *
+ * Trước 03/09/2026 hàm này bọc `catch {}` TRẦN và trả `null` trơ. Hai hậu quả, cả hai đều
+ * là lỗi im lặng:
+ *   1. Màn hình phải tự đoán, nên nó in ra "khách chưa gắn công ty, HOẶC công ty chưa ban
+ *      hành biểu phí" — người đọc không biết mình dính vế nào nên không biết đi sửa ở đâu.
+ *   2. `catch` trần nuốt LUÔN cả sự cố thật. CSDL sập cũng hiện ra thành "chưa tính được
+ *      phí" — một câu nghiệp vụ bình thường, không ai đi tìm sự cố.
+ */
+describe('xem trước: lý do chưa tính được phí', () => {
+  it('chưa có biểu phí thì vẫn XEM ĐƯỢC thẻ, và nêu đúng câu của API', async () => {
+    const { svc, quote } = build();
+    quote.mockRejectedValueOnce(new ConflictException('Công ty An Lạc Viên S (S1787) chưa có...'));
+    const card = (await svc.preview(CUSTOMER, CALLER_VIEW)) as Record<string, unknown>;
+    expect(card.fee).toBeNull();
+    expect(card.feeBlocked).toMatch(/An Lạc Viên S/);
+  });
+
+  it('SỰ CỐ THẬT thì NÉM, không nuốt thành "chưa tính được phí"', async () => {
+    const { svc, quote } = build();
+    quote.mockRejectedValueOnce(new Error('connect ECONNREFUSED 127.0.0.1:5432'));
+    await expect(svc.preview(CUSTOMER, CALLER_VIEW)).rejects.toThrow(/ECONNREFUSED/);
+  });
+
+  it('tính được tiền thì feeBlocked là null — không để câu cũ dính lại', async () => {
+    const { svc } = build();
+    const card = (await svc.preview(CUSTOMER, CALLER_VIEW)) as Record<string, unknown>;
+    expect(card.feeBlocked).toBeNull();
+  });
+});

@@ -167,10 +167,20 @@ function FrontCover({ card, printNumber }: { card: GraveCard; printNumber: strin
       </table>
 
       <div className="mt-2 grid grid-cols-2 gap-2 border-t-[1.5px] border-neutral-800 pt-2">
+        {/* Ô CHỦ MỘ — tên khách IN SẴN, khách chỉ ký tay lên trên (anh Bách chốt 03/09/2026).
+            Trước đó ô này để trống hoàn toàn nên khách phải tự viết tay họ tên, và chữ viết
+            tay trên giấy A5 là thứ về sau không ai đọc lại được.
+
+            Chiều cao 25mm khớp đúng ô bên phải, để HAI cái tên nằm cùng một dòng. Lệch nhau
+            thì tờ giấy trông như in hỏng.
+
+            `fullName` ở API đã tự lùi về `orgName` khi khách là tổ chức, nên ở đây KHÔNG
+            thêm nhánh — một trường, một chỗ quyết. */}
         <div className="text-center">
           <p className="m-0 mb-1 text-[11px] font-bold">CHỦ MỘ</p>
           <p className="m-0 text-[9px] italic text-neutral-500">(Ký ghi họ tên)</p>
-          <div className="h-[35mm]" />
+          <div className="h-[25mm]" />
+          <p className="m-0 text-[12px] font-semibold">{card.owner.fullName ?? '...'}</p>
         </div>
         <div className="text-center">
           <p className="m-0 mb-0.5 text-[9px] font-semibold text-neutral-600">

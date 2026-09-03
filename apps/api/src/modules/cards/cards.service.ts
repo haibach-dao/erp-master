@@ -6,7 +6,7 @@ import type { Caller } from '../authorization/caller';
 import { PermissionsService } from '../authorization/permissions.service';
 import { ScopeService } from '../authorization/scope.service';
 import { PiiService } from '../../common/pii/pii.service';
-import { CardFeesService } from './card-fees.service';
+import { CardFeesService, type FeeQuote } from './card-fees.service';
 import { activeBurial, activeUsageRight } from '../../common/lifecycle/active';
 import type { IssueCardDto } from './cards.dto';
 import { effectiveCapacity } from '../../common/cemetery/capacity';
@@ -189,43 +189,67 @@ export class CardsService {
    */
   async preview(customerId: string, caller: Caller) {
     const card = await this.buildCard(customerId, caller);
+    const fee = await this.quoteOrBlocked(card);
     return {
       ...card,
       nextPrintNumber: (await this.lastPrintNumber(customerId)) + 1,
       /* Bảng kê tiền DỰ KIẾN — người ở quầy phải trả lời được "cấp thẻ này hết bao nhiêu"
        * trước khi khách quyết.
        *
-       * Trả `null` khi chưa tính được (khách chưa gắn công ty, hoặc công ty chưa ban hành
-       * biểu phí). KHÔNG trả 0 và KHÔNG trả chuỗi rỗng: `formatMoney` hiện `—` cho `null`
-       * nhưng hiện "0 ₫" cho 0 — và "0 ₫" trên màn hình quầy đọc thành "miễn phí". */
-      fee: await this.quoteOrNull(card),
+       * Trả `null` khi chưa tính được. KHÔNG trả 0 và KHÔNG trả chuỗi rỗng: `formatMoney`
+       * hiện `—` cho `null` nhưng hiện "0 ₫" cho 0 — và "0 ₫" trên màn hình quầy đọc thành
+       * "miễn phí". Lý do đi kèm ở `feeBlocked`, đã gọi tên công ty. */
+      fee: fee.quote,
+      feeBlocked: fee.blocked,
       issued: false,
     };
   }
 
-  /* Bảng kê tiền, hoặc `null` nếu chưa tính được.
+  /* Bảng kê tiền, kèm LÝ DO khi chưa tính được.
    *
    * `preview` CỐ Ý không chặn khách chưa gắn công ty (khác `issue`), vì xem trước là đường
    * ĐỌC — chặn ở đó thì người dùng không xem được thẻ chỉ vì hồ sơ còn thiếu một trường.
    * Nhưng không có công ty thì không có biểu phí, nên tiền là câu chưa trả lời được.
+   *
+   * Trả kèm `blocked` chứ không chỉ `null`: trước 03/09/2026 hàm này trả `null` trơ, nên màn
+   * hình phải đoán và in ra "khách chưa gắn công ty, HOẶC công ty chưa ban hành biểu phí" —
+   * hai nguyên nhân, cách xử lý khác hẳn nhau, mà người đọc không biết mình đang dính cái
+   * nào. Câu chẩn đoán nêu hai khả năng là câu bắt người dùng tự chẩn đoán.
    */
-  private async quoteOrNull(card: {
+  private async quoteOrBlocked(card: {
     customerId: string;
     companyId: string | null;
     plots: readonly { gravePlotId: string; plotCode: string; capacity: number }[];
-  }) {
+  }): Promise<{ quote: FeeQuote | null; blocked: string | null }> {
     if (card.companyId === null) {
-      return null;
+      return {
+        quote: null,
+        blocked:
+          'Khách hàng chưa gắn công ty quản lý, nên chưa tra được biểu phí. Cấp thẻ sẽ bị từ chối cho tới khi hồ sơ khách có công ty.',
+      };
     }
     try {
-      return await this.fees.quote(
-        { customerId: card.customerId, companyId: card.companyId, plots: card.plots },
-        new Date(),
-      );
-    } catch {
+      return {
+        quote: await this.fees.quote(
+          { customerId: card.customerId, companyId: card.companyId, plots: card.plots },
+          new Date(),
+        ),
+        blocked: null,
+      };
+    } catch (err) {
       /* Chưa ban hành biểu phí thì XEM TRƯỚC vẫn phải mở được — người ở quầy cần thấy thẻ.
-       * Chỉ `issue` mới được phép chặn, và nó chặn thật. */
-      return null;
+       * Chỉ `issue` mới được phép chặn, và nó chặn thật.
+       *
+       * Nuốt ĐÚNG `ConflictException` thôi, không nuốt trần như trước. `catch {}` trần biến
+       * mọi hỏng hóc — CSDL sập, Prisma lỗi — thành cùng một câu "chưa tính được phí", tức
+       * là giấu một sự cố thật sau một thông báo nghiệp vụ bình thường. */
+      if (err instanceof ConflictException) {
+        return {
+          quote: null,
+          blocked: (err.getResponse() as { message?: string }).message ?? err.message,
+        };
+      }
+      throw err;
     }
   }
 
