@@ -43,3 +43,86 @@ jobs:
 
       - name: Test
         run: pnpm -r test
+
+  # Việc CSDL — job RIÊNG, chạy song song với `build`.
+  #
+  # KHÔNG nhét vào `build`: job kia không cần Postgres, và bắt nó chờ một container lên là làm
+  # chậm phản hồi cho mọi PR chỉ đụng giao diện.
+  #
+  # ĐỌC KỸ TRƯỚC KHI THÊM BƯỚC VÀO ĐÂY. Job này CỐ Ý KHÔNG so "danh mục mã quyền trong mã nguồn"
+  # với "bảng authz.permissions" sau khi seed. Phép so ấy KHÔNG THỂ ĐỎ: `prisma/seed.ts` import
+  # thẳng `PERMISSION_CATALOG` rồi upsert từng dòng, nên trên một CSDL vừa seed thì bảng là ẢNH
+  # của danh mục với mọi nội dung danh mục. Một dấu xanh mang tên "quyền khớp CSDL" mà cấu trúc
+  # không cho phép nó đỏ thì tệ hơn không có: hôm 03/09/2026 nó đã xanh, và nó sẽ làm việc chẩn
+  # đoán chậm đi. Việc đối chiếu CSDL THẬT là của `check:permissions` chạy sau khi triển khai và
+  # của người gác lúc API khởi động; việc ép mã mới phải kèm migration là của ratchet
+  # `permission-catalog-invariants` chạy ở job `build`.
+  #
+  # Bốn thứ dưới đây thì ĐỎ ĐƯỢC THẬT, và hôm nay không có gì canh chúng.
+  database:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine # khớp docker-compose.yml
+        env:
+          POSTGRES_USER: erp
+          POSTGRES_PASSWORD: erp
+          POSTGRES_DB: erp
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U erp -d erp"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgresql://erp:erp@127.0.0.1:5432/erp?schema=public
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.19.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install (frozen lockfile)
+        run: pnpm install --frozen-lockfile
+
+      - name: Prisma generate
+        run: pnpm --filter @erp/api db:generate
+
+      # 1. Toàn bộ migration áp được TỪ SỐ KHÔNG. Máy ai cũng có sẵn một CSDL đã chạy dở, nên
+      #    một migration hỏng chỉ lộ ra ở lần dựng máy mới — tức là muộn nhất có thể.
+      - name: Migrations áp được từ số không
+        run: pnpm --filter @erp/api db:migrate
+
+      # 2. `schema.prisma` KHỚP với chuỗi migration. Lệch ở đây nghĩa là Prisma Client sinh ra
+      #    một kiểu mà CSDL không có — mã biên dịch xanh rồi vỡ lúc chạy.
+      #    ĐÃ ĐO 03/09/2026 trước khi biến thành bước chặn: "No difference detected", exit 0.
+      #    Lo ngại ban đầu là partial unique index và CHECK (có trong migration, không diễn tả
+      #    được trong schema.prisma) sẽ gây đỏ giả — KHÔNG: `migrate diff` không nhìn thấy chúng
+      #    ở cả hai phía nên chúng triệt tiêu nhau.
+      - name: schema.prisma khớp với migrations
+        run: >-
+          pnpm --filter @erp/api exec prisma migrate diff
+          --from-migrations prisma/migrations
+          --to-schema-datamodel prisma/schema.prisma
+          --shadow-database-url postgresql://erp:erp@127.0.0.1:5432/erp_shadow
+          --exit-code
+
+      # 3. Seed CHẠY ĐƯỢC. Hôm nay seed không được biên dịch, không được lint, không được test và
+      #    không được chạy ở bất kỳ đâu trong CI — nó chỉ chạy trên máy người ta, lúc đã muộn.
+      - name: Seed chạy được
+        run: pnpm --filter @erp/api db:seed
+
+      # 4. Các ràng buộc CHECK và partial unique index THẬT SỰ chặn. Chúng nằm trong SQL thuần nên
+      #    không một test vitest nào chạm tới được; mock Prisma không dựng lại được ràng buộc.
+      #    Mỗi phép thử nằm trong giao dịch riêng và ROLLBACK, nên không để lại gì.
+      - name: Ràng buộc CSDL thật sự chặn
+        run: pnpm --filter @erp/api exec tsx scripts/db-constraint-smoke.ts

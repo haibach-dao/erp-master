@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react';
 import { KeyRound, Lock } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  getAuthzCatalogHealth,
   grantPermission,
   listPermissionCatalog,
   listRoles,
@@ -60,6 +61,20 @@ export default function RoleMatrixPage() {
     enabled: canView && can(user, 'authz.permission.view'),
   });
 
+  /* Lệch giữa danh mục trong MÃ NGUỒN và bảng `authz.permissions` của CSDL đang chạy.
+   *
+   * Đặt banner ở ĐÂY chứ không ở trang chủ: đây là màn hình mà người có thẩm quyền sửa đang mở
+   * sẵn, và là màn hình mà lệch làm hỏng ý nghĩa của mọi thứ hiển thị trên đó — ô chọn mã đọc
+   * từ CSDL, nên một mã thừa sẽ nằm trong danh sách cấp được mà đọc mã nguồn không thấy, còn
+   * một mã thiếu thì cấp cho ai cũng vô hiệu. Một dòng log lúc boot đã trôi qua một lần rồi
+   * (03/09/2026); chỗ này thì không trôi được.
+   *
+   * KHÔNG chặn `enabled` theo quyền: `/health` là công khai và chỉ trả số đếm, còn người đọc
+   * được trang này thì đằng nào cũng đã cầm `authz.role.view`. */
+  const drift = useQuery({ queryKey: ['authz-catalog-health'], queryFn: getAuthzCatalogHealth });
+  const d = drift.data;
+  const driftCount = (d?.missing ?? 0) + (d?.orphan ?? 0) + (d?.meta ?? 0);
+
   const refresh = (): Promise<void> => qc.invalidateQueries({ queryKey: ['authz-roles'] });
   const mGrant = useMutation({
     mutationFn: () => grantPermission(selected, newCode, newScope),
@@ -108,6 +123,24 @@ export default function RoleMatrixPage() {
           {(err as Error).message}
         </Alert>
       ) : null}
+
+      {/* Chỉ hiện khi CÓ lệch. Không hiện một dải xanh "mọi thứ ổn" ở trạng thái thường: một
+          banner lúc nào cũng có mặt là một banner không ai còn đọc. */}
+      {driftCount > 0 && (
+        <Alert variant="destructive" title="Danh mục quyền trong mã nguồn KHÁC với CSDL đang chạy">
+          Thiếu <strong>{d?.missing ?? 0}</strong> mã · thừa <strong>{d?.orphan ?? 0}</strong> mã ·
+          lệch siêu dữ liệu <strong>{d?.meta ?? 0}</strong> mã.
+          <br />
+          Mã <strong>thiếu</strong> thì cấp cho ai cũng vô hiệu — máy chủ chặn tất cả, kể cả ADMIN.
+          Mã <strong>thừa</strong> thì vẫn nằm trong ô chọn bên dưới và vẫn cấp được, trong khi đọc
+          mã nguồn không thấy nó ở đâu.
+          <br />
+          <span className="text-muted-foreground">
+            Xem mã nào và cách sửa: chạy <code>pnpm --filter @erp/api check:permissions</code>. Số
+            đếm ở đây lấy từ <code>/health</code> — endpoint công khai nên cố ý không trả tên mã.
+          </span>
+        </Alert>
+      )}
 
       <Card>
         <CardContent className="px-5 py-4">
