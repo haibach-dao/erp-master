@@ -170,6 +170,11 @@ export const PERMISSION_CATALOG: readonly PermissionDef[] = [
    *
    * `set_price` là S3 dù chỉ THÊM dòng (bảng append-only): đơn giá mới áp cho mọi lần cấp
    * sau đó, nên một dòng gõ sai là thu sai hàng loạt, không thu hồi được. */
+  /* Danh mục NGƯỜI KÝ chỉ là tên + chức danh của cán bộ INDEVCO in ở ô ký bên phải tờ
+   * thẻ — không phải dữ liệu cá nhân của khách, nên S1. Ai cấp thẻ cũng phải đọc được, vì
+   * ô chọn người ký nằm ngay trên màn hình cấp thẻ; thiếu mã này thì ô đó rỗng và không có
+   * gì nói vì sao. */
+  p('cemetery.card_signer.view', 'S1', 'Xem danh mục người ký thẻ mộ'),
   p('cemetery.card_fee.view', 'S2', 'Xem biểu phí cấp thẻ mộ và số tiền phí từng lần cấp'),
   p('cemetery.card_fee.set_price', 'S3', 'Ban hành dòng biểu phí cấp thẻ mộ (chỉ thêm)'),
   p('cemetery.card_fee.waive', 'S3', 'Miễn phí cấp thẻ — lỗi công ty / khách nộp lại thẻ cũ'),
@@ -372,6 +377,7 @@ export const PERMISSION_CATALOG: readonly PermissionDef[] = [
    * KHÔNG dùng lại `config.reference.update` ngay dưới: mã đó hiện chưa route nào dùng,
    * nhưng QT_NGHIEP_VU ĐANG CẦM `config.reference.view`. Gắn chức năng mới vào một mã đã
    * cấp là cho một vai thêm năng lực mà chưa ai duyệt lần nào. */
+  p('config.card_signer.update', 'S3', 'Quản trị danh mục người ký thẻ mộ (toàn hệ)'),
   p('config.plot_tag.update', 'S3', 'Quản trị danh mục thẻ nhãn phần mộ (toàn hệ)'),
   p('config.customer_tag.update', 'S3', 'Quản trị danh mục thẻ nhãn khách hàng (toàn hệ)'),
   p('config.reference.view', 'S3', 'Xem danh mục cấu hình'),
@@ -456,6 +462,9 @@ const CEMETERY_READ_ALL = [
    * này hết bao nhiêu" trước khi khách quyết. Nó cũng chảy sang KTNB_KIEM_TOAN và
    * DPO_DLCN — đúng chủ ý, hai ghế đó chỉ đọc. */
   'cemetery.card_fee.view',
+  /* Người ký cũng đi cùng gói ĐỌC, cùng lý do: ai xem trước được thẻ thì phải thấy được ô
+   * chọn người ký. Danh sách chỉ là tên + chức danh cán bộ, không có gì để giấu. */
+  'cemetery.card_signer.view',
   /* Xem thẻ nhãn mộ đi cùng gói ĐỌC: thẻ mộ nói về VẬT — "bia nứt", "nền lún" — nên ai đọc
    * được danh sách mộ thì đọc được tình trạng của nó. Thẻ KHÁCH thì KHÔNG đi cùng gói này,
    * nó phải cấp riêng cho từng vai: xem chú thích ở `crm.customer_tag.view`. */
@@ -512,6 +521,10 @@ export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
     'cemetery.usage_right.view',
     'cemetery.card.view',
     'cemetery.card.print',
+    /* Vai này liệt kê tay chứ KHÔNG dùng gói `CEMETERY_READ_ALL`, nên mã đọc người ký phải
+     * cấp riêng ở đây. Thiếu nó thì ô chọn người ký rỗng ngay tại quầy — chỗ dùng tính năng
+     * này nhiều nhất. */
+    'cemetery.card_signer.view',
     /* Thẻ nhãn khách — front desk là nơi PHÁT HIỆN ra "thiếu CCCD", "thiếu giấy chứng tử",
      * nên họ phải ghi lại được. Họ GẮN thẻ có sẵn nhưng KHÔNG mở được danh mục
      * (`config.customer_tag.update` là S3, ở ghế khác) — nên không ai ở quầy tạo được một
@@ -878,6 +891,7 @@ export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
        * — người mở danh mục không phải người gắn thẻ, và ngược lại. Đó là cặp tách nhiệm vụ
        * mà `authz-invariants` canh: ai vừa mở được thẻ mới vừa gắn được thì tự định đoạt
        * trọn vẹn cái nhãn dán lên một con người. */
+      'config.card_signer.update',
       'config.plot_tag.update',
       'config.customer_tag.update',
       'notification.template.view',

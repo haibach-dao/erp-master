@@ -39,6 +39,13 @@ const NO_RECORD_SCOPE: Readonly<Record<string, string>> = {
     'Danh mục thẻ nhãn phần mộ — dữ liệu toàn hệ, bảng không có `companyId`.',
   'modules/tags/tags.controller.ts:listCustomerTagTypes':
     'Danh mục thẻ nhãn khách hàng — dữ liệu toàn hệ, bảng không có `companyId`.',
+  /* Danh mục NGƯỜI KÝ THẺ MỘ — cùng loại: anh Bách chốt 03/09/2026 dùng chung toàn hệ, nên
+   * `card_signers` không có `companyId` và không có bản ghi đích nào để bó. Rào là mã quyền
+   * `config.card_signer.update` (S3) ở đường ghi. Đường `create`/`update` có truyền userId
+   * xuống nhưng chỉ để ghi nhật ký — service nhận `actorId: string | null`, không nhận
+   * `Caller`, nên lưới quét phạm vi cũng không đòi hỏi gì ở đó. */
+  'modules/cards/card-signers.controller.ts:list':
+    'Danh mục người ký thẻ mộ — dữ liệu toàn hệ, bảng không có `companyId`.',
   /* CHỈ `list` nằm ở đây. `create`/`update` CÓ truyền người gọi xuống — nhưng chỉ để ghi
    * `createdBy` và người thao tác vào nhật ký, không phải để bó phạm vi: service nhận
    * `actorId: string | null` chứ không nhận `Caller`, nên lưới quét phạm vi cũng không

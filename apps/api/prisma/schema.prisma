@@ -933,6 +933,42 @@ model CardPrintLog {
  * `effectiveFrom` là @db.Date chứ không Timestamptz: biểu phí có hiệu lực theo NGÀY, và
  * giữ giờ trong đó là mời gọi lệch múi giờ quyết định hôm nay thu giá cũ hay giá mới.
  */
+/**
+ * NGƯỜI KÝ THẺ MỘ — danh mục TOÀN HỆ, KHÔNG chia theo công ty (anh Bách chốt 03/09/2026).
+ *
+ * Đây là người của INDEVCO ký ở ô BÊN PHẢI tờ thẻ, dưới dòng "INDEVCO - XN AN LẠC VIÊN".
+ * Ô bên trái là CHỦ MỘ và tên khách tự in từ hồ sơ — không nằm ở bảng này.
+ *
+ * KHÔNG append-only (khác `GraveCardFeeSchedule` ngay dưới): sửa một chức danh gõ sai phải
+ * sửa được tại chỗ. Nhưng cũng KHÔNG xoá cứng — `status` chuyển sang `Retired`, vì thẻ đã
+ * cấp năm ngoái vẫn phải đọc ra được tên người đã ký nó.
+ *
+ * `CardPrintLog` chép `approvedBy`/`approvedTitle` thành CHUỖI chứ không giữ khoá ngoại tới
+ * đây — CỐ Ý. Tờ giấy khách đang cầm ghi tên gì thì nhật ký phải đọc ra đúng tên đó, kể cả
+ * khi người ấy đổi chức danh hoặc rời công ty. Danh mục này chỉ để CHỌN, không phải để tra
+ * ngược. Cùng lý do `plotCode` được chép vào dòng phí thay vì join lại mỗi lần đọc.
+ */
+model CardSigner {
+  id       String @id
+  fullName String @map("full_name")
+  title    String
+
+  /// Người được chọn sẵn ở màn hình cấp thẻ. Nhiều nhất MỘT dòng trên toàn hệ — ép bằng
+  /// partial unique index, không bằng quy ước ở service.
+  isDefault Boolean @default(false) @map("is_default")
+
+  /// Active | Retired. NGỪNG DÙNG chứ không xoá.
+  status String @default("Active")
+
+  createdBy String?  @map("created_by")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([status])
+  @@map("card_signers")
+  @@schema("cemetery")
+}
+
 model GraveCardFeeSchedule {
   id        String @id
   companyId String @map("company_id")

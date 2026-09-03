@@ -32,6 +32,7 @@ const ENTITY_TYPE_LABEL: Record<string, string> = {
   service_subscription: 'Dịch vụ',
   family_relationship: 'Quan hệ nhân thân',
   card_print_log: 'Thẻ quản lý mộ',
+  card_signer: 'Người ký thẻ mộ',
   file: 'Tệp',
   file_object: 'Tệp',
   access_rule: 'Luật truy cập',

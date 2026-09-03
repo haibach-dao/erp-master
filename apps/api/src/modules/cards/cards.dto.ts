@@ -90,3 +90,51 @@ export class IssueCardDto extends WaiveFields {
   @MaxLength(100)
   approvedTitle?: string;
 }
+
+/* NGƯỜI KÝ THẺ MỘ — danh mục toàn hệ.
+ *
+ * `IssueCardDto` phía trên vẫn nhận `approvedBy`/`approvedTitle` dạng CHUỖI, không nhận id
+ * người ký — cố ý. Tờ giấy khách cầm ghi tên gì thì nhật ký phải đọc ra đúng tên đó, kể cả
+ * khi người ấy sau này đổi chức danh hoặc nghỉ. Danh mục này chỉ để CHỌN cho nhanh và cho
+ * khỏi gõ sai, không phải để tra ngược.
+ */
+export class CreateCardSignerDto {
+  @ApiProperty({ description: 'Họ và tên người ký' })
+  @IsString()
+  @MaxLength(100)
+  fullName!: string;
+
+  @ApiProperty({ description: 'Chức danh, ví dụ PHÓ GIÁM ĐỐC' })
+  @IsString()
+  @MaxLength(100)
+  title!: string;
+
+  @ApiPropertyOptional({ description: 'Chọn sẵn ở màn hình cấp thẻ. Toàn hệ chỉ một người.' })
+  @IsOptional()
+  @IsBoolean()
+  isDefault?: boolean;
+}
+
+export class UpdateCardSignerDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  fullName?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  title?: string;
+
+  @ApiPropertyOptional({ enum: ['Active', 'Retired'] })
+  @IsOptional()
+  @IsIn(['Active', 'Retired'])
+  status?: 'Active' | 'Retired';
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  isDefault?: boolean;
+}
