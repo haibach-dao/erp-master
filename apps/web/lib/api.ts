@@ -735,6 +735,9 @@ export interface CardOccupant {
 export interface CardPlot {
   gravePlotId: string;
   plotCode: string;
+  /* Thêm 05/09/2026: màn cấp thẻ lọc ô chọn người ký theo nghĩa trang của bộ mộ, mà trước đó
+   * ở đây chỉ có TÊN — không lọc được bằng tên. */
+  cemeteryId: string;
   cemeteryName: string;
   zone: string | null;
   subzone: string | null;
@@ -1290,7 +1293,8 @@ export const getBurialCandidates = (gravePlotId: string): Promise<BurialCandidat
 export const listCardFeeSchedules = (companyId: string): Promise<CardFeeSchedule[]> =>
   apiFetch(`/api/v1/cemetery/card-fees?companyId=${encodeURIComponent(companyId)}`);
 
-/* NGƯỜI KÝ THẺ MỘ — danh mục toàn hệ, KHÔNG chia theo công ty (anh Bách chốt 03/09/2026).
+/* NGƯỜI KÝ THẺ MỘ — danh mục THEO NGHĨA TRANG (anh Bách chốt 05/09/2026: "người ký là người
+ * quản lý nghĩa trang"). Đảo có ý thức quyết định 03/09, lúc đó là danh mục toàn hệ.
  *
  * Người của INDEVCO ký ở ô BÊN PHẢI tờ thẻ. Ô bên trái là chủ mộ và tên khách in thẳng từ
  * hồ sơ, không đi qua danh mục này.
@@ -1301,31 +1305,66 @@ export const listCardFeeSchedules = (companyId: string): Promise<CardFeeSchedule
  */
 export interface CardSigner {
   id: string;
+  userId: string | null;
+  cemeteryId: string | null;
   fullName: string;
   title: string;
   isDefault: boolean;
   status: string;
   createdAt: string;
+  /* Tư cách được kiểm LẠI lúc đọc: một người thêm hợp lệ tháng trước có thể đã rời ghế quản
+   * lý nghĩa trang hôm nay, và không lệnh UPDATE nào chạm vào dòng đó. Server trả cờ ra thay
+   * vì lọc bỏ — người mất vai phải HIỆN RA kèm lý do, không lặng lẽ biến mất khỏi danh sách. */
+  eligible: boolean;
+  ineligibleReason: string | null;
 }
 
-export const listCardSigners = (): Promise<CardSigner[]> =>
-  apiFetch('/api/v1/cemetery/card-signers');
+export const listCardSigners = (cemeteryId?: string): Promise<CardSigner[]> =>
+  apiFetch(
+    `/api/v1/cemetery/card-signers${
+      cemeteryId === undefined ? '' : `?cemeteryId=${encodeURIComponent(cemeteryId)}`
+    }`,
+  );
 
+/* KHÔNG còn nhận họ tên và chức danh — anh Bách chốt 05/09/2026: "lấy trong danh sách nhân
+ * viên". Server chép hai thứ đó từ hồ sơ tài khoản. */
 export const createCardSigner = (input: {
-  fullName: string;
-  title: string;
+  userId: string;
+  cemeteryId: string;
   isDefault?: boolean;
 }): Promise<CardSigner> =>
   apiFetch('/api/v1/cemetery/card-signers', { method: 'POST', body: JSON.stringify(input) });
 
 export const updateCardSigner = (
   id: string,
-  input: { fullName?: string; title?: string; status?: string; isDefault?: boolean },
+  input: { status?: string; isDefault?: boolean },
 ): Promise<CardSigner> =>
   apiFetch(`/api/v1/cemetery/card-signers/${encodeURIComponent(id)}`, {
     method: 'PATCH',
     body: JSON.stringify(input),
   });
+
+/* DANH BẠ NHÂN VIÊN — mở 05/09/2026. Dùng mã `iam.user.view` vốn đã có trong danh mục mà
+ * chưa route nào tiêu thụ. Hai bộ lọc CẮT NHAU: `roleCode` trả người làm được việc đó ở đâu
+ * đó, `cemeteryId` trả người phủ nơi này; chỉ ai thoả cả hai mới thực sự làm được ở đây. */
+export interface DirectoryUser {
+  id: string;
+  email: string;
+  fullName: string | null;
+  title: string | null;
+  status: string;
+}
+
+export const listUsers = (filters: {
+  roleCode?: string;
+  cemeteryId?: string;
+}): Promise<DirectoryUser[]> => {
+  const q = new URLSearchParams();
+  if (filters.roleCode !== undefined) q.set('roleCode', filters.roleCode);
+  if (filters.cemeteryId !== undefined) q.set('cemeteryId', filters.cemeteryId);
+  const qs = q.toString();
+  return apiFetch(`/api/v1/iam/users${qs === '' ? '' : `?${qs}`}`);
+};
 
 /* Công ty nào đã có biểu phí đang hiệu lực, công ty nào chưa — kèm số khách đang chờ.
  *
