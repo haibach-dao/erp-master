@@ -28,6 +28,12 @@ const NO_RECORD_SCOPE: Readonly<Record<string, string>> = {
     'Danh mục MÃ QUYỀN — tập đóng, giống bảng tham chiếu. Màn hình cần nó để mời chọn mã thay vì gõ tay.',
   'modules/cemetery/cemetery.controller.ts:relationshipTypes':
     'Dữ liệu tham chiếu (quan hệ nhân thân), không thuộc công ty nào.',
+  /* DANH BẠ NHÂN VIÊN — cùng loại với danh mục vai ngay trên: `iam.users` không có
+   * `companyId` cũng không có `cemeteryId`, nhân viên là dữ liệu toàn hệ. Rào là mã quyền
+   * `iam.user.view` (S3). Hai bộ lọc `roleCode`/`cemeteryId` là để THU HẸP cho người dùng
+   * chọn nhanh, không phải rào bảo mật — chúng do người gọi tự đặt. */
+  'modules/iam/users.controller.ts:list':
+    'Danh bạ nhân viên — dữ liệu toàn hệ, `iam.users` không có `companyId` lẫn `cemeteryId`.',
   /* Danh mục THẺ NHÃN — cùng loại với danh mục vai ngay trên: bảng `tags` KHÔNG có
    * `companyId` (anh Bách chốt 03/09/2026 một danh mục dùng chung, không chia theo công
    * ty), nên không có bản ghi đích nào để bó. Rào ở đây là MÃ QUYỀN `config.*_tag.update`
@@ -39,17 +45,14 @@ const NO_RECORD_SCOPE: Readonly<Record<string, string>> = {
     'Danh mục thẻ nhãn phần mộ — dữ liệu toàn hệ, bảng không có `companyId`.',
   'modules/tags/tags.controller.ts:listCustomerTagTypes':
     'Danh mục thẻ nhãn khách hàng — dữ liệu toàn hệ, bảng không có `companyId`.',
-  /* Danh mục NGƯỜI KÝ THẺ MỘ — cùng loại: anh Bách chốt 03/09/2026 dùng chung toàn hệ, nên
-   * `card_signers` không có `companyId` và không có bản ghi đích nào để bó. Rào là mã quyền
-   * `config.card_signer.update` (S3) ở đường ghi. Đường `create`/`update` có truyền userId
-   * xuống nhưng chỉ để ghi nhật ký — service nhận `actorId: string | null`, không nhận
-   * `Caller`, nên lưới quét phạm vi cũng không đòi hỏi gì ở đó. */
-  'modules/cards/card-signers.controller.ts:list':
-    'Danh mục người ký thẻ mộ — dữ liệu toàn hệ, bảng không có `companyId`.',
-  /* CHỈ `list` nằm ở đây. `create`/`update` CÓ truyền người gọi xuống — nhưng chỉ để ghi
-   * `createdBy` và người thao tác vào nhật ký, không phải để bó phạm vi: service nhận
-   * `actorId: string | null` chứ không nhận `Caller`, nên lưới quét phạm vi cũng không
-   * đòi hỏi gì ở đó. Danh mục toàn hệ thì không có phạm vi để bó. */
+  /* GỠ 05/09/2026 — `card_signers` không còn là danh mục toàn hệ.
+   *
+   * Tới 03/09 bảng không có `companyId` nên `list` được miễn trừ ở đây với lý do "không có
+   * bản ghi đích để bó". Anh Bách chốt 05/09 "người ký là người quản lý nghĩa trang", bảng
+   * có `cemeteryId`, và cả ba route nay bó phạm vi thật qua `assertSiteFor` /
+   * `listSiteFilterFor`. Để dòng miễn trừ ở lại thì lưới sẽ im lặng cho qua đúng chỗ vừa
+   * mọc ra một trục phạm vi — một miễn trừ sống lâu hơn lý do sinh ra nó là một cái lỗ, và
+   * nó không kêu. */
   'modules/cemetery/cemetery.controller.ts:createCompany':
     'Đang TẠO công ty — chưa có công ty nào để bó theo. Bản chất là việc mức GROUP; gate `org.company.create` chỉ cấp cho vai toàn tập đoàn.',
   'modules/files/files.controller.ts:presign':

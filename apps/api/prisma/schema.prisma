@@ -15,6 +15,19 @@ model User {
   id           String   @id
   email        String   @unique
   passwordHash String   @map("password_hash")
+
+  /// Họ tên và CHỨC DANH HÀNH CHÍNH ("PHÓ GIÁM ĐỐC") — thêm 05/09/2026 cùng luật "người ký
+  /// thẻ mộ là người quản lý nghĩa trang". Toàn hệ không có bảng nhân sự nào, và đây là
+  /// "danh sách nhân viên" nhỏ nhất chạy được: hai cột, không phải một module.
+  ///
+  /// `title` KHÔNG thay được bằng mã vai. Vai (`QL_NGHIA_TRANG`) là quyền kỹ thuật; chức danh
+  /// là thứ in lên tờ giấy. Không suy được cái này từ cái kia.
+  ///
+  /// Cả hai NULLABLE: ghế máy `system-worker@erp.local` không có chức danh nào cả, và bắt
+  /// NOT NULL là phải bịa dữ liệu cho những tài khoản đã có. Tính bắt buộc ép ở chỗ TẠO
+  /// NGƯỜI KÝ, không ép lên mọi tài khoản của hệ.
+  fullName     String?  @map("full_name")
+  title        String?
   status       String   @default("active")
   mfaEnabled   Boolean  @default(false) @map("mfa_enabled")
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
@@ -949,12 +962,33 @@ model CardPrintLog {
  * ngược. Cùng lý do `plotCode` được chép vào dòng phí thay vì join lại mỗi lần đọc.
  */
 model CardSigner {
-  id       String @id
+  id String @id
+
+  /// Tài khoản người ký và NGHĨA TRANG người đó phụ trách — anh Bách chốt 05/09/2026:
+  /// "người ký là người quản lý nghĩa trang". ĐẢO CÓ Ý THỨC quyết định 03/09 (danh mục toàn hệ).
+  ///
+  /// Cột trần, KHÔNG `@relation` sang `iam.users` — cùng nếp `RoleAssignment`, vốn ghi rõ
+  /// "No FK to iam.users". NULLABLE vì dòng cũ (nhập tay, không nối tài khoản) phải ở lại
+  /// được; tính bắt buộc nằm ở CHECK `card_signers_active_needs_user_site`, chỉ đòi ở dòng
+  /// đang dùng.
+  ///
+  /// Luật "người này phải đang giữ vai QL_NGHIA_TRANG ở CHÍNH nghĩa trang này" KHÔNG viết
+  /// được thành ràng buộc CSDL: hai schema khác nhau, và vai đổi theo thời gian nên một
+  /// dòng hợp lệ hôm nay có thể hết hợp lệ ngày mai mà không ai UPDATE nó. Ép ở
+  /// `CardSignersService` lúc ghi, và kiểm LẠI lúc đọc — người mất vai vẫn hiện ra kèm lý do
+  /// chứ không lặng lẽ biến mất.
+  userId     String? @map("user_id")
+  cemeteryId String? @map("cemetery_id")
+
+  /// Hai thứ IN LÊN tờ thẻ. Chép từ tài khoản lúc tạo (không ai gõ tay nữa), nhưng ở lại
+  /// đây chứ không join mỗi lần đọc: tờ giấy khách cầm ghi gì thì dòng này phải giữ đúng cái
+  /// đó, kể cả khi người ấy sau này đổi chức danh.
   fullName String @map("full_name")
   title    String
 
-  /// Người được chọn sẵn ở màn hình cấp thẻ. Nhiều nhất MỘT dòng trên toàn hệ — ép bằng
-  /// partial unique index, không bằng quy ước ở service.
+  /// Người được chọn sẵn ở màn hình cấp thẻ. Nhiều nhất MỘT dòng MỖI NGHĨA TRANG — ép bằng
+  /// partial unique index, không bằng quy ước ở service. Một người phụ trách hai nghĩa trang
+  /// thì có hai dòng và cả hai đều là mặc định: hợp lệ, vì tính duy nhất đo theo nghĩa trang.
   isDefault Boolean @default(false) @map("is_default")
 
   /// Active | Retired. NGỪNG DÙNG chứ không xoá.
@@ -965,6 +999,7 @@ model CardSigner {
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   @@index([status])
+  @@index([cemeteryId])
   @@map("card_signers")
   @@schema("cemetery")
 }

@@ -125,10 +125,25 @@ export default function GraveCardsPage() {
 
   const customers = useQuery({ queryKey: ['customers', ''], queryFn: () => searchCustomers('') });
 
-  /* Danh mục người ký. Chỉ hiện người ĐANG DÙNG — người đã nghỉ vẫn nằm trong danh mục để
-   * tra nhật ký, nhưng mời chọn họ cho một tờ thẻ cấp hôm nay thì không. */
-  const signers = useQuery({ queryKey: ['cardSigners'], queryFn: listCardSigners });
-  const activeSigners = (signers.data ?? []).filter((s) => s.status === 'Active');
+  /* NGHĨA TRANG của bộ mộ trên thẻ — quyết định ai được ký (anh Bách chốt 05/09/2026:
+   * "ai quản lý nghĩa trang nào thì người đó ký").
+   *
+   * Lấy tập RIÊNG BIỆT chứ không lấy `plots[0]`: thẻ gom toàn bộ mộ khách đứng tên, nên về
+   * nguyên tắc chúng có thể ở hai nghĩa trang. Hôm nay chưa khách nào như vậy (đo 05/09:
+   * 0 khách, 0 công ty có nghĩa trang thứ hai), nhưng lấy phần tử đầu là lặng lẽ chọn một
+   * nghĩa trang rồi in thẻ có chữ ký của người không quản lý mấy cái mộ còn lại. */
+  const cardCemeteryIds = [...new Set((card?.plots ?? []).map((p) => p.cemeteryId))];
+  const signerCemeteryId = cardCemeteryIds.length === 1 ? cardCemeteryIds[0] : undefined;
+
+  /* Danh mục người ký CỦA NGHĨA TRANG ĐÓ. Chỉ hiện người ĐANG DÙNG và CÒN ĐỦ TƯ CÁCH —
+   * người đã nghỉ vẫn nằm trong danh mục để tra nhật ký, và người đã rời ghế quản lý nghĩa
+   * trang vẫn hiện ở trang danh mục kèm lý do; nhưng mời chọn họ cho một tờ thẻ cấp hôm nay
+   * thì không, vì server sẽ từ chối. */
+  const signers = useQuery({
+    queryKey: ['cardSigners', signerCemeteryId ?? ''],
+    queryFn: () => listCardSigners(signerCemeteryId),
+  });
+  const activeSigners = (signers.data ?? []).filter((s) => s.status === 'Active' && s.eligible);
 
   /* Chọn sẵn người MẶC ĐỊNH, đúng MỘT LẦN, khi danh mục vừa về.
    *
@@ -145,16 +160,24 @@ export default function GraveCardsPage() {
    *
    * Chỉ đánh dấu KHI THỰC SỰ đặt được: danh mục về mà chưa ai là mặc định thì lần dữ liệu
    * sau vẫn còn cơ hội đặt. */
-  const defaultApplied = useRef(false);
+  const defaultApplied = useRef('');
   useEffect(() => {
-    if (defaultApplied.current) return;
-    const def = (signers.data ?? []).find((x) => x.isDefault && x.status === 'Active');
+    /* Neo dấu "đã áp dụng" vào CHÍNH NGHĨA TRANG, không vào một cờ boolean.
+     *
+     * Mặc định nay là mặc định MỖI NGHĨA TRANG. Với cờ boolean, xem trước thẻ của khách ở
+     * nghĩa trang A rồi chuyển sang khách ở nghĩa trang B sẽ giữ nguyên người ký của A —
+     * tờ thẻ mang chữ ký của người không quản lý mộ đó, và không có gì báo. */
+    const key = signerCemeteryId ?? '';
+    if (defaultApplied.current === key) return;
+    const def = (signers.data ?? []).find(
+      (x) => x.isDefault && x.status === 'Active' && x.eligible,
+    );
     if (def === undefined) return;
-    defaultApplied.current = true;
+    defaultApplied.current = key;
     setSignerId(def.id);
     setApprovedBy(def.fullName);
     setApprovedTitle(def.title);
-  }, [signers.data]);
+  }, [signers.data, signerCemeteryId]);
   const issuances = useQuery({
     queryKey: ['cardIssuances', customerId],
     queryFn: () => listCardIssuances(customerId),
@@ -207,13 +230,18 @@ export default function GraveCardsPage() {
   const issueBlocked: string | null =
     customerId === ''
       ? 'chưa chọn khách hàng.'
-      : signerId === ''
-        ? signers.isSuccess && activeSigners.length === 0
-          ? 'danh mục người ký chưa có ai đang dùng. Mở trang Người ký thẻ mộ (/cemetery/card-signers) thêm người ký rồi quay lại.'
-          : 'chưa chọn người ký của INDEVCO.'
-        : waive && waiveReason === ''
-          ? 'đã chọn miễn phí nhưng chưa nêu lý do.'
-          : null;
+      : /* Ca do luật 05/09 đẻ ra: thẻ gom mộ ở HAI nghĩa trang thì không có MỘT người ký nào
+         * đúng cho cả hai. Nói thẳng thay vì lặng lẽ lấy nghĩa trang đầu tiên. Chưa cắn hôm
+         * nay, nhưng cấu trúc cho phép và câu này rẻ hơn nhiều một tờ thẻ ký sai. */
+        cardCemeteryIds.length > 1
+        ? `khách này có mộ ở ${cardCemeteryIds.length} nghĩa trang, mà người ký gắn theo từng nghĩa trang. Chưa cấp chung một thẻ được — việc tách thẻ theo nghĩa trang đang chờ dựng.`
+        : signerId === ''
+          ? signers.isSuccess && activeSigners.length === 0
+            ? 'nghĩa trang này chưa có người ký nào đang dùng và còn đủ tư cách. Mở trang Người ký thẻ mộ (/cemetery/card-signers) thêm người ký rồi quay lại.'
+            : 'chưa chọn người ký của INDEVCO.'
+          : waive && waiveReason === ''
+            ? 'đã chọn miễn phí nhưng chưa nêu lý do.'
+            : null;
 
   return (
     <div className="space-y-6">
@@ -274,7 +302,7 @@ export default function GraveCardsPage() {
                      * rỗng. Không có dòng này thì lần react-query lấy lại dữ liệu sau đó vẫn
                      * còn cửa ghi đè lựa chọn của họ — trường hợp lúc đầu danh mục chưa ai là
                      * mặc định, người ta tự chọn một người, rồi mới có người được đặt mặc định. */
-                    defaultApplied.current = true;
+                    defaultApplied.current = signerCemeteryId ?? '';
                     setSignerId(e.target.value);
                     /* Chức danh đi THEO người, không gõ riêng: hai ô rời nhau là cách một
                      * tờ thẻ in ra tên người này kèm chức danh người kia. */

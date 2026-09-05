@@ -95,6 +95,13 @@ export class CardsService {
       return {
         gravePlotId: plot.id,
         plotCode: plot.plotCode,
+        /* `cemeteryId` thêm 05/09/2026 cùng luật "người ký là người quản lý nghĩa trang":
+         * màn hình cấp thẻ phải lọc ô chọn người ký theo nghĩa trang của bộ mộ, mà trước đó
+         * ở đây chỉ có TÊN nghĩa trang — không lọc được bằng tên.
+         *
+         * Đây cũng đúng chỗ một bản thiết kế trong đợt khảo sát đã vấp: nó định tuyến người
+         * duyệt bằng `card.plots[0].cemeteryId` và tin rằng trường đó có sẵn. Nó không có. */
+        cemeteryId: plot.cemeteryId,
         cemeteryName: plot.cemetery.name,
         zone: plot.zone,
         subzone: plot.subzone,
