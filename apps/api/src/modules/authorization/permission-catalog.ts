@@ -377,7 +377,15 @@ export const PERMISSION_CATALOG: readonly PermissionDef[] = [
    * KHÔNG dùng lại `config.reference.update` ngay dưới: mã đó hiện chưa route nào dùng,
    * nhưng QT_NGHIEP_VU ĐANG CẦM `config.reference.view`. Gắn chức năng mới vào một mã đã
    * cấp là cho một vai thêm năng lực mà chưa ai duyệt lần nào. */
-  p('config.card_signer.update', 'S3', 'Quản trị danh mục người ký thẻ mộ (toàn hệ)'),
+  /* "(theo nghĩa trang)" chứ KHÔNG còn "(toàn hệ)" — anh Bách chốt 05/09/2026 người ký là
+   * người quản lý nghĩa trang, và `card_signers` có `cemetery_id` từ migration cùng ngày.
+   * Hai dòng `config.*_tag.update` ngay dưới VẪN là toàn hệ; đừng sửa theo cho đều.
+   *
+   * Mô tả là thứ người đi cấp quyền đọc trên màn hình ma trận, và `authz-catalog-check`
+   * KHÔNG so mô tả (chỉ so `sensitivity` + `wildcardExempt`) — nên một mô tả đã sai sẽ
+   * không có cổng nào bắt, và cứ thế mời người ta cấp nhầm. `db:seed` upsert cả mô tả nên
+   * sửa ở đây là đủ, không cần migration. */
+  p('config.card_signer.update', 'S3', 'Quản trị danh mục người ký thẻ mộ (theo nghĩa trang)'),
   p('config.plot_tag.update', 'S3', 'Quản trị danh mục thẻ nhãn phần mộ (toàn hệ)'),
   p('config.customer_tag.update', 'S3', 'Quản trị danh mục thẻ nhãn khách hàng (toàn hệ)'),
   p('config.reference.view', 'S3', 'Xem danh mục cấu hình'),
