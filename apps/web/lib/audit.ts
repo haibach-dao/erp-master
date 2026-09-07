@@ -63,6 +63,14 @@ const ACTION: Record<string, string> = {
 
   // Thẻ mộ
   'GRAVE_CARD.ISSUED': 'Cấp thẻ quản lý mộ',
+  // Cửa phê duyệt in thẻ (lát 1, 05/09/2026)
+  'CARD_APPROVAL.SUBMITTED': 'Gửi hồ sơ xin cấp thẻ đi duyệt',
+  'CARD_APPROVAL.APPROVED': 'Duyệt hồ sơ cấp thẻ',
+  'CARD_APPROVAL.REJECTED': 'Từ chối hồ sơ cấp thẻ',
+  'CARD_APPROVAL.RETURNED': 'Trả lại hồ sơ cấp thẻ để sửa',
+  'CARD_APPROVAL.CANCELLED': 'Người gửi huỷ hồ sơ cấp thẻ',
+  'CARD_APPROVAL.GATE_ENABLED': 'Bật bắt buộc duyệt trước khi cấp thẻ',
+  'CARD_APPROVAL.GATE_DISABLED': 'Tắt bắt buộc duyệt trước khi cấp thẻ',
   'GRAVE_CARD.REPRINTED': 'In lại thẻ quản lý mộ',
 
   // Dịch vụ

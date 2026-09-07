@@ -75,6 +75,21 @@ export const CUSTOMER_BLOCKING_REFERENCES: readonly BlockingReference[] = [
     message: (n) => `${n} phiếu giữ chỗ còn hiệu lực`,
   },
   {
+    /* Hồ sơ trình duyệt cấp thẻ ĐANG CHỜ — thêm 07/09/2026 cùng cửa phê duyệt.
+     *
+     * CHẶN chỉ khi còn `SUBMITTED`: có một người ký đang được yêu cầu quyết một việc về khách
+     * này. Xoá khách lúc đó là để lại một hồ sơ chờ trỏ vào hư không, và người ký mở hộp thư
+     * ra thấy một dòng không mở được.
+     *
+     * Hồ sơ ĐÃ QUYẾT thì KHÔNG chặn — nó xuống nhóm xoá theo ngay dưới, cùng khuôn
+     * `GraveUsageRight` (chặn khi còn hiệu lực, xoá theo với dòng lịch sử). Chặn cả lịch sử là
+     * biến một quyết định đã xong thành cái khoá vĩnh viễn trên hồ sơ khách. */
+    model: 'CardIssueApproval',
+    column: 'customerId',
+    activeWhere: () => ({ state: 'SUBMITTED' }),
+    message: (n) => `${n} hồ sơ xin cấp thẻ đang chờ duyệt`,
+  },
+  {
     model: 'BurialRecord',
     column: 'ownerCustomerId',
     activeWhere: () => ({ ...activeBurial() }),
@@ -176,6 +191,10 @@ export const CUSTOMER_CASCADE_REFERENCES = [
    * thì mọi nhãn ta từng gán cho họ phải đi cùng, không được nằm lại. Dấu vết ai gắn ai gỡ
    * vẫn còn ở nhật ký kiểm toán — chỗ đúng để giữ nó. */
   { model: 'CustomerTag', column: 'customerId', label: 'thẻ nhãn đã gắn' },
+  /* Hồ sơ trình duyệt ĐÃ QUYẾT (duyệt / từ chối / trả lại / huỷ). Xoá theo, không chặn — xem
+   * chú thích ở nhóm chặn ngay trên. Dấu vết QUYẾT ĐỊNH không mất: ai gật, lúc nào, vì sao đều
+   * nằm ở `audit.audit_events`, và bảng ĐÓ mới là bảng append-only. */
+  { model: 'CardIssueApproval', column: 'customerId', label: 'hồ sơ xin cấp thẻ (lịch sử)' },
 ] as const;
 
 /* Tham chiếu phải GỠ RA (đặt về NULL), không chặn và cũng không xoá theo.

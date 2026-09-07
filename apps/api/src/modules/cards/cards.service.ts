@@ -7,8 +7,10 @@ import { PermissionsService } from '../authorization/permissions.service';
 import { ScopeService } from '../authorization/scope.service';
 import { PiiService } from '../../common/pii/pii.service';
 import { CardFeesService, type FeeQuote } from './card-fees.service';
+import { CardApprovalsService, type ApprovalSubject } from './card-approvals.service';
 import { activeBurial, activeUsageRight } from '../../common/lifecycle/active';
-import type { IssueCardDto } from './cards.dto';
+import type { IssueCardDto, SubmitCardApprovalDto } from './cards.dto';
+import type { CardFeeWaiveReason } from './cards.constants';
 import { effectiveCapacity } from '../../common/cemetery/capacity';
 
 const CARD_TYPE = 'GRAVE';
@@ -22,6 +24,7 @@ export class CardsService {
     private readonly pii: PiiService,
     private readonly permissions: PermissionsService,
     private readonly fees: CardFeesService,
+    private readonly approvals: CardApprovalsService,
   ) {}
 
   /* Gom dữ liệu in lên thẻ.
@@ -280,6 +283,23 @@ export class CardsService {
     const waive = await this.fees.resolveWaive(dto, caller.userId);
     const quote = await this.fees.quote({ customerId, companyId, plots: card.plots }, new Date());
 
+    /* CỬA PHÊ DUYỆT — nhịp 1, NGOÀI giao dịch (anh Bách chốt 05/09/2026).
+     *
+     * Đặt ở đây chứ không trong callback `$transaction` là cố ý, cùng lý do đã ghi ngay trên
+     * cho `resolveWaive` và `quote`: đây là chỗ sinh ra CÂU TIẾNG VIỆT cho người dùng, và giữ
+     * giao dịch mở trong lúc dựng câu đó là giữ khoá hàng lâu hơn cần thiết.
+     *
+     * Trả `null` = công ty này CHƯA BẬT cửa ⇒ đường cấp thẻ chạy y như trước, không chặn ai.
+     * Cờ bật theo từng công ty và mặc định TẮT, nên lát 1 triển khai xong không khoá một ai.
+     *
+     * KHÔNG chặn ở `preview` (bản xem trước có dấu chìm, anh Bách chốt 02/09 giữ nút In) và
+     * KHÔNG chặn ở `reprint` (in lại tờ cũ vì máy in kẹt là lỗi công ty, không sinh số không
+     * thu tiền). Cửa chỉ đứng ở chỗ CẤP SỐ và THU TIỀN. */
+    const approval = await this.approvals.assertApproved(
+      this.approvalSubject(companyId, customerId, card.plots, quote, waive),
+      caller.userId,
+    );
+
     const { log, chargeIds } = await this.prisma.$transaction(async (tx) => {
       const last = await tx.cardPrintLog.findFirst({
         where: { customerId, cardType: CARD_TYPE },
@@ -306,6 +326,14 @@ export class CardsService {
        * Đây cũng là chỗ partial unique index `grave_card_fee_charges_first_issue` ép luật
        * "một cặp (khách, mộ) chỉ có đúng một lần đầu": hai quầy bấm cùng lúc thì một người
        * thua ở tầng CSDL, chứ không phải cả hai cùng thu tiền lần đầu. */
+      /* CỬA PHÊ DUYỆT — nhịp 2, TRONG giao dịch. Compare-and-set ở CSDL, không phải một câu
+       * `if` ở trên: hai quầy bấm Cấp thẻ cùng lúc trên cùng một phê duyệt thì đúng một người
+       * thắng, còn người kia cuộn ngược cả lần cấp lẫn dòng phí. Một phê duyệt = một lần thu
+       * tiền, nên tiêu hai lần là thu hai lần trên một quyết định. */
+      if (approval !== null) {
+        await this.approvals.consume(tx, approval.id, created.id);
+      }
+
       const ids = await this.fees.recordCharges(tx, {
         companyId,
         cardPrintLogId: created.id,
@@ -382,6 +410,69 @@ export class CardsService {
    * kẹt; thu tiền cho một lần máy in kẹt là bắt khách trả cho lỗi của công ty, mà chính
    * anh Bách đã xếp "lỗi thuộc về công ty" vào ca MIỄN phí.
    */
+  /* GỬI hồ sơ xin cấp thẻ đi duyệt.
+   *
+   * Nằm ở ĐÂY chứ không ở `CardApprovalsService` vì nó cần `buildCard` và `fees.quote` — hai
+   * thứ của service này. Chiều phụ thuộc vì thế đi MỘT hướng (cards → approvals); đảo lại là
+   * đẻ ra phụ thuộc vòng và Nest sẽ đòi `forwardRef`, một dấu hiệu thiết kế sai chứ không phải
+   * một tiện ích.
+   *
+   * Dựng thẻ và tra biểu phí y hệt `issue()` — cùng đầu vào thì cùng bản báo giá, nên vân tay
+   * chụp ở đây so được với vân tay tính lại lúc cấp.
+   */
+  async submitForApproval(
+    customerId: string,
+    dto: SubmitCardApprovalDto,
+    caller: Caller,
+  ): Promise<{ id: string; state: string }> {
+    const card = await this.buildCard(customerId, caller);
+    if (card.companyId === null) {
+      throw new ConflictException('Khách hàng chưa gắn công ty quản lý — chưa gửi duyệt được');
+    }
+    const companyId = card.companyId;
+
+    /* Bộ mộ phải nằm TRỌN trong MỘT nghĩa trang. Người duyệt định tuyến theo nghĩa trang (anh
+     * Bách chốt điều 9: ai quản lý nghĩa trang nào thì người đó ký), nên một hồ sơ trải hai
+     * nghĩa trang không có MỘT người duyệt nào đúng cho cả hai. Nói thẳng thay vì lặng lẽ lấy
+     * nghĩa trang của phần mộ đầu tiên. */
+    const cemeteryIds = [...new Set(card.plots.map((p) => p.cemeteryId))];
+    if (cemeteryIds.length !== 1) {
+      throw new ConflictException(
+        `Khách này có mộ ở ${String(cemeteryIds.length)} nghĩa trang, mà người duyệt gắn theo từng nghĩa trang — chưa gửi chung một hồ sơ được.`,
+      );
+    }
+
+    const waive = await this.fees.resolveWaive(dto, caller.userId);
+    const quote = await this.fees.quote({ customerId, companyId, plots: card.plots }, new Date());
+
+    return this.approvals.create(
+      this.approvalSubject(companyId, customerId, card.plots, quote, waive),
+      dto.approverSignerId,
+      caller,
+    );
+  }
+
+  /* MỘT chỗ dựng đối tượng đem đi băm vân tay, dùng chung cho cả `submitForApproval` lẫn
+   * `issue`. Hai bản là hai thứ sẽ lệch nhau — và lệch ở đây nghĩa là mọi hồ sơ vừa duyệt xong
+   * đều báo "nội dung đã đổi", một lỗi không ai lần ra được. */
+  private approvalSubject(
+    companyId: string,
+    customerId: string,
+    plots: readonly { gravePlotId: string; cemeteryId: string }[],
+    quote: FeeQuote,
+    waive: { waived: boolean; waiveReason: CardFeeWaiveReason | null },
+  ): ApprovalSubject {
+    return {
+      companyId,
+      cemeteryId: plots[0]?.cemeteryId ?? '',
+      customerId,
+      plotIds: plots.map((p) => p.gravePlotId),
+      quote,
+      waived: waive.waived,
+      waiveReason: waive.waiveReason,
+    };
+  }
+
   async reprint(cardPrintLogId: string, caller: Caller) {
     const log = await this.prisma.cardPrintLog.findUnique({ where: { id: cardPrintLogId } });
     if (log === null) {

@@ -1083,6 +1083,88 @@ model GraveCardFeeCharge {
   @@schema("cemetery")
 }
 
+/**
+ * CỜ BẬT CỬA PHÊ DUYỆT, THEO TỪNG CÔNG TY — anh Bách chốt điều 7 ngày 05/09/2026.
+ *
+ * KHÔNG có dòng nào = KHÔNG bắt buộc duyệt. Cố ý: bảng rỗng lúc migration chạy, nên triển
+ * khai lát 1 KHÔNG chặn một ai. Cửa dựng xong nằm im cho tới khi có màn hình gửi/duyệt và có
+ * người bật cho từng công ty.
+ *
+ * Vì sao theo CÔNG TY chứ không toàn hệ: CSDL có 9 công ty mà 8 là dữ liệu thử, và cả 30 khách
+ * nằm ở một công ty. Bật một lần cho tất cả là khoá cả 30 khách nếu ghế duyệt chưa sẵn sàng.
+ *
+ * Tắt cờ KHÔNG xoá hồ sơ đã có — chỉ thôi bắt buộc. Hồ sơ đã duyệt vẫn tiêu được.
+ */
+model CardApprovalSetting {
+  companyId String   @id @map("company_id")
+  required  Boolean  @default(false)
+  updatedBy String?  @map("updated_by")
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("card_approval_settings")
+  @@schema("cemetery")
+}
+
+/**
+ * HỒ SƠ TRÌNH DUYỆT CẤP THẺ MỘ — lát 1, anh Bách chốt 05/09/2026.
+ *
+ * KHÔNG append-only, khác `GraveCardFeeCharge` ngay trên: đây là MÁY TRẠNG THÁI, duyệt là
+ * UPDATE dòng đang chờ. Gắn `cemetery.prevent_mutation()` vào đây là khoá chết tính năng.
+ * Dấu vết đi qua `audit.audit_events` — bảng ĐÓ mới append-only.
+ *
+ * `state` dùng ĐÚNG 8 tên của `03-APPROVAL-ENGINE.md` để ngày lên engine chung không phải dịch
+ * lại; lát 1 chỉ CÀI 5. "Đã tiêu" KHÔNG phải một trạng thái mà là cột
+ * `consumedCardPrintLogId`, và luật "một phê duyệt tiêu đúng MỘT lần cấp" ép bằng partial
+ * unique index viết tay ở migration.
+ *
+ * `approverUserId` CHỤP NGƯỜI, không chụp ghế (anh Bách chốt điều 8): đổi người ký mặc định
+ * KHÔNG kéo hồ sơ đang chờ sang người mới — ai gửi phải gửi lại.
+ *
+ * `quoteSnapshot` + `contentHash` là ẢNH CHỤP bản báo giá lúc GỬI. Cố ý ghi lặp dù suy ra
+ * được: biểu phí hiệu lực theo NGÀY và bậc giá đọc trạng thái bảng phí, nên tính lại lúc cấp
+ * có thể ra số KHÁC số người ký đã gật — và lúc đó khách đúng, hệ sai.
+ */
+model CardIssueApproval {
+  id String @id
+
+  /// Vỏ theo từ vựng approval engine, để phần vỏ chuyển thẳng sang `workflow.approval_instances`.
+  requestType String @default("CEMETERY_CARD_ISSUE") @map("request_type")
+  state       String @default("SUBMITTED")
+
+  companyId  String @map("company_id")
+  /// Trục ĐỊNH TUYẾN: ai quản lý nghĩa trang nào thì người đó duyệt.
+  cemeteryId String @map("cemetery_id")
+  customerId String @map("customer_id")
+
+  plotIdsSnapshot String[] @map("plot_ids_snapshot")
+  quoteSnapshot   Json     @map("quote_snapshot")
+  quoteTotal      Decimal  @map("quote_total") @db.Decimal(14, 0) // VND, TRƯỚC khi xét miễn
+  contentHash     String   @map("content_hash")
+
+  waiveRequested Boolean @default(false) @map("waive_requested")
+  waiveReason    String? @map("waive_reason")
+
+  approverUserId   String @map("approver_user_id")
+  approverSignerId String @map("approver_signer_id")
+
+  submittedBy  String    @map("submitted_by")
+  submittedAt  DateTime  @default(now()) @map("submitted_at") @db.Timestamptz(6)
+  decidedBy    String?   @map("decided_by")
+  decidedAt    DateTime? @map("decided_at") @db.Timestamptz(6)
+  decisionNote String?   @map("decision_note")
+  /// Đặt lúc DUYỆT, không phải lúc gửi: thứ hết hạn là bản báo giá đã được gật.
+  expiresAt    DateTime? @map("expires_at") @db.Timestamptz(6)
+
+  consumedCardPrintLogId String?   @map("consumed_card_print_log_id")
+  consumedAt             DateTime? @map("consumed_at") @db.Timestamptz(6)
+
+  @@index([approverUserId, state])
+  @@index([customerId, submittedAt])
+  @@index([companyId, submittedAt])
+  @@map("card_issue_approvals")
+  @@schema("cemetery")
+}
+
 // M5: grave-care services. A5 = no A/R: each subscription/renewal is paid in full at
 // creation and recorded as a service_transaction (= revenue).
 model ServiceCatalog {

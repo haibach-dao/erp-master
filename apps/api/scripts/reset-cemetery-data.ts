@@ -38,6 +38,11 @@ const pii = new PiiService(new ConfigService());
 /* Thứ tự xoá đi từ CON tới CHA. Sai thứ tự là va khoá ngoại và dừng giữa chừng, để lại
  * một nửa dữ liệu — tệ hơn cả không xoá. */
 const DELETE_ORDER = [
+  /* Hồ sơ trình duyệt cấp thẻ — XOÁ TRƯỚC `card_print_logs`.
+   * Cột `consumed_card_print_log_id` trỏ sang bảng đó (cột trần, không khoá ngoại), nên xoá
+   * sau sẽ để lại con trỏ treo. Bảng này KHÔNG append-only nên `deleteMany` chạy được — khác
+   * hai bảng phí, và đó là lý do nó nằm được ở đây. */
+  ['card_issue_approvals', () => prisma.cardIssueApproval.deleteMany()],
   ['burial_records', () => prisma.burialRecord.deleteMany()],
   ['card_print_logs', () => prisma.cardPrintLog.deleteMany()],
   ['service_transactions', () => prisma.serviceTransaction.deleteMany()],

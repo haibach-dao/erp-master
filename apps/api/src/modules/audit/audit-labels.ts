@@ -33,6 +33,8 @@ const ENTITY_TYPE_LABEL: Record<string, string> = {
   family_relationship: 'Quan hệ nhân thân',
   card_print_log: 'Thẻ quản lý mộ',
   card_signer: 'Người ký thẻ mộ',
+  card_issue_approval: 'Hồ sơ xin cấp thẻ mộ',
+  card_approval_setting: 'Cấu hình duyệt cấp thẻ',
   file: 'Tệp',
   file_object: 'Tệp',
   access_rule: 'Luật truy cập',

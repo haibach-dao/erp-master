@@ -160,6 +160,26 @@ export const PERMISSION_CATALOG: readonly PermissionDef[] = [
    * qua thẻ đều thành một lần cấp — đúng lỗi hệ cũ mắc phải. */
   p('cemetery.card.view', 'S2', 'Xem trước thẻ quản lý mộ (không cấp số)'),
   p('cemetery.card.print', 'S3', 'Cấp/in thẻ quản lý mộ — tăng số lần cấp, ghi nhật ký'),
+  /* CỬA PHÊ DUYỆT IN THẺ, thêm 05/09/2026. Mô tả phải TRÙNG KHÍT migration
+   * `20260907090500_card_approval_permissions`, nếu không lần `db:seed` sau UPDATE đè lại và
+   * sinh ra một cặp giá trị nhấp nháy không ai giải thích được.
+   *
+   * KHÔNG dùng lại `authz.change.submit` / `authz.change.approve`: cả hai đã deprecated từ
+   * 28/08/2026, không route nào gọi và không vai nào cầm. Dựng một tính năng đang sống lên hai
+   * mã đã khai tử là mời người sau xoá chúng đi cùng đợt dọn dẹp.
+   *
+   * `submit` là S2 chứ không S3: gửi một hồ sơ đi duyệt KHÔNG tự nó gây hậu quả nào — hậu quả
+   * nằm ở `approve` và `print`. Đánh S3 cho một động tác vô hại là làm loãng chính nhãn S3.
+   *
+   * KHÔNG khai cặp tách nhiệm vụ `submit × approve`, và đây là quyết định CÓ CÂN NHẮC:
+   * `QL_NGHIA_TRANG` đang cầm `cemetery.card.print` (đo 07/09/2026), nên nếu khai cặp đó thì
+   * chính người ký sẽ vi phạm — và cách duy nhất để xanh là tước quyền cấp thẻ của quản lý
+   * nghĩa trang, tức bắt một nghĩa trang nhỏ phải có hai người mới in nổi một tờ thẻ. Luật
+   * "không tự duyệt" vì thế ép ở MỨC BẢN GHI (`card_issue_approvals_no_self_approve_check`),
+   * đúng chỗ nó thuộc về: cấm một NGƯỜI duyệt hồ sơ của chính mình, không cấm một VAI làm cả
+   * hai việc cho hai hồ sơ khác nhau. Xem chú thích ở `authz-invariants.spec.ts`. */
+  p('cemetery.card.submit', 'S2', 'Gửi hồ sơ xin cấp thẻ mộ đi duyệt'),
+  p('cemetery.card.approve', 'S3', 'Duyệt hồ sơ cấp thẻ mộ'),
   /* Biểu phí cấp thẻ (chốt 02/09/2026): cấp giấy lần đầu 200.000đ phẳng, mỗi lần in lại
    * 50.000đ × SỐ CỐT CỦA PHẦN MỘ.
    *
@@ -529,6 +549,8 @@ export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
     'cemetery.usage_right.view',
     'cemetery.card.view',
     'cemetery.card.print',
+    /* Quầy tiếp đón GỬI duyệt được, nhưng KHÔNG duyệt — ghế duyệt là quản lý nghĩa trang. */
+    'cemetery.card.submit',
     /* Vai này liệt kê tay chứ KHÔNG dùng gói `CEMETERY_READ_ALL`, nên mã đọc người ký phải
      * cấp riêng ở đây. Thiếu nó thì ô chọn người ký rỗng ngay tại quầy — chỗ dùng tính năng
      * này nhiều nhất. */
@@ -544,6 +566,11 @@ export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
 
   KD_KINH_DOANH: role('Kinh doanh', 'Giữ chỗ, soạn hợp đồng, bán dịch vụ', 'COMPANY', [
     ...CATALOG_READ,
+    /* GỬI duyệt cấp thẻ — vai anh Bách gọi đích danh trong yêu cầu gốc ("nhân viên kinh doanh
+     * thuộc công ty hoặc nhân viên kinh doanh tập đoàn muốn in thẻ mộ thì phải qua luồng phê
+     * duyệt"). Vai này CỐ Ý không có `cemetery.card.print`: họ đề nghị, người khác cấp. */
+    'cemetery.card.submit',
+    'cemetery.card.view',
     'cemetery.plot.search',
     'cemetery.price.view',
     'cemetery.hold.view',
@@ -686,6 +713,11 @@ export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
     'cemetery.usage_right.transfer',
     'cemetery.card.view',
     'cemetery.card.print',
+    /* Ghế DUYỆT. Cầm cả `submit` lẫn `approve` là CÓ Ý — xem chú thích ở danh mục: luật
+     * "không tự duyệt" ép ở mức BẢN GHI, không ở mức vai, vì tước `print`/`submit` của quản lý
+     * nghĩa trang là bắt một nghĩa trang nhỏ phải có hai người mới in nổi một tờ thẻ. */
+    'cemetery.card.submit',
+    'cemetery.card.approve',
     'cemetery.hold.release',
     'crm.customer.search',
     'crm.customer.view', // đọc dẫn xuất cho search

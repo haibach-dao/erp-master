@@ -102,6 +102,43 @@ export class IssueCardDto extends WaiveFields {
  * chức danh lấy trong danh sách nhân viên". Hai thứ đó được CHÉP từ hồ sơ tài khoản trong
  * service. Còn nhận chuỗi ở đây thì luật mới chỉ là một gợi ý của giao diện: một lời gọi
  * API thẳng vẫn gõ được tên bất kỳ, kể cả tên người không làm ở công ty. */
+/* GỬI hồ sơ xin cấp thẻ đi duyệt.
+ *
+ * Kế thừa `WaiveFields` để cờ miễn phí đi CÙNG hồ sơ: người ký phải gật CẢ số tiền lẫn việc
+ * miễn hay không. Tách ra thì người gửi xin duyệt một hồ sơ thu đủ tiền rồi cấp ra một tờ thẻ
+ * miễn phí — vân tay nội dung chặn được, nhưng chặn bằng một câu lỗi thay vì bằng thiết kế. */
+export class SubmitCardApprovalDto extends WaiveFields {
+  @ApiProperty({ description: 'Người ký sẽ duyệt hồ sơ này — chọn từ danh mục người ký' })
+  @IsString()
+  @MaxLength(40)
+  approverSignerId!: string;
+}
+
+/** Quyết định của người ký. `note` bắt buộc khi TỪ CHỐI hoặc TRẢ LẠI. */
+export class DecideCardApprovalDto {
+  @ApiProperty({ enum: ['APPROVED', 'REJECTED', 'RETURNED'] })
+  @IsIn(['APPROVED', 'REJECTED', 'RETURNED'])
+  decision!: 'APPROVED' | 'REJECTED' | 'RETURNED';
+
+  @ApiPropertyOptional({ description: 'Lý do — BẮT BUỘC khi từ chối hoặc trả lại' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  note?: string;
+}
+
+/** Bật/tắt cửa phê duyệt cho MỘT công ty. */
+export class SetCardApprovalRequiredDto {
+  @ApiProperty()
+  @IsString()
+  @MaxLength(40)
+  companyId!: string;
+
+  @ApiProperty({ description: 'true = công ty này bắt buộc duyệt trước khi cấp thẻ' })
+  @IsBoolean()
+  required!: boolean;
+}
+
 export class CreateCardSignerDto {
   @ApiProperty({ description: 'Tài khoản nhân viên sẽ ký — phải đang giữ vai QL_NGHIA_TRANG' })
   @IsString()
