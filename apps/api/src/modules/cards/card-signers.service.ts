@@ -51,21 +51,23 @@ export class CardSignersService {
    * lặng lẽ đảo, không có gì đỏ. Người mặc định lên đầu, còn lại theo tên.
    */
   async list(caller: Caller, cemeteryId?: string) {
-    /* Bó theo TỪNG MÃ QUYỀN, không theo mức rộng nhất của người gọi — `caller.permission` do
-     * `PermissionGuard` đặt, controller không gõ tay. */
-    if (cemeteryId !== undefined) {
-      await this.scope.assertSiteFor(caller.userId, caller.permission, cemeteryId);
-    }
-    const visibleSites = await this.scope.listSiteFilterFor(caller.userId, caller.permission);
-
     const where: Prisma.CardSignerWhereInput = {};
+
     if (cemeteryId !== undefined) {
+      await this.assertSiteInScope(caller, cemeteryId);
       where.cemeteryId = cemeteryId;
-    } else if (visibleSites !== null) {
-      /* Người ở mức SITE chỉ thấy người ký của nghĩa trang mình phủ. Dòng CŨ (`cemeteryId`
-       * NULL, đã `Retired` bởi migration 05/09) không thuộc nghĩa trang nào nên KHÔNG lọt
-       * vào đây — đúng: nó là rác lịch sử, giữ để tra chứ không phải để chọn. */
-      where.cemeteryId = { in: visibleSites };
+    } else {
+      const allowed = await this.visibleCemeteryIds(caller);
+      /* `null` = không bó (chỉ mức GROUP). Mọi mức khác đều ra MỘT DANH SÁCH, kể cả danh
+       * sách RỖNG — và rỗng phải thành `in: []`, tức không thấy gì. Để nó rơi về "không bó"
+       * là fail-open: một vai mức COMPANY chưa gắn công ty nào sẽ thấy TOÀN BỘ người ký của
+       * mọi công ty. Đây đúng cái bẫy `revealNationalId` đã gặp 27/08 — "chỉ kiểm khi khác
+       * null" nghe như thận trọng nhưng là mở cửa. */
+      if (allowed !== null) {
+        where.cemeteryId = { in: allowed };
+      }
+      /* Dòng CŨ (`cemeteryId` NULL, đã `Retired` bởi migration 05/09) không thuộc nghĩa trang
+       * nào nên KHÔNG lọt vào bộ lọc — đúng: nó là rác lịch sử, giữ để tra chứ không để chọn. */
     }
 
     const rows = await this.prisma.cardSigner.findMany({
@@ -85,12 +87,7 @@ export class CardSignersService {
   }
 
   async create(dto: CreateCardSignerDto, caller: Caller) {
-    await this.scope.assertSiteFor(caller.userId, caller.permission, dto.cemeteryId);
-
-    const cemetery = await this.prisma.cemetery.findUnique({ where: { id: dto.cemeteryId } });
-    if (cemetery === null) {
-      throw new NotFoundException('Không tìm thấy nghĩa trang này');
-    }
+    const cemetery = await this.assertSiteInScope(caller, dto.cemeteryId);
 
     const user = await this.prisma.user.findUnique({ where: { id: dto.userId } });
     if (user === null) {
@@ -153,8 +150,12 @@ export class CardSignersService {
     }
     /* Bó phạm vi NGAY SAU phép tìm bản ghi và TRƯỚC mọi phép kiểm trạng thái — cùng thứ tự
      * đã dựng cho `contracts.verify` 27/08/2026. Kiểm trạng thái trước thì câu lỗi đã kể cho
-     * người ngoài phạm vi biết dòng này tồn tại và đang ở trạng thái nào. */
-    await this.scope.assertSiteFor(caller.userId, caller.permission, before.cemeteryId);
+     * người ngoài phạm vi biết dòng này tồn tại và đang ở trạng thái nào.
+     *
+     * `before.cemeteryId` có thể NULL (dòng cũ trước migration 05/09). Cứ để nó đi qua
+     * `assertCompanyFor(null)`: mức GROUP qua được, mọi mức khác nhận "Phải chỉ rõ công ty".
+     * Đóng kín, và đúng ý — dòng ấy không thuộc công ty nào nên không ai dưới GROUP được sửa. */
+    await this.assertRowInScope(caller, before.cemeteryId);
 
     const data: Prisma.CardSignerUpdateInput = {};
     if (dto.status !== undefined) data.status = dto.status;
@@ -217,6 +218,62 @@ export class CardSignersService {
       afterData: updated,
     });
     return updated;
+  }
+
+  /* BÓ CẢ HAI TRỤC — công ty TRƯỚC, rồi nghĩa trang. Trả luôn bản ghi nghĩa trang để chỗ gọi
+   * khỏi tra lại.
+   *
+   * `assertSiteFor` MỘT MÌNH KHÔNG ĐỦ, và đây là chỗ tôi đã làm sai ở bản đầu của lát này:
+   * `ScopeService.checkSite` THOÁT NGAY khi mức là GROUP *hoặc COMPANY*, kèm chú thích nói
+   * thẳng "that company check is a separate call the caller already makes" — mà tôi không hề
+   * gọi cái call đó. Hệ quả đo được: một tài khoản mức COMPANY của công ty A cầm
+   * `cemetery.card_signer.view` (CSKH_TIEP_DON, KD_KINH_DOANH đều có qua gói đọc) đọc được
+   * danh mục người ký của công ty B, và bỏ hẳn tham số `cemeteryId` thì đọc được TOÀN HỆ.
+   *
+   * Bảng `card_signers` không có cột công ty, nên trục công ty QUY qua `Cemetery.companyId` —
+   * cùng lối `BurialsService` quy phạm vi qua `GravePlot`.
+   *
+   * Thứ tự CÔNG TY trước NGHĨA TRANG là cố ý: câu từ chối ở mức công ty ("công ty này không
+   * thuộc quyền của bạn") không tiết lộ nghĩa trang đó có tồn tại hay không. */
+  private async assertSiteInScope(caller: Caller, cemeteryId: string) {
+    const cemetery = await this.prisma.cemetery.findUnique({ where: { id: cemeteryId } });
+    if (cemetery === null) {
+      throw new NotFoundException('Không tìm thấy nghĩa trang này');
+    }
+    await this.scope.assertCompanyFor(caller.userId, caller.permission, cemetery.companyId);
+    await this.scope.assertSiteFor(caller.userId, caller.permission, cemeteryId);
+    return cemetery;
+  }
+
+  /** Như trên nhưng cho một dòng đã có, `cemeteryId` có thể NULL (dòng trước migration 05/09). */
+  private async assertRowInScope(caller: Caller, cemeteryId: string | null) {
+    if (cemeteryId === null) {
+      await this.scope.assertCompanyFor(caller.userId, caller.permission, null);
+      return;
+    }
+    await this.assertSiteInScope(caller, cemeteryId);
+  }
+
+  /* Tập nghĩa trang người gọi được thấy — GIAO của hai trục. `null` = không bó (chỉ GROUP).
+   *
+   * Mức COMPANY: `listSiteFilterFor` trả `null` (nó chỉ bó khi mức là SITE), nên nếu chỉ hỏi
+   * nó thì người mức COMPANY không bị bó gì cả. Phải quy tập công ty ra tập nghĩa trang rồi
+   * mới giao. Mức SITE mà cũng có ràng buộc công ty thì giao cả hai — hẹp hơn, đúng luật
+   * "quyền hiệu dụng là GIAO của hai trục, không bao giờ là tổng". */
+  private async visibleCemeteryIds(caller: Caller): Promise<string[] | null> {
+    const [sites, companies] = await Promise.all([
+      this.scope.listSiteFilterFor(caller.userId, caller.permission),
+      this.scope.visibleCompanyIdsFor(caller.userId, caller.permission),
+    ]);
+    if (companies === null) {
+      return sites;
+    }
+    const rows = await this.prisma.cemetery.findMany({
+      where: { companyId: { in: companies } },
+      select: { id: true },
+    });
+    const byCompany = rows.map((r) => r.id);
+    return sites === null ? byCompany : byCompany.filter((id) => sites.includes(id));
   }
 
   /* "Người này có đang quản lý nghĩa trang kia không?" — GIAO của hai trục, không phải tổng.

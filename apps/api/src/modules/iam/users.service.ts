@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 
@@ -64,6 +64,39 @@ export class UsersService {
       select: { id: true, email: true, fullName: true, title: true, status: true },
       orderBy: [{ fullName: 'asc' }, { email: 'asc' }],
       take: MAX_ROWS,
+    });
+  }
+
+  /* ĐIỀN HỌ TÊN và CHỨC DANH cho một tài khoản.
+   *
+   * Đây là đường GHI duy nhất cho hai cột đó, và nó BẮT BUỘC phải tồn tại: migration 05/09
+   * thêm hai cột ở dạng NULL và không backfill được (không ai biết tên thật của những tài
+   * khoản đã có), trong khi `CardSignersService.create` TỪ CHỐI người chưa đủ hai thứ đó với
+   * câu "phải điền vào hồ sơ nhân viên trước". Không có route này thì câu ấy chỉ người ta
+   * tới một màn hình không tồn tại, và danh mục người ký KHÔNG THÊM ĐƯỢC AI trên một hệ chưa
+   * seed — tức là cả tính năng đứng im mà không có gì báo.
+   *
+   * KHÔNG đụng `email`, `passwordHash`, `status`, `mfaEnabled`: đổi email là đổi danh tính
+   * đăng nhập, đổi status là khoá/mở tài khoản. Hai việc đó nặng hơn hẳn "sửa tên hiển thị"
+   * và phải có đường riêng, có phép kiểm riêng — gộp vào đây là cho người giữ danh mục thẻ
+   * mộ khoá được tài khoản người khác.
+   *
+   * Trả về ĐÚNG bộ trường như `list`, không trả cả bản ghi: `passwordHash` không được rời
+   * khỏi CSDL, kể cả trong một object mà chỗ gọi "chắc chắn không log".
+   */
+  async update(id: string, dto: { fullName?: string; title?: string }) {
+    const before = await this.prisma.user.findUnique({ where: { id } });
+    if (before === null) {
+      throw new NotFoundException('Không tìm thấy tài khoản này');
+    }
+    const data: { fullName?: string; title?: string } = {};
+    if (dto.fullName !== undefined) data.fullName = dto.fullName.trim();
+    if (dto.title !== undefined) data.title = dto.title.trim();
+
+    return this.prisma.user.update({
+      where: { id },
+      data,
+      select: { id: true, email: true, fullName: true, title: true, status: true },
     });
   }
 }

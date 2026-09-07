@@ -50,8 +50,12 @@ type BuildOpts = {
   holdsRole?: boolean;
   /** Người này có được phân công nghĩa trang đang xét không. */
   coversSite?: boolean;
-  /** `listSiteFilterFor` trả về gì — `null` nghĩa là không bị bó. */
+  /** `listSiteFilterFor` trả về gì — `null` nghĩa là không bị bó theo nghĩa trang. */
   siteFilter?: string[] | null;
+  /** `visibleCompanyIdsFor` trả về gì — `null` nghĩa là mức GROUP, không bó theo công ty. */
+  companyFilter?: string[] | null;
+  /** Nghĩa trang thuộc các công ty người gọi thấy được (dùng cho phép giao hai trục). */
+  cemeteriesOfCompanies?: { id: string }[];
 };
 
 function signerDelegate(opts: BuildOpts): SignerDelegate {
@@ -88,7 +92,10 @@ function build(opts: BuildOpts = {}) {
 
   const prisma = {
     cardSigner: signerDelegate(opts),
-    cemetery: { findUnique: vi.fn().mockResolvedValue({ id: CEM, name: 'An Lạc Viên' }) },
+    cemetery: {
+      findUnique: vi.fn().mockResolvedValue({ id: CEM, name: 'An Lạc Viên', companyId: 'cty-A' }),
+      findMany: vi.fn().mockResolvedValue(opts.cemeteriesOfCompanies ?? [{ id: CEM }]),
+    },
     user: {
       findUnique: vi
         .fn()
@@ -113,14 +120,32 @@ function build(opts: BuildOpts = {}) {
   };
 
   const assertSiteFor = vi.fn().mockResolvedValue(undefined);
+  const assertCompanyFor = vi.fn().mockResolvedValue(undefined);
   const listSiteFilterFor = vi
     .fn()
     .mockResolvedValue(opts.siteFilter === undefined ? null : opts.siteFilter);
-  const scope = { assertSiteFor, listSiteFilterFor } as unknown as ScopeService;
+  const visibleCompanyIdsFor = vi
+    .fn()
+    .mockResolvedValue(opts.companyFilter === undefined ? null : opts.companyFilter);
+  const scope = {
+    assertSiteFor,
+    assertCompanyFor,
+    listSiteFilterFor,
+    visibleCompanyIdsFor,
+  } as unknown as ScopeService;
 
   const record = vi.fn().mockResolvedValue(undefined);
   const svc = new CardSignersService(prisma, { record } as unknown as AuditService, scope);
-  return { svc, prisma, tx, record, assertSiteFor, listSiteFilterFor };
+  return {
+    svc,
+    prisma,
+    tx,
+    record,
+    assertSiteFor,
+    assertCompanyFor,
+    listSiteFilterFor,
+    visibleCompanyIdsFor,
+  };
 }
 
 /* Bảng có HAI unique index, cả hai cùng ra P2002, và service chỉ phân biệt được nhờ
@@ -228,6 +253,53 @@ describe('danh mục người ký thẻ mộ', () => {
     expect(assertSiteFor).toHaveBeenCalledWith(CALLER.userId, CALLER.permission, CEM);
   });
 
+  /* CA BẮT LỖI SỐ 1 — đường mà bản đầu của lát này để hở.
+   *
+   * `ScopeService.checkSite` THOÁT NGAY khi mức là GROUP *hoặc COMPANY*, kèm chú thích nói
+   * thẳng "that company check is a separate call the caller already makes". Chỉ gọi
+   * `assertSiteFor` thì một tài khoản mức COMPANY của công ty A đọc/ghi được danh mục người
+   * ký của công ty B — `assertSiteFor` không chặn một câu nào. Ca này canh CHÍNH lời gọi
+   * còn thiếu đó, ở cả ba đường. */
+  it('bó CẢ TRỤC CÔNG TY, không chỉ nghĩa trang — assertSiteFor một mình KHÔNG chặn mức COMPANY', async () => {
+    const { svc, assertCompanyFor } = build();
+
+    await svc.create(NEW_SIGNER, CALLER);
+    expect(assertCompanyFor).toHaveBeenCalledWith(CALLER.userId, CALLER.permission, 'cty-A');
+
+    assertCompanyFor.mockClear();
+    await svc.list(CALLER, CEM);
+    expect(assertCompanyFor).toHaveBeenCalledWith(CALLER.userId, CALLER.permission, 'cty-A');
+
+    assertCompanyFor.mockClear();
+    await svc.update('s1', { isDefault: true }, CALLER);
+    expect(assertCompanyFor).toHaveBeenCalledWith(CALLER.userId, CALLER.permission, 'cty-A');
+  });
+
+  /* CA BẮT LỖI SỐ 2 — fail-open khi danh sách RỖNG.
+   *
+   * Người mức COMPANY chưa được gắn công ty nào thì `visibleCompanyIdsFor` trả `[]`. Viết
+   * `if (allowed.length > 0)` hay `if (allowed?.length)` là biến "không thấy gì" thành
+   * "không bó gì" — và người đó đọc được TOÀN BỘ người ký của mọi công ty. Đúng lớp bẫy
+   * `revealNationalId` gặp 27/08: "chỉ kiểm khi khác null" nghe thận trọng nhưng là mở cửa. */
+  it('mức COMPANY chưa gắn công ty nào thì thấy RỖNG, không phải thấy TẤT CẢ', async () => {
+    const { svc, prisma } = build({ companyFilter: [], cemeteriesOfCompanies: [] });
+    await svc.list({ userId: 'u9', permission: 'cemetery.card_signer.view' });
+    const arg = prisma.cardSigner.findMany.mock.calls[0]?.[0] as { where: Record<string, unknown> };
+    expect(arg.where.cemeteryId).toEqual({ in: [] });
+  });
+
+  /* Mức COMPANY có công ty: phải quy tập công ty ra tập NGHĨA TRANG rồi mới lọc.
+   * `listSiteFilterFor` trả `null` cho mọi mức không phải SITE, nên chỉ hỏi nó là không bó gì. */
+  it('mức COMPANY lọc theo nghĩa trang CỦA CÁC CÔNG TY mình thấy', async () => {
+    const { svc, prisma } = build({
+      companyFilter: ['cty-A'],
+      cemeteriesOfCompanies: [{ id: 'cem-1' }, { id: 'cem-2' }],
+    });
+    await svc.list({ userId: 'u9', permission: 'cemetery.card_signer.view' });
+    const arg = prisma.cardSigner.findMany.mock.calls[0]?.[0] as { where: Record<string, unknown> };
+    expect(arg.where.cemeteryId).toEqual({ in: ['cem-1', 'cem-2'] });
+  });
+
   /* Bó phạm vi phải đứng NGAY SAU phép tìm bản ghi và TRƯỚC mọi phép kiểm trạng thái — cùng
    * thứ tự đã dựng cho `contracts.verify` 27/08/2026. Kiểm trạng thái trước thì câu lỗi 400
    * đã kể cho người ngoài phạm vi biết dòng này tồn tại và đang ở trạng thái nào. */
@@ -242,7 +314,7 @@ describe('danh mục người ký thẻ mộ', () => {
   });
 
   it('người ở mức SITE chỉ thấy người ký của nghĩa trang mình phủ', async () => {
-    const { svc, prisma } = build({ siteFilter: ['cem-1', 'cem-2'] });
+    const { svc, prisma } = build({ siteFilter: ['cem-1', 'cem-2'], companyFilter: null });
     await svc.list({ userId: 'u9', permission: 'cemetery.card_signer.view' });
     const arg = prisma.cardSigner.findMany.mock.calls[0]?.[0] as { where: Record<string, unknown> };
     expect(arg.where.cemeteryId).toEqual({ in: ['cem-1', 'cem-2'] });

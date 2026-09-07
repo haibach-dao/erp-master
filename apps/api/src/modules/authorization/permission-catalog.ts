@@ -900,6 +900,20 @@ export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
        * mà `authz-invariants` canh: ai vừa mở được thẻ mới vừa gắn được thì tự định đoạt
        * trọn vẹn cái nhãn dán lên một con người. */
       'config.card_signer.update',
+      /* HAI mã `iam.user.*` thêm 05/09/2026, và chúng là ĐIỀU KIỆN ĐỦ để mã ngay trên dùng
+       * được — không phải nới quyền cho vui.
+       *
+       * Từ 05/09 người ký BẮT BUỘC chọn từ danh bạ nhân viên, mà danh bạ gate bằng
+       * `iam.user.view`; và họ tên + chức danh in lên thẻ chỉ điền được qua `iam.user.update`.
+       * Thiếu hai mã này thì QT_NGHIEP_VU — ghế DUY NHẤT ngoài ADMIN giữ
+       * `config.card_signer.update` — mở màn hình ra thấy ô chọn rỗng và một câu 403, tức là
+       * một ghế quản trị CHẾT CÂM. Cấp `config.card_signer.update` mà không cấp hai mã này là
+       * cấp một cái nút không bấm được.
+       *
+       * KHÔNG cấp `iam.user.create`: mở tài khoản là việc của quản trị hệ thống, không phải
+       * của người giữ danh mục. Sửa tên và chức danh của người đã có tài khoản thì có. */
+      'iam.user.view',
+      'iam.user.update',
       'config.plot_tag.update',
       'config.customer_tag.update',
       'notification.template.view',

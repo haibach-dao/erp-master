@@ -34,6 +34,8 @@ const NO_RECORD_SCOPE: Readonly<Record<string, string>> = {
    * chọn nhanh, không phải rào bảo mật — chúng do người gọi tự đặt. */
   'modules/iam/users.controller.ts:list':
     'Danh bạ nhân viên — dữ liệu toàn hệ, `iam.users` không có `companyId` lẫn `cemeteryId`.',
+  'modules/iam/users.controller.ts:update':
+    'Sửa họ tên/chức danh của một tài khoản — cùng bảng toàn hệ, không có trục phạm vi nào để bó. Rào là `iam.user.update` (S3), và DTO chỉ nhận đúng hai trường hiển thị.',
   /* Danh mục THẺ NHÃN — cùng loại với danh mục vai ngay trên: bảng `tags` KHÔNG có
    * `companyId` (anh Bách chốt 03/09/2026 một danh mục dùng chung, không chia theo công
    * ty), nên không có bản ghi đích nào để bó. Rào ở đây là MÃ QUYỀN `config.*_tag.update`

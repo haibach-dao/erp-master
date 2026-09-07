@@ -1,9 +1,26 @@
-import { Controller, Get, Query, UseGuards } from '@nestjs/common';
-import { ApiBearerAuth, ApiQuery, ApiTags } from '@nestjs/swagger';
+import { Body, Controller, Get, Param, Patch, Query, UseGuards } from '@nestjs/common';
+import { IsOptional, IsString, MaxLength } from 'class-validator';
+import { ApiBearerAuth, ApiPropertyOptional, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { PermissionGuard } from '../authorization/permission.guard';
 import { RequirePermission } from '../authorization/require-permission.decorator';
 import { UsersService } from './users.service';
+
+/* CHỈ hai trường. Xem chú thích ở `UsersService.update` — email/status/mật khẩu cố ý không
+ * nhận ở đây, vì chúng nặng hơn hẳn "sửa tên hiển thị". */
+export class UpdateUserProfileDto {
+  @ApiPropertyOptional({ description: 'Họ và tên, in lên tờ thẻ mộ nếu người này là người ký' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  fullName?: string;
+
+  @ApiPropertyOptional({ description: 'Chức danh hành chính, ví dụ PHÓ GIÁM ĐỐC' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  title?: string;
+}
 
 /* DANH BẠ NHÂN VIÊN — mở 05/09/2026 cùng luật "người ký thẻ mộ là người quản lý nghĩa trang".
  *
@@ -41,5 +58,17 @@ export class UsersController {
   })
   list(@Query('roleCode') roleCode?: string, @Query('cemeteryId') cemeteryId?: string) {
     return this.svc.list({ roleCode, cemeteryId });
+  }
+
+  /* GHI họ tên + chức danh. Mã `iam.user.update` (S3) cũng ĐÃ CÓ sẵn trong danh mục mà chưa
+   * route nào tiêu thụ, nên route này KHÔNG cần migration danh mục quyền — giống hệt đường
+   * đọc ngay trên.
+   *
+   * Cùng lý do `NO_RECORD_SCOPE` như `list`: `iam.users` không có `companyId` lẫn
+   * `cemeteryId`. Rào là mã quyền S3, không phải phạm vi. */
+  @Patch(':id')
+  @RequirePermission('iam.user.update')
+  update(@Param('id') id: string, @Body() dto: UpdateUserProfileDto) {
+    return this.svc.update(id, dto);
   }
 }
