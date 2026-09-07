@@ -127,3 +127,11 @@ export function stillValid(now: Date = new Date()) {
 
 /** Mục con của hồ sơ nhân thân còn dùng (số điện thoại, địa chỉ, học vấn, tài khoản). */
 export const activeSubRecord = { status: 'active' } as const;
+
+/* NGƯỜI KÝ THẺ MỘ đang dùng.
+ *
+ * `Retired` = ngừng dùng, KHÔNG xoá — thẻ đã cấp năm ngoái vẫn phải đọc ra được tên người
+ * đã ký nó. Nên mọi câu hỏi "ai ký được cho nghĩa trang này hôm nay" đều phải lọc, còn màn
+ * hình danh mục thì cố ý KHÔNG lọc (quản trị cần thấy cả người đã ngừng).
+ */
+export const activeCardSigner = { status: 'Active' } as const;

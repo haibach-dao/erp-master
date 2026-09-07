@@ -16,9 +16,9 @@
  *
  * Có ca `nhận` chứ không chỉ ca `chặn`, và đó là phần quan trọng nhất: một index chặn được thứ
  * phải chặn nhưng cũng chặn luôn thứ phải cho qua là một index đã hỏng theo chiều khó thấy hơn.
- * Ca `card_signers`: hai người TRÙNG TÊN được phép tồn tại nếu một người đã ngừng dùng — đó
- * chính là mệnh đề `WHERE status = 'Active'`, và nếu ai đó bỏ mệnh đề ấy đi thì tên người đã
- * nghỉ không lưu lại được nữa, mà không phép kiểm nào khác thấy.
+ * Ca `card_signers`: MỘT người được làm mặc định ở HAI nghĩa trang cùng lúc — đó chính là ca
+ * thật của anh Bách (một người đang quản lý cả hai nghĩa trang), và nếu ai đó "sửa cho gọn"
+ * index mặc định về lại toàn hệ thì ca này đỏ, còn không gì khác trong repo thấy được.
  */
 import { PrismaClient } from '@prisma/client';
 import { loadDotEnv } from './_env';
@@ -48,49 +48,104 @@ interface Case {
   readonly expectError?: string;
 }
 
-const SIGNER = (id: string, name: string, title: string, isDefault: boolean, status: string) =>
-  `INSERT INTO cemetery.card_signers (id, full_name, title, is_default, status, updated_at)
-   VALUES ('${id}', '${name}', '${title}', ${String(isDefault)}, '${status}', now())`;
+/* `user_id` và `cemetery_id` thêm 05/09/2026 — người ký nay gắn vào tài khoản và nghĩa trang.
+ * Cả hai là cột TRẦN, không khoá ngoại (cùng nếp `role_assignments`), nên chuỗi bịa dùng được
+ * ở đây; đó cũng đúng là điều kiện để bộ thử này chạy được mà không phải seed gì. */
+const SIGNER = (o: {
+  id: string;
+  user?: string | null;
+  cem?: string | null;
+  name?: string;
+  title?: string;
+  isDefault?: boolean;
+  status?: string;
+}) => {
+  const sql = (v: string | null | undefined) => (v === null || v === undefined ? 'NULL' : `'${v}'`);
+  return `INSERT INTO cemetery.card_signers
+            (id, user_id, cemetery_id, full_name, title, is_default, status, updated_at)
+          VALUES ('${o.id}', ${sql(o.user)}, ${sql(o.cem)}, '${o.name ?? 'Nguoi A'}',
+                  '${o.title ?? 'GIAM DOC'}', ${String(o.isDefault ?? false)},
+                  '${o.status ?? 'Active'}', now())`;
+};
 
 const CASES: readonly Case[] = [
   {
-    name: 'card_signers · toàn hệ nhiều nhất MỘT người ký mặc định',
+    /* Bản 03/09 là "toàn hệ nhiều nhất MỘT người mặc định". Anh Bách chốt 05/09 người ký gắn
+     * theo nghĩa trang, nên câu hỏi đổi thành MỖI NGHĨA TRANG một người. Hai dòng dưới cố ý
+     * khác `user_id` để index `(cemetery_id, user_id)` không thể là thủ phạm — nếu không thì
+     * ca này vẫn xanh trong khi index mặc định đã hỏng. */
+    name: 'card_signers · MỖI NGHĨA TRANG nhiều nhất MỘT người ký mặc định',
     statements: [
-      SIGNER('smoke1', 'Nguoi A', 'GIAM DOC', true, 'Active'),
-      SIGNER('smoke2', 'Nguoi B', 'PHO GIAM DOC', true, 'Active'),
+      SIGNER({ id: 'smoke1', user: 'u1', cem: 'cemA', isDefault: true }),
+      SIGNER({ id: 'smoke2', user: 'u2', cem: 'cemA', isDefault: true, title: 'PHO GIAM DOC' }),
     ],
     expect: 'reject',
-    expectError: 'Key (is_default)',
+    expectError: 'Key (cemetery_id)',
+  },
+  {
+    /* Ca NHẬN quan trọng nhất của lát này, và là CA THẬT: anh Bách nói bên anh đang có một
+     * người đứng vị trí quản lý CẢ HAI nghĩa trang. Người đó phải làm mặc định được ở cả hai.
+     * Ai đó đổi index về `(is_default)` như bản cũ thì đúng ca này đỏ — và chỉ ca này. */
+    name: 'card_signers · MỘT người làm mặc định ở HAI nghĩa trang thì PHẢI cho qua',
+    statements: [
+      SIGNER({ id: 'smoke1', user: 'u1', cem: 'cemA', isDefault: true }),
+      SIGNER({ id: 'smoke2', user: 'u1', cem: 'cemB', isDefault: true }),
+    ],
+    expect: 'accept',
   },
   {
     name: 'card_signers · người đã NGỪNG DÙNG không được là mặc định',
-    statements: [SIGNER('smoke1', 'Nguoi A', 'GIAM DOC', true, 'Retired')],
+    statements: [
+      SIGNER({ id: 'smoke1', user: 'u1', cem: 'cemA', isDefault: true, status: 'Retired' }),
+    ],
     expect: 'reject',
     expectError: 'card_signers_default_active_check',
   },
   {
     name: 'card_signers · trạng thái là TẬP ĐÓNG (gõ thường không lọt)',
-    statements: [SIGNER('smoke1', 'Nguoi A', 'GIAM DOC', false, 'active')],
+    statements: [SIGNER({ id: 'smoke1', user: 'u1', cem: 'cemA', status: 'active' })],
     expect: 'reject',
     expectError: 'card_signers_status_check',
   },
   {
-    name: 'card_signers · hai người ĐANG DÙNG không được trùng cả tên lẫn chức danh',
+    /* Bản 03/09 chống hai dòng TRÙNG TÊN, vì tờ thẻ chỉ in tên + chức danh nên hai dòng như
+     * thế không phân biệt được. Nay danh tính là TÀI KHOẢN, trùng tên không còn là câu hỏi —
+     * thứ phải chống là MỘT NGƯỜI hai dòng ở CÙNG một nghĩa trang. */
+    name: 'card_signers · một người không được có hai dòng ĐANG DÙNG ở cùng nghĩa trang',
     statements: [
-      SIGNER('smoke1', 'Nguoi A', 'GIAM DOC', false, 'Active'),
-      SIGNER('smoke2', 'Nguoi A', 'GIAM DOC', false, 'Active'),
+      SIGNER({ id: 'smoke1', user: 'u1', cem: 'cemA' }),
+      SIGNER({ id: 'smoke2', user: 'u1', cem: 'cemA', title: 'PHO GIAM DOC' }),
     ],
     expect: 'reject',
-    expectError: 'Key (full_name, title)',
+    expectError: 'Key (cemetery_id, user_id)',
   },
   {
     /* Ca NHẬN — chứng minh index kia là index MỘT PHẦN chứ không phải index toàn phần. Bỏ mệnh
-     * đề `WHERE status = 'Active'` đi thì ca này đỏ, và không gì khác trong repo thấy được. */
-    name: 'card_signers · trùng tên với một người ĐÃ NGHỈ thì PHẢI cho qua',
+     * đề `WHERE status = 'Active'` đi thì ca này đỏ, và không gì khác trong repo thấy được:
+     * dòng đã ngừng dùng phải ở lại để tra tên đã in trên những tờ thẻ đã cấp. */
+    name: 'card_signers · thêm lại một người ĐÃ NGHỈ ở cùng nghĩa trang thì PHẢI cho qua',
     statements: [
-      SIGNER('smoke1', 'Nguoi A', 'GIAM DOC', false, 'Retired'),
-      SIGNER('smoke2', 'Nguoi A', 'GIAM DOC', false, 'Active'),
+      SIGNER({ id: 'smoke1', user: 'u1', cem: 'cemA', status: 'Retired' }),
+      SIGNER({ id: 'smoke2', user: 'u1', cem: 'cemA' }),
     ],
+    expect: 'accept',
+  },
+  {
+    /* Ràng buộc mới 05/09: người ký ĐANG DÙNG phải đủ cả tài khoản lẫn nghĩa trang. Không có
+     * nó thì một dòng `Active` trống hai cột vẫn vào được danh mục, và màn cấp thẻ sẽ mời
+     * người ta chọn một người ký không thuộc nghĩa trang nào. */
+    name: 'card_signers · dòng ĐANG DÙNG thiếu tài khoản hoặc nghĩa trang thì bị chặn',
+    statements: [SIGNER({ id: 'smoke1', user: 'u1', cem: null })],
+    expect: 'reject',
+    expectError: 'card_signers_active_needs_user_site',
+  },
+  {
+    /* Ca NHẬN, và là ca giữ cho MIGRATION 05/09 chạy được: dòng người ký có từ trước khi danh
+     * mục gắn vào tài khoản không có hai cột đó, và migration chuyển nó sang `Retired` chứ
+     * không xoá — thẻ đã cấp vẫn phải đọc ra tên người đã ký. Viết CHECK thành vô điều kiện
+     * thì migration chết giữa chừng trên CSDL đã có dữ liệu, mà local sạch thì không ai thấy. */
+    name: 'card_signers · dòng ĐÃ NGHỈ được phép thiếu tài khoản và nghĩa trang',
+    statements: [SIGNER({ id: 'smoke1', user: null, cem: null, status: 'Retired' })],
     expect: 'accept',
   },
 ];

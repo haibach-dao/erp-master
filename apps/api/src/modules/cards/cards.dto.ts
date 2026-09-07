@@ -98,36 +98,36 @@ export class IssueCardDto extends WaiveFields {
  * khi người ấy sau này đổi chức danh hoặc nghỉ. Danh mục này chỉ để CHỌN cho nhanh và cho
  * khỏi gõ sai, không phải để tra ngược.
  */
+/* KHÔNG nhận họ tên và chức danh dạng chuỗi nữa — anh Bách chốt 05/09/2026: "họ và tên và
+ * chức danh lấy trong danh sách nhân viên". Hai thứ đó được CHÉP từ hồ sơ tài khoản trong
+ * service. Còn nhận chuỗi ở đây thì luật mới chỉ là một gợi ý của giao diện: một lời gọi
+ * API thẳng vẫn gõ được tên bất kỳ, kể cả tên người không làm ở công ty. */
 export class CreateCardSignerDto {
-  @ApiProperty({ description: 'Họ và tên người ký' })
+  @ApiProperty({ description: 'Tài khoản nhân viên sẽ ký — phải đang giữ vai QL_NGHIA_TRANG' })
   @IsString()
-  @MaxLength(100)
-  fullName!: string;
+  @MaxLength(40)
+  userId!: string;
 
-  @ApiProperty({ description: 'Chức danh, ví dụ PHÓ GIÁM ĐỐC' })
+  @ApiProperty({ description: 'Nghĩa trang người này phụ trách' })
   @IsString()
-  @MaxLength(100)
-  title!: string;
+  @MaxLength(40)
+  cemeteryId!: string;
 
-  @ApiPropertyOptional({ description: 'Chọn sẵn ở màn hình cấp thẻ. Toàn hệ chỉ một người.' })
+  @ApiPropertyOptional({
+    description: 'Chọn sẵn ở màn hình cấp thẻ. Mỗi NGHĨA TRANG một người mặc định.',
+  })
   @IsOptional()
   @IsBoolean()
   isDefault?: boolean;
 }
 
+/* CHỈ đổi được trạng thái và cờ mặc định.
+ *
+ * Họ tên và chức danh KHÔNG sửa tại chỗ: chúng được chép từ hồ sơ nhân viên lúc tạo, và mở
+ * đường sửa ở đây là mở lại đúng cái ô gõ tay vừa đóng. Sai thì theo nếp copy-based — ngừng
+ * dùng dòng cũ, sửa hồ sơ nhân viên, thêm dòng mới. Dòng cũ phải ở lại để tra được tên đã
+ * in trên những tờ thẻ đã cấp. */
 export class UpdateCardSignerDto {
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  @MaxLength(100)
-  fullName?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  @MaxLength(100)
-  title?: string;
-
   @ApiPropertyOptional({ enum: ['Active', 'Retired'] })
   @IsOptional()
   @IsIn(['Active', 'Retired'])

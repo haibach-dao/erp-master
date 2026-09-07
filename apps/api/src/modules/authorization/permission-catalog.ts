@@ -377,7 +377,15 @@ export const PERMISSION_CATALOG: readonly PermissionDef[] = [
    * KHÔNG dùng lại `config.reference.update` ngay dưới: mã đó hiện chưa route nào dùng,
    * nhưng QT_NGHIEP_VU ĐANG CẦM `config.reference.view`. Gắn chức năng mới vào một mã đã
    * cấp là cho một vai thêm năng lực mà chưa ai duyệt lần nào. */
-  p('config.card_signer.update', 'S3', 'Quản trị danh mục người ký thẻ mộ (toàn hệ)'),
+  /* "(theo nghĩa trang)" chứ KHÔNG còn "(toàn hệ)" — anh Bách chốt 05/09/2026 người ký là
+   * người quản lý nghĩa trang, và `card_signers` có `cemetery_id` từ migration cùng ngày.
+   * Hai dòng `config.*_tag.update` ngay dưới VẪN là toàn hệ; đừng sửa theo cho đều.
+   *
+   * Mô tả là thứ người đi cấp quyền đọc trên màn hình ma trận, và `authz-catalog-check`
+   * KHÔNG so mô tả (chỉ so `sensitivity` + `wildcardExempt`) — nên một mô tả đã sai sẽ
+   * không có cổng nào bắt, và cứ thế mời người ta cấp nhầm. `db:seed` upsert cả mô tả nên
+   * sửa ở đây là đủ, không cần migration. */
+  p('config.card_signer.update', 'S3', 'Quản trị danh mục người ký thẻ mộ (theo nghĩa trang)'),
   p('config.plot_tag.update', 'S3', 'Quản trị danh mục thẻ nhãn phần mộ (toàn hệ)'),
   p('config.customer_tag.update', 'S3', 'Quản trị danh mục thẻ nhãn khách hàng (toàn hệ)'),
   p('config.reference.view', 'S3', 'Xem danh mục cấu hình'),
@@ -892,6 +900,20 @@ export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
        * mà `authz-invariants` canh: ai vừa mở được thẻ mới vừa gắn được thì tự định đoạt
        * trọn vẹn cái nhãn dán lên một con người. */
       'config.card_signer.update',
+      /* HAI mã `iam.user.*` thêm 05/09/2026, và chúng là ĐIỀU KIỆN ĐỦ để mã ngay trên dùng
+       * được — không phải nới quyền cho vui.
+       *
+       * Từ 05/09 người ký BẮT BUỘC chọn từ danh bạ nhân viên, mà danh bạ gate bằng
+       * `iam.user.view`; và họ tên + chức danh in lên thẻ chỉ điền được qua `iam.user.update`.
+       * Thiếu hai mã này thì QT_NGHIEP_VU — ghế DUY NHẤT ngoài ADMIN giữ
+       * `config.card_signer.update` — mở màn hình ra thấy ô chọn rỗng và một câu 403, tức là
+       * một ghế quản trị CHẾT CÂM. Cấp `config.card_signer.update` mà không cấp hai mã này là
+       * cấp một cái nút không bấm được.
+       *
+       * KHÔNG cấp `iam.user.create`: mở tài khoản là việc của quản trị hệ thống, không phải
+       * của người giữ danh mục. Sửa tên và chức danh của người đã có tài khoản thì có. */
+      'iam.user.view',
+      'iam.user.update',
       'config.plot_tag.update',
       'config.customer_tag.update',
       'notification.template.view',
