@@ -6,6 +6,7 @@ import { PermissionGuard } from '../authorization/permission.guard';
 import { RequirePermission } from '../authorization/require-permission.decorator';
 import { callerOf, type Caller } from '../authorization/caller';
 import { MaskUnless } from '../../common/masking/mask.decorator';
+import { CARD_FEE_MASK_RULES } from './card-fee-mask';
 import { CardsService } from './cards.service';
 import { IssueCardDto } from './cards.dto';
 
@@ -24,9 +25,7 @@ import { IssueCardDto } from './cards.dto';
 @ApiTags('grave-cards')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, PermissionGuard)
-@MaskUnless({ field: 'totalAmount', permission: 'cemetery.card_fee.view' })
-@MaskUnless({ field: 'feeAmount', permission: 'cemetery.card_fee.view' })
-@MaskUnless({ field: 'unitPrice', permission: 'cemetery.card_fee.view' })
+@MaskUnless(...CARD_FEE_MASK_RULES)
 @Controller('cemetery/cards')
 export class CardsController {
   constructor(private readonly svc: CardsService) {}

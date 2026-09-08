@@ -7,6 +7,7 @@ import type { ScopeService } from '../authorization/scope.service';
 import type { PermissionsService } from '../authorization/permissions.service';
 import type { PiiService } from '../../common/pii/pii.service';
 import type { CardFeesService } from './card-fees.service';
+import type { CardApprovalsService } from './card-approvals.service';
 import type { Caller } from '../authorization/caller';
 
 /* Caller mang theo MÃ QUYỀN đang thi hành, không chỉ userId — phạm vi được tính theo
@@ -148,6 +149,13 @@ function build(
   });
   const resolveWaive = vi.fn().mockResolvedValue({ waived: false, waiveReason: null });
   const recordCharges = vi.fn().mockResolvedValue([]);
+  /* Cửa phê duyệt: mặc định TRẢ `null` = công ty chưa bật cửa, nên mọi ca cũ của bộ này chạy y
+   * như trước. Đó cũng là hành vi THẬT sau khi triển khai lát 1 — bảng cờ rỗng thì không công
+   * ty nào bị chặn. Ca nào muốn thử cửa BẬT thì tự `mockResolvedValue` một hồ sơ. */
+  const assertApproved = vi.fn().mockResolvedValue(null);
+  const consume = vi.fn().mockResolvedValue(undefined);
+  const createApproval = vi.fn().mockResolvedValue({ id: 'ap1', state: 'SUBMITTED' });
+
   const svc = new CardsService(
     prisma,
     { record } as unknown as AuditService,
@@ -155,11 +163,15 @@ function build(
     { decrypt } as unknown as PiiService,
     { holdsForMasking } as unknown as PermissionsService,
     { quote, resolveWaive, recordCharges } as unknown as CardFeesService,
+    { assertApproved, consume, create: createApproval } as unknown as CardApprovalsService,
   );
   return {
     svc,
     record,
     createLog,
+    assertApproved,
+    consume,
+    createApproval,
     assertCompanyFor,
     decrypt,
     holdsForMasking,

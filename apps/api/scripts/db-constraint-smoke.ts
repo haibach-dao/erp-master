@@ -68,6 +68,44 @@ const SIGNER = (o: {
                   '${o.status ?? 'Active'}', now())`;
 };
 
+/* HỒ SƠ TRÌNH DUYỆT CẤP THẺ — lát 1, 07/09/2026.
+ *
+ * `quote_snapshot` và `content_hash` không có ràng buộc nào nên đổ giá trị bù nhìn; mọi thứ
+ * khác đều là cột bị một CHECK soi, nên để mở cho từng ca đặt. */
+const APPROVAL = (o: {
+  id: string;
+  state?: string;
+  plots?: string[];
+  customer?: string;
+  submittedBy?: string;
+  decidedBy?: string | null;
+  decidedAt?: boolean;
+  note?: string | null;
+  expires?: boolean;
+  consumed?: string | null;
+  consumedAt?: boolean;
+  waive?: boolean;
+  waiveReason?: string | null;
+}) => {
+  const q = (v: string | null | undefined) => (v === null || v === undefined ? 'NULL' : `'${v}'`);
+  const plots = (o.plots ?? ['plot-1']).map((x) => `'${x}'`).join(',');
+  return `INSERT INTO cemetery.card_issue_approvals
+            (id, state, company_id, cemetery_id, customer_id,
+             plot_ids_snapshot, quote_snapshot, quote_total, content_hash,
+             waive_requested, waive_reason,
+             approver_user_id, approver_signer_id, submitted_by,
+             decided_by, decided_at, decision_note, expires_at,
+             consumed_card_print_log_id, consumed_at)
+          VALUES ('${o.id}', '${o.state ?? 'SUBMITTED'}', 'cty-A', 'cemA',
+                  '${o.customer ?? 'kh-1'}',
+                  ARRAY[${plots}]::text[], '{}'::jsonb, 200000, 'hash-x',
+                  ${String(o.waive ?? false)}, ${q(o.waiveReason)},
+                  'u-approver', 'signer-1', '${o.submittedBy ?? 'u-sender'}',
+                  ${q(o.decidedBy)}, ${o.decidedAt === true ? 'now()' : 'NULL'},
+                  ${q(o.note)}, ${o.expires === true ? "now() + interval '72 hours'" : 'NULL'},
+                  ${q(o.consumed)}, ${o.consumedAt === true ? 'now()' : 'NULL'})`;
+};
+
 const CASES: readonly Case[] = [
   {
     /* Bản 03/09 là "toàn hệ nhiều nhất MỘT người mặc định". Anh Bách chốt 05/09 người ký gắn
@@ -147,6 +185,152 @@ const CASES: readonly Case[] = [
     name: 'card_signers · dòng ĐÃ NGHỈ được phép thiếu tài khoản và nghĩa trang',
     statements: [SIGNER({ id: 'smoke1', user: null, cem: null, status: 'Retired' })],
     expect: 'accept',
+  },
+  /* ---------- CỬA PHÊ DUYỆT IN THẺ MỘ (lát 1, 07/09/2026) ---------- */
+
+  {
+    /* CA NHẬN QUAN TRỌNG NHẤT CỦA LÁT NÀY.
+     *
+     * Ràng buộc "không tự duyệt" chạm cột `decided_by` NULLABLE. Viết theo nếp nhà một cách
+     * máy móc — CHECK (("decided_by" <> "submitted_by") IS TRUE) — sẽ CHẶN SẠCH mọi hồ sơ đang
+     * chờ, vì lúc chưa ai duyệt thì `decided_by` là NULL và (NULL <> x) IS TRUE ra FALSE. Tức
+     * là cả tính năng chết ngay dòng đầu tiên, mà không test nào khác thấy.
+     *
+     * Migration lát 0 đã để sẵn cảnh báo này. Ca này là thứ giữ nó không tái diễn: ai "sửa cho
+     * nhất quán" thành dạng bọc thẳng thì ĐÚNG ca này đỏ, và chỉ ca này. */
+    name: 'card_issue_approvals · hồ sơ ĐANG CHỜ (chưa ai duyệt) thì PHẢI cho qua',
+    statements: [APPROVAL({ id: 'ap1' })],
+    expect: 'accept',
+  },
+  {
+    name: 'card_issue_approvals · KHÔNG duyệt hồ sơ do chính mình gửi',
+    statements: [
+      APPROVAL({
+        id: 'ap1',
+        state: 'APPROVED',
+        submittedBy: 'u-x',
+        decidedBy: 'u-x',
+        decidedAt: true,
+        expires: true,
+      }),
+    ],
+    expect: 'reject',
+    expectError: 'card_issue_approvals_no_self_approve_check',
+  },
+  {
+    /* array_length(ARRAY[]::text[], 1) trả NULL và Postgres CHO QUA khi CHECK ra NULL — nên
+     * ràng buộc này phải dùng cardinality. Đo bằng psql 05/09/2026. */
+    name: 'card_issue_approvals · hồ sơ KHÔNG có phần mộ nào thì bị chặn',
+    statements: [APPROVAL({ id: 'ap1', plots: [] })],
+    expect: 'reject',
+    expectError: 'card_issue_approvals_plots_check',
+  },
+  {
+    name: 'card_issue_approvals · trạng thái là TẬP ĐÓNG (tên thứ chín không lọt)',
+    statements: [APPROVAL({ id: 'ap1', state: 'DA_DUYET' })],
+    expect: 'reject',
+    expectError: 'card_issue_approvals_state_check',
+  },
+  {
+    name: 'card_issue_approvals · đã QUYẾT thì phải có đủ người quyết và thời điểm quyết',
+    statements: [APPROVAL({ id: 'ap1', state: 'APPROVED', decidedBy: 'u-a', expires: true })],
+    expect: 'reject',
+    expectError: 'card_issue_approvals_decided_check',
+  },
+  {
+    /* Người gửi cần biết phải sửa gì. Một dòng REJECTED trống lý do buộc họ đi hỏi miệng, và
+     * không ai tra lại được vì sao. */
+    name: 'card_issue_approvals · TỪ CHỐI mà không nêu lý do thì bị chặn',
+    statements: [
+      APPROVAL({ id: 'ap1', state: 'REJECTED', decidedBy: 'u-a', decidedAt: true, note: 'ok' }),
+    ],
+    expect: 'reject',
+    expectError: 'card_issue_approvals_reason_check',
+  },
+  {
+    name: 'card_issue_approvals · chưa duyệt thì không được có hạn dùng',
+    statements: [APPROVAL({ id: 'ap1', state: 'SUBMITTED', expires: true })],
+    expect: 'reject',
+    expectError: 'card_issue_approvals_approved_only_check',
+  },
+  {
+    name: 'card_issue_approvals · đã tiêu thì phải có đủ cả lần cấp lẫn thời điểm',
+    statements: [
+      APPROVAL({
+        id: 'ap1',
+        state: 'APPROVED',
+        decidedBy: 'u-a',
+        decidedAt: true,
+        expires: true,
+        consumed: 'log-1',
+      }),
+    ],
+    expect: 'reject',
+    expectError: 'card_issue_approvals_consumed_pair_check',
+  },
+  {
+    name: 'card_issue_approvals · xin miễn phí mà không nêu lý do thì bị chặn',
+    statements: [APPROVAL({ id: 'ap1', waive: true })],
+    expect: 'reject',
+    expectError: 'card_issue_approvals_waive_check',
+  },
+  {
+    name: 'card_issue_approvals · MỘT khách chỉ có MỘT hồ sơ đang chờ',
+    statements: [
+      APPROVAL({ id: 'ap1', customer: 'kh-9' }),
+      APPROVAL({ id: 'ap2', customer: 'kh-9' }),
+    ],
+    expect: 'reject',
+    expectError: 'Key (customer_id)',
+  },
+  {
+    /* Ca NHẬN chứng minh index kia là index MỘT PHẦN chỉ trên SUBMITTED.
+     *
+     * Gộp APPROVED vào điều kiện index sẽ KHOÁ CỨNG khách: hồ sơ duyệt rồi mà hết hạn thì
+     * không gửi lại được nữa, và không có gì báo vì sao. Đây đúng ca một lượt chấm độc lập đã
+     * cảnh báo ở vòng thiết kế. */
+    name: 'card_issue_approvals · một hồ sơ ĐÃ DUYỆT + một hồ sơ MỚI CHỜ của cùng khách thì cho qua',
+    statements: [
+      APPROVAL({
+        id: 'ap1',
+        customer: 'kh-9',
+        state: 'APPROVED',
+        decidedBy: 'u-a',
+        decidedAt: true,
+        expires: true,
+      }),
+      APPROVAL({ id: 'ap2', customer: 'kh-9' }),
+    ],
+    expect: 'accept',
+  },
+  {
+    /* MỘT phê duyệt tiêu ĐÚNG MỘT lần cấp. Mỗi lần cấp là một lần THU TIỀN, nên hai phê duyệt
+     * cùng trỏ một lần cấp nghĩa là hệ đang kể hai câu chuyện về cùng một tờ giấy. */
+    name: 'card_issue_approvals · hai phê duyệt không được cùng tiêu một lần cấp thẻ',
+    statements: [
+      APPROVAL({
+        id: 'ap1',
+        customer: 'kh-1',
+        state: 'APPROVED',
+        decidedBy: 'u-a',
+        decidedAt: true,
+        expires: true,
+        consumed: 'log-9',
+        consumedAt: true,
+      }),
+      APPROVAL({
+        id: 'ap2',
+        customer: 'kh-2',
+        state: 'APPROVED',
+        decidedBy: 'u-a',
+        decidedAt: true,
+        expires: true,
+        consumed: 'log-9',
+        consumedAt: true,
+      }),
+    ],
+    expect: 'reject',
+    expectError: 'Key (consumed_card_print_log_id)',
   },
 ];
 

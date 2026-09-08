@@ -102,6 +102,55 @@ export class IssueCardDto extends WaiveFields {
  * chức danh lấy trong danh sách nhân viên". Hai thứ đó được CHÉP từ hồ sơ tài khoản trong
  * service. Còn nhận chuỗi ở đây thì luật mới chỉ là một gợi ý của giao diện: một lời gọi
  * API thẳng vẫn gõ được tên bất kỳ, kể cả tên người không làm ở công ty. */
+/* GỬI hồ sơ xin cấp thẻ đi duyệt.
+ *
+ * CỐ Ý KHÔNG kế thừa `WaiveFields` — anh Bách chốt hướng A ngày 07/09/2026: MIỄN PHÍ NẰM NGOÀI
+ * luồng duyệt ở lát 1.
+ *
+ * Bản đầu có kế thừa, và nó HỎNG CỤT: `resolveWaive` kiểm quyền của NGƯỜI GỌI ở cả đường gửi
+ * lẫn đường cấp, mà chỉ ADMIN và GD_CONG_TY cầm `cemetery.card_fee.waive` (đo 07/09). Nhân viên
+ * kinh doanh tick "xin miễn phí" là ăn 403 ngay lúc GỬI — họ không XIN được, chứ chưa nói tới
+ * được duyệt.
+ *
+ * Sửa cho chạy bằng cách bỏ phép kiểm đi thì tệ hơn: người ký là `QL_NGHIA_TRANG`, vai đó KHÔNG
+ * cầm quyền miễn, nên để phê duyệt tự nó cho phép miễn là lặng lẽ chuyển quyền THA TIỀN sang một
+ * ghế chưa ai cấp — trái quyết định 02/09.
+ *
+ * Nên lát 1 không mang miễn phí: hồ sơ luôn gửi với `waived = false`, và `assertApproved` cho
+ * lần cấp có miễn phí ĐI VÒNG QUA cửa (trả `null`) thay vì chặn. Quyền tha tiền vẫn do
+ * `resolveWaive` ép ở đường cấp, y như trước khi có cửa. */
+export class SubmitCardApprovalDto {
+  @ApiProperty({ description: 'Người ký sẽ duyệt hồ sơ này — chọn từ danh mục người ký' })
+  @IsString()
+  @MaxLength(40)
+  approverSignerId!: string;
+}
+
+/** Quyết định của người ký. `note` bắt buộc khi TỪ CHỐI hoặc TRẢ LẠI. */
+export class DecideCardApprovalDto {
+  @ApiProperty({ enum: ['APPROVED', 'REJECTED', 'RETURNED'] })
+  @IsIn(['APPROVED', 'REJECTED', 'RETURNED'])
+  decision!: 'APPROVED' | 'REJECTED' | 'RETURNED';
+
+  @ApiPropertyOptional({ description: 'Lý do — BẮT BUỘC khi từ chối hoặc trả lại' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  note?: string;
+}
+
+/** Bật/tắt cửa phê duyệt cho MỘT công ty. */
+export class SetCardApprovalRequiredDto {
+  @ApiProperty()
+  @IsString()
+  @MaxLength(40)
+  companyId!: string;
+
+  @ApiProperty({ description: 'true = công ty này bắt buộc duyệt trước khi cấp thẻ' })
+  @IsBoolean()
+  required!: boolean;
+}
+
 export class CreateCardSignerDto {
   @ApiProperty({ description: 'Tài khoản nhân viên sẽ ký — phải đang giữ vai QL_NGHIA_TRANG' })
   @IsString()

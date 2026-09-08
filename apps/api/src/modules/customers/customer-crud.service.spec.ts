@@ -55,6 +55,9 @@ function build(
      * Khách yêu cầu xoá hồ sơ thì mọi nhãn ta từng gán phải đi cùng; dấu vết ai gắn ai gỡ
      * ở lại nhật ký kiểm toán, chỗ đúng để giữ nó. */
     customerTag: { deleteMany: del('customerTag') },
+    /* Hồ sơ trình duyệt ĐÃ QUYẾT — xoá theo. Hồ sơ ĐANG CHỜ thì CHẶN, và phép chặn đó nằm ở
+     * `count` bên dưới chứ không ở đây. */
+    cardIssueApproval: { deleteMany: del('cardIssueApproval') },
     /* Hồ sơ an táng đứng ở CẢ HAI nhóm: `deleteMany` dọn hồ sơ ĐÃ HUỶ của người mất này,
      * `updateMany` gỡ con trỏ chủ mộ khỏi hồ sơ đã huỷ của NGƯỜI KHÁC. */
     burialRecord: { deleteMany: del('burialRecord'), updateMany: detach('burialRecord') },
@@ -96,6 +99,9 @@ function build(
       ),
     },
     graveHold: { count: vi.fn().mockResolvedValue(n('holds')) },
+    /* Hồ sơ xin cấp thẻ ĐANG CHỜ duyệt — chặn xoá. Người ký đang được yêu cầu quyết một việc
+     * về khách này; xoá lúc đó để lại một dòng trong hộp thư không mở được. */
+    cardIssueApproval: { count: vi.fn().mockResolvedValue(n('approvals')) },
     burialRecord: {
       /* Hai câu hỏi khác nhau đi qua cùng một `count`, phân biệt bằng hình dạng `where`:
        *   - `ownerCustomerId` -> khách này là CHỦ MỘ trong hồ sơ của người khác
@@ -243,6 +249,7 @@ describe('xoá khách hàng — khi sạch thì dọn hết, không để lại 
       'graveUsageRight',
       'graveHold',
       'customerTag',
+      'cardIssueApproval',
       /* Hồ sơ an táng ĐÃ HUỶ của chính người này. PHẢI đứng trước `deceasedPerson`: khoá
          ngoại giữa hai bảng là ON DELETE RESTRICT, sai thứ tự là `P2003`. Đây là thứ tự
          khai trong `PERSON_CASCADE_REFERENCES`, và test này khoá nó lại. */
@@ -276,7 +283,13 @@ describe('xoá khách hàng — khi sạch thì dọn hết, không để lại 
 
     await svc.deleteCustomer(CUSTOMER, 'u1');
 
-    expect(deleted).toEqual(['graveUsageRight', 'graveHold', 'customerTag', 'customer']);
+    expect(deleted).toEqual([
+      'graveUsageRight',
+      'graveHold',
+      'customerTag',
+      'cardIssueApproval',
+      'customer',
+    ]);
   });
 
   /* Xoá người này rút họ khỏi cây gia đình của người kia. Nói ra con số thay vì lặng lẽ
