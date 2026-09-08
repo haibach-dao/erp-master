@@ -79,6 +79,9 @@ type BuildOpts = {
   candidates?: unknown[];
   createError?: unknown;
   updateCount?: number;
+  openRow?: unknown;
+  holdsRole?: boolean;
+  coversSite?: boolean;
 };
 
 function build(opts: BuildOpts = {}) {
@@ -89,9 +92,47 @@ function build(opts: BuildOpts = {}) {
   const updateMany = vi.fn().mockResolvedValue({ count: opts.updateCount ?? 1 });
   const findUnique = vi.fn().mockResolvedValue(opts.existing === undefined ? ROW : opts.existing);
   const findMany = vi.fn().mockResolvedValue(opts.candidates ?? []);
+  /* Dòng đang mở mà `openRequestHint` tra ra trên ĐƯỜNG LỖI. Mặc định do NGƯỜI KHÁC gửi — ca
+   * đáng lo hơn, và là ca bản đầu mách sai. */
+  /* MỘT `findFirst` phục vụ HAI truy vấn khác hẳn nhau, nên mock phải MÔ PHỎNG câu hỏi chứ
+   * không trả cứng một giá trị:
+   *   · `where.state = SUBMITTED` → `openRequestHint` đang tra dòng đang mở (đường LỖI);
+   *   · `where.state = APPROVED`  → `assertApproved` đang tìm hồ sơ tiêu được, và nó lọc bằng
+   *     CẢ `contentHash`. Trả cứng ở đây sẽ giấu mất chính cái lọc vừa dựng — test xanh mà
+   *     luật không được canh. */
+  const findFirst = vi.fn().mockImplementation((args: { where: Record<string, unknown> }) => {
+    if (args.where.state === 'SUBMITTED') {
+      return Promise.resolve(
+        opts.openRow === undefined
+          ? {
+              id: 'ap-cu',
+              submittedBy: 'u-nguoi-khac',
+              submittedAt: new Date('2026-09-07T02:00:00Z'),
+            }
+          : opts.openRow,
+      );
+    }
+    const now = new Date();
+    const hit = (opts.candidates ?? []).find((c) => {
+      const r = c as {
+        state: string;
+        consumedCardPrintLogId: string | null;
+        expiresAt: Date | null;
+        contentHash: string;
+      };
+      return (
+        r.state === 'APPROVED' &&
+        r.consumedCardPrintLogId === null &&
+        r.expiresAt !== null &&
+        r.expiresAt > now &&
+        r.contentHash === args.where.contentHash
+      );
+    });
+    return Promise.resolve(hit ?? null);
+  });
 
   const prisma = {
-    cardIssueApproval: { create, updateMany, findUnique, findMany },
+    cardIssueApproval: { create, updateMany, findUnique, findMany, findFirst },
     cardSigner: {
       findUnique: vi.fn().mockResolvedValue(
         opts.signer === undefined
@@ -104,6 +145,19 @@ function build(opts: BuildOpts = {}) {
             }
           : opts.signer,
       ),
+    },
+    user: {
+      findUnique: vi
+        .fn()
+        .mockResolvedValue({ fullName: 'Phạm Thị Kinh', email: 'kinhdoanh@erp.local' }),
+    },
+    /* Tư cách người ký: GIAO của hai trục, y như `CardSignersService`. Mặc định ĐỦ; ca nào
+     * muốn thử người đã rời ghế thì đặt `holdsRole: false` hoặc `coversSite: false`. */
+    roleAssignment: {
+      findFirst: vi.fn().mockResolvedValue(opts.holdsRole === false ? null : { id: 'ra1' }),
+    },
+    scopeAssignment: {
+      findFirst: vi.fn().mockResolvedValue(opts.coversSite === false ? null : { id: 'sa1' }),
     },
     cardApprovalSetting: {
       findUnique: vi
@@ -236,6 +290,23 @@ describe('cửa phê duyệt in thẻ mộ', () => {
     await expect(svc.assertApproved(SUBJECT, 'u-issuer')).rejects.toThrow(/quá hạn/);
   });
 
+  /* Anh Bách chốt hướng A 07/09/2026: miễn phí NẰM NGOÀI luồng duyệt ở lát 1.
+   *
+   * Chặn phải nói ĐÚNG lý do. Không có phép kiểm này thì ca miễn phí rơi xuống phép so vân tay
+   * và người dùng nhận câu "nội dung đã đổi so với lúc được duyệt" — đúng về kỹ thuật nhưng chỉ
+   * sai đường: họ đi gửi lại rồi lại hỏng y như thế. */
+  /* Miễn phí ĐI VÒNG QUA cửa, không bị cửa cấm — hướng A, anh Bách chốt 07/09/2026.
+   *
+   * Bản đầu của tôi NÉM ở đây, và test đầu tiên tôi viết KHOÁ CHẶT hành vi sai đó. Bật cửa cho
+   * một công ty khi ấy làm thẻ miễn phí không cấp được nữa cho BẤT KỲ AI, kể cả người cầm
+   * `cemetery.card_fee.waive` — vì `issue()` là đường duy nhất sinh số và thu tiền. */
+  it('cửa BẬT nhưng lần cấp có MIỄN PHÍ thì đi vòng qua cửa, không đòi phê duyệt', async () => {
+    const { svc, prisma } = build({ required: true });
+    const waived = { ...SUBJECT, waived: true, waiveReason: 'COMPANY_FAULT' as never };
+    await expect(svc.assertApproved(waived, 'u-issuer')).resolves.toBeNull();
+    expect(prisma.cardIssueApproval.findFirst).not.toHaveBeenCalled();
+  });
+
   /* ---------- VÂN TAY: thứ thật sự giữ tiền đúng ---------- */
 
   it('nội dung đổi sau khi duyệt thì CHẶN, dù phê duyệt còn hạn và chưa dùng', async () => {
@@ -361,7 +432,13 @@ describe('cửa phê duyệt in thẻ mộ', () => {
     expect(assertSiteFor).toHaveBeenCalledWith(CALLER.userId, CALLER.permission, 'cem-1');
   });
 
-  it('khách đã có hồ sơ đang chờ thì trả câu tiếng Việt, không để lộ P2002', async () => {
+  /* Câu chặn phải nêu ĐÚNG MỘT việc người đang đứng trước cửa LÀM ĐƯỢC.
+   *
+   * Bản đầu nói chung một câu cho mọi người: "chờ người ký quyết, hoặc huỷ hồ sơ cũ rồi gửi
+   * lại". Nửa sau chỉ đúng với CHÍNH người đã gửi — `cancel` từ chối mọi người khác. Nên với
+   * người thứ hai ở cùng quầy, hệ đang mách một việc bấm vào là 403. Hai ca dưới khoá lại cả
+   * hai vế, và vế PHỦ ĐỊNH mới là vế bắt lỗi. */
+  it('người KHÁC va hồ sơ đang chờ: nói rõ không huỷ được của người khác, KHÔNG mách đi huỷ', async () => {
     const { Prisma } = await import('@prisma/client');
     const { svc } = build({
       createError: new Prisma.PrismaClientKnownRequestError('dup', {
@@ -370,9 +447,36 @@ describe('cửa phê duyệt in thẻ mộ', () => {
         meta: { target: 'card_issue_approvals_one_open' },
       }),
     });
-    await expect(svc.create(SUBJECT, 'signer-1', CALLER)).rejects.toThrow(
-      /đã có một hồ sơ đang chờ duyệt/,
-    );
+    const err = await svc.create(SUBJECT, 'signer-1', CALLER).catch((e: unknown) => e);
+    const msg = (err as Error).message;
+
+    expect(msg).toMatch(/đã có một hồ sơ đang chờ duyệt/);
+    expect(msg).toMatch(/Phạm Thị Kinh/); // nêu TÊN người gửi để còn biết hỏi ai
+    expect(msg).toMatch(/không huỷ được hồ sơ của người khác/);
+    /* Vế bắt lỗi: KHÔNG được ra lệnh cho chính người này đi huỷ. */
+    expect(msg).not.toMatch(/huỷ hồ sơ đó rồi gửi lại/);
+  });
+
+  it('CHÍNH người gửi va hồ sơ đang chờ: mách đi huỷ, và nêu MÃ hồ sơ để bấm được', async () => {
+    const { Prisma } = await import('@prisma/client');
+    const { svc } = build({
+      openRow: {
+        id: 'ap-cua-toi',
+        submittedBy: 'u-sender',
+        submittedAt: new Date('2026-09-07T02:00:00Z'),
+      },
+      createError: new Prisma.PrismaClientKnownRequestError('dup', {
+        code: 'P2002',
+        clientVersion: '6',
+        meta: { target: 'card_issue_approvals_one_open' },
+      }),
+    });
+    const err = await svc.create(SUBJECT, 'signer-1', CALLER).catch((e: unknown) => e);
+    const msg = (err as Error).message;
+
+    expect(msg).toMatch(/huỷ hồ sơ đó rồi gửi lại/);
+    /* Không nêu mã thì người dùng phải tự đi tra id mới gọi được đường huỷ. */
+    expect(msg).toMatch(/ap-cua-toi/);
   });
 
   /* ---------- QUYẾT ---------- */

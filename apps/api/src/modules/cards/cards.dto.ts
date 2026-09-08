@@ -104,10 +104,22 @@ export class IssueCardDto extends WaiveFields {
  * API thẳng vẫn gõ được tên bất kỳ, kể cả tên người không làm ở công ty. */
 /* GỬI hồ sơ xin cấp thẻ đi duyệt.
  *
- * Kế thừa `WaiveFields` để cờ miễn phí đi CÙNG hồ sơ: người ký phải gật CẢ số tiền lẫn việc
- * miễn hay không. Tách ra thì người gửi xin duyệt một hồ sơ thu đủ tiền rồi cấp ra một tờ thẻ
- * miễn phí — vân tay nội dung chặn được, nhưng chặn bằng một câu lỗi thay vì bằng thiết kế. */
-export class SubmitCardApprovalDto extends WaiveFields {
+ * CỐ Ý KHÔNG kế thừa `WaiveFields` — anh Bách chốt hướng A ngày 07/09/2026: MIỄN PHÍ NẰM NGOÀI
+ * luồng duyệt ở lát 1.
+ *
+ * Bản đầu có kế thừa, và nó HỎNG CỤT: `resolveWaive` kiểm quyền của NGƯỜI GỌI ở cả đường gửi
+ * lẫn đường cấp, mà chỉ ADMIN và GD_CONG_TY cầm `cemetery.card_fee.waive` (đo 07/09). Nhân viên
+ * kinh doanh tick "xin miễn phí" là ăn 403 ngay lúc GỬI — họ không XIN được, chứ chưa nói tới
+ * được duyệt.
+ *
+ * Sửa cho chạy bằng cách bỏ phép kiểm đi thì tệ hơn: người ký là `QL_NGHIA_TRANG`, vai đó KHÔNG
+ * cầm quyền miễn, nên để phê duyệt tự nó cho phép miễn là lặng lẽ chuyển quyền THA TIỀN sang một
+ * ghế chưa ai cấp — trái quyết định 02/09.
+ *
+ * Nên lát 1 không mang miễn phí: hồ sơ luôn gửi với `waived = false`, và `assertApproved` cho
+ * lần cấp có miễn phí ĐI VÒNG QUA cửa (trả `null`) thay vì chặn. Quyền tha tiền vẫn do
+ * `resolveWaive` ép ở đường cấp, y như trước khi có cửa. */
+export class SubmitCardApprovalDto {
   @ApiProperty({ description: 'Người ký sẽ duyệt hồ sơ này — chọn từ danh mục người ký' })
   @IsString()
   @MaxLength(40)

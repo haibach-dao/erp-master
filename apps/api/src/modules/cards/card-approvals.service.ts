@@ -14,6 +14,9 @@ import type { Caller } from '../authorization/caller';
 import type { FeeQuote } from './card-fees.service';
 import type { CardFeeWaiveReason } from './cards.constants';
 
+/** Vai duy nhất ký được thẻ mộ. Trùng với `CardSignersService`; một chuỗi, hai chỗ đọc. */
+const SIGNER_ROLE = 'QL_NGHIA_TRANG';
+
 /** Hồ sơ đã duyệt sống bao lâu. CHÍNH SÁCH, anh Bách chốt 05/09/2026 — đổi được. */
 const APPROVAL_TTL_HOURS = 72;
 
@@ -142,6 +145,35 @@ export class CardApprovalsService {
         `Người ký "${signer.fullName}" không phụ trách nghĩa trang của bộ mộ này.`,
       );
     }
+
+    /* TƯ CÁCH THẬT, không chỉ cột `status`.
+     *
+     * `status = 'Active'` chỉ nói dòng danh mục chưa bị ngừng dùng. Nó KHÔNG nói người đó còn
+     * giữ vai `QL_NGHIA_TRANG` và còn được phân công nghĩa trang này — hai thứ có `validTo` và
+     * TỰ HẾT HẠN mà không lệnh UPDATE nào chạm vào dòng người ký. Đó chính là lý do
+     * `CardSignersService.list` phải tính lại cờ `eligible` mỗi lần đọc.
+     *
+     * Thiếu phép kiểm này thì hồ sơ gửi cho một người đã rời ghế: họ mở hộp thư ra không thấy
+     * gì (`listInbox` lọc theo phạm vi), hoặc thấy mà bấm Duyệt thì `PermissionGuard` từ chối
+     * vì mã `cemetery.card.approve` của họ đã rụng. Hồ sơ nằm đó vĩnh viễn, và người gửi chỉ
+     * biết là "chờ mãi không thấy hồi âm". */
+    const now = new Date();
+    const inForce = { validFrom: { lte: now }, OR: [{ validTo: null }, { validTo: { gt: now } }] };
+    const [holdsRole, coversSite] = await Promise.all([
+      this.prisma.roleAssignment.findFirst({
+        where: { userId: signer.userId, role: { code: SIGNER_ROLE }, ...inForce },
+        select: { id: true },
+      }),
+      this.prisma.scopeAssignment.findFirst({
+        where: { userId: signer.userId, cemeteryId: subject.cemeteryId, ...inForce },
+        select: { id: true },
+      }),
+    ]);
+    if (holdsRole === null || coversSite === null) {
+      throw new ConflictException(
+        `Người ký "${signer.fullName}" không còn đủ tư cách duyệt cho nghĩa trang này (đã rời vai quản lý nghĩa trang hoặc bị gỡ phân công) — chọn người ký khác, hoặc cấp lại vai ở Tổ chức.`,
+      );
+    }
     if (signer.userId === caller.userId) {
       /* Chặn SỚM cho tử tế. Ràng buộc CSDL `card_issue_approvals_no_self_approve_check` chỉ nổ
        * lúc DUYỆT, nghĩa là người dùng gửi xong, chờ, rồi mới biết mình không duyệt được hồ sơ
@@ -157,25 +189,35 @@ export class CardApprovalsService {
     const approverUserId = signer.userId;
     const submittedBy = caller.userId;
 
-    const created = await this.wrapDuplicate(() =>
-      this.prisma.cardIssueApproval.create({
-        data: {
-          id: ulid(),
-          companyId: subject.companyId,
-          cemeteryId: subject.cemeteryId,
-          customerId: subject.customerId,
-          state: APPROVAL_STATES.SUBMITTED,
-          plotIdsSnapshot: [...subject.plotIds],
-          quoteSnapshot: subject.quote as unknown as Prisma.InputJsonValue,
-          quoteTotal: new Prisma.Decimal(subject.quote.totalAmount),
-          contentHash: approvalFingerprint(subject),
-          waiveRequested: subject.waived,
-          waiveReason: subject.waiveReason,
-          approverUserId,
-          approverSignerId: signer.id,
-          submittedBy,
-        },
-      }),
+    const created = await this.wrapDuplicate(
+      () =>
+        this.prisma.cardIssueApproval.create({
+          data: {
+            id: ulid(),
+            companyId: subject.companyId,
+            cemeteryId: subject.cemeteryId,
+            customerId: subject.customerId,
+            state: APPROVAL_STATES.SUBMITTED,
+            plotIdsSnapshot: [...subject.plotIds],
+            quoteSnapshot: subject.quote as unknown as Prisma.InputJsonValue,
+            quoteTotal: new Prisma.Decimal(subject.quote.totalAmount),
+            contentHash: approvalFingerprint(subject),
+            waiveRequested: subject.waived,
+            waiveReason: subject.waiveReason,
+            approverUserId,
+            approverSignerId: signer.id,
+            submittedBy,
+          },
+        }),
+      /* Câu cho ca "khách đã có hồ sơ đang chờ" phải KHÁC NHAU theo người đang đứng trước cửa.
+       *
+       * Bản đầu nói chung một câu: "chờ người ký quyết, hoặc huỷ hồ sơ cũ rồi gửi lại". Nửa sau
+       * là một việc mà `cancel` CHỈ cho đúng người đã gửi làm — nên với bất kỳ ai khác, hệ đang
+       * mách một việc họ chắc chắn thất bại: bấm vào là 403. Đúng lớp lỗi "câu chẩn đoán bắt
+       * người dùng tự chẩn đoán" đã ghi ở `quoteOrBlocked` 03/09.
+       *
+       * Nên tra dòng đang mở rồi rẽ hai, và ca nào cũng nêu ĐÚNG MỘT việc người đó làm được. */
+      () => this.openRequestHint(subject.customerId, submittedBy),
     );
 
     await this.audit.record({
@@ -223,7 +265,18 @@ export class CardApprovalsService {
       );
     }
     /* Hồ sơ CHỤP NGƯỜI: chỉ đúng người được gửi mới quyết được. Ai khác có mã `approve` và phủ
-     * đúng nghĩa trang vẫn không quyết thay được — đó là toàn bộ ý nghĩa của điều 8. */
+     * đúng nghĩa trang vẫn không quyết thay được — đó là toàn bộ ý nghĩa của điều 8.
+     *
+     * CỐ Ý KHÔNG kiểm lại tư cách người ký ở đây, dù `create` kiểm rất chặt. Hai đường hỏi hai
+     * câu khác nhau:
+     *   · `create` hỏi "gửi cho người này có nghĩa lý gì không" — gửi cho người đã rời ghế là
+     *     tạo ra một hồ sơ chết ngay từ lúc sinh, nên chặn.
+     *   · `decide` hỏi "người đang đứng đây có được quyết hồ sơ NÀY không" — và nếu người ký bị
+     *     ngừng dùng SAU khi hồ sơ đã gửi, để họ đóng nốt việc dở là ĐÚNG. Chặn ở đây biến mọi
+     *     hồ sơ đang chờ của họ thành hồ sơ kẹt cứng: `cancel` chỉ cho người GỬI huỷ, nên nếu
+     *     người gửi cũng đã nghỉ thì không ai gỡ được nữa.
+     * Mã quyền vẫn gác: người đã mất `cemetery.card.approve` bị `PermissionGuard` chặn ở route,
+     * trước khi tới đây. */
     if (before.approverUserId !== caller.userId) {
       throw new ForbiddenException(
         'Hồ sơ này gửi cho người ký khác — chỉ người được gửi mới quyết được. Người gửi phải gửi lại nếu muốn đổi người duyệt.',
@@ -349,34 +402,68 @@ export class CardApprovalsService {
    * nhận tham số gợi ra câu hỏi về BẢN GHI.
    */
   async assertApproved(subject: ApprovalSubject, issuerUserId: string | null) {
+    /* MIỄN PHÍ NẰM NGOÀI luồng duyệt — anh Bách chốt hướng A 07/09/2026. Đặt TRƯỚC `isRequired`
+     * cho đúng nghĩa "nằm ngoài": bật cửa cho một công ty KHÔNG được biến việc miễn phí thành
+     * việc không làm được nữa.
+     *
+     * ĐÂY KHÔNG PHẢI MỘT LỖ. `CardFeesService.resolveWaive` đã ép `cemetery.card_fee.waive`
+     * TRƯỚC khi tới đây (cards.service.ts, ngay trên chỗ gọi hàm này), nên `waived` chỉ có thể
+     * là `true` khi người cấp ĐÃ cầm quyền tha tiền; ai không cầm thì ăn 403 ở đó và không bao
+     * giờ chạm được dòng này. Việc tha tiền vẫn để lại dấu vết riêng đếm được bằng
+     * `GRAVE_CARD.FEE_WAIVED`.
+     *
+     * BẢN ĐẦU CỦA TÔI NÉM Ở ĐÂY, VÀ ĐÓ LÀ SAI. Nó biến "miễn phí đi đường khác" thành "miễn
+     * phí không đi được đường nào": `issue()` là đường DUY NHẤT sinh số và thu tiền, nên câu
+     * "người có quyền miễn cấp thẳng, không qua cửa duyệt" trỏ sang một lối KHÔNG TỒN TẠI. Ca
+     * vỡ thật: khách nộp lại thẻ cũ (OLD_CARD_RETURNED, anh Bách chốt 02/09 là được miễn) thì
+     * hoặc bị thu đủ 200.000đ, hoặc phải TẮT cửa duyệt cho CẢ công ty rồi bật lại — mở toang
+     * mọi lần cấp khác chỉ để tha một khoản. Một lượt soi độc lập bắt trước khi mở PR. */
+    if (subject.waived) {
+      return null;
+    }
+
     if (!(await this.isRequired(subject.companyId))) {
       return null;
     }
 
     const now = new Date();
-    const candidates = await this.prisma.cardIssueApproval.findMany({
-      where: { customerId: subject.customerId, companyId: subject.companyId },
-      orderBy: { submittedAt: 'desc' },
-      take: 20,
+
+    /* Tra ĐÚNG hồ sơ tiêu được, để CSDL lọc thay vì cắt cửa sổ ở bộ nhớ.
+     *
+     * VÂN TAY NẰM TRONG `where`, không phải một phép kiểm SAU khi đã chọn. Bản đầu lấy "hồ sơ
+     * mới nhất còn hiệu lực" rồi mới so vân tay, và điều đó VỠ THẬT: `card_issue_approvals_one_open`
+     * chỉ cấm hai hồ sơ SUBMITTED, nên hai hồ sơ APPROVED chưa tiêu cùng tồn tại là HỢP LỆ
+     * (chính migration ghi vậy). Khách có hồ sơ A ({P1}, 200k, khớp) và hồ sơ B mới hơn
+     * ({P1,P2}, 400k) — P2 sau đó bị thu hồi — thì bản đầu chọn B, so vân tay lệch, rồi ném
+     * "nội dung đã đổi" trong khi A đang nằm sẵn đó, đúng số tiền, chưa tiêu, còn hạn.
+     *
+     * `take: 20` cũ còn tệ hơn ở chỗ khó thấy: sau ~20 lần gửi–huỷ trong 72 giờ, một hồ sơ đã
+     * duyệt rơi khỏi cửa sổ và câu từ chối thành "khách chưa có hồ sơ nào được duyệt" — sai
+     * sự thật.
+     *
+     * `orderBy: expiresAt asc` = tiêu cái SẮP HẾT HẠN trước, để cái còn dài hơi ở lại. */
+    const usable = await this.prisma.cardIssueApproval.findFirst({
+      where: {
+        customerId: subject.customerId,
+        companyId: subject.companyId,
+        state: APPROVAL_STATES.APPROVED,
+        consumedCardPrintLogId: null,
+        contentHash: approvalFingerprint(subject),
+        expiresAt: { gt: now },
+      },
+      orderBy: { expiresAt: 'asc' },
     });
 
-    const usable = candidates.find(
-      (a) =>
-        a.state === APPROVAL_STATES.APPROVED &&
-        a.consumedCardPrintLogId === null &&
-        a.expiresAt !== null &&
-        a.expiresAt > now,
-    );
-
-    if (usable === undefined) {
-      throw new ConflictException(this.blockedReason(candidates, now));
-    }
-
-    /* VÂN TAY — thứ giữ cho tiền đúng. Người ký gật một con số trên một bộ mộ; đổi bất cứ thứ
-     * gì trong đó thì phải gật lại. */
-    if (usable.contentHash !== approvalFingerprint(subject)) {
+    if (usable === null) {
+      /* Chỉ đọc rộng khi SẮP NÉM, để dựng câu nói đúng nguyên nhân. Đường thường không trả giá
+       * cho truy vấn này. */
+      const candidates = await this.prisma.cardIssueApproval.findMany({
+        where: { customerId: subject.customerId, companyId: subject.companyId },
+        orderBy: { submittedAt: 'desc' },
+        take: 20,
+      });
       throw new ConflictException(
-        'Nội dung đã đổi so với lúc được duyệt (bộ phần mộ, bảng giá hoặc mức miễn phí) — phải gửi duyệt lại. Số tiền in ra phải đúng số người ký đã gật.',
+        this.blockedReason(candidates, now, approvalFingerprint(subject)),
       );
     }
     if (issuerUserId !== null && usable.approverUserId === issuerUserId) {
@@ -391,9 +478,31 @@ export class CardApprovalsService {
 
   /* Vì sao chưa cấp được — nêu ĐÚNG MỘT nguyên nhân, theo thứ tự người dùng cần nghe. */
   private blockedReason(
-    rows: { state: string; expiresAt: Date | null; consumedCardPrintLogId: string | null }[],
+    rows: {
+      state: string;
+      expiresAt: Date | null;
+      consumedCardPrintLogId: string | null;
+      contentHash?: string;
+    }[],
     now: Date,
+    want?: string,
   ): string {
+    /* Xét TRƯỚC mọi nhánh khác: có một hồ sơ đã duyệt, còn hạn, chưa tiêu — nhưng NỘI DUNG đã
+     * đổi. Không nói ra thì người dùng nhận câu "chưa có hồ sơ nào được duyệt" và đi gửi lại
+     * mà không hiểu vì sao lần trước không dùng được. */
+    if (
+      want !== undefined &&
+      rows.some(
+        (r) =>
+          r.state === APPROVAL_STATES.APPROVED &&
+          r.consumedCardPrintLogId === null &&
+          r.expiresAt !== null &&
+          r.expiresAt > now &&
+          r.contentHash !== want,
+      )
+    ) {
+      return 'Nội dung đã đổi so với lúc được duyệt (bộ phần mộ, bảng giá hoặc mức miễn phí) — phải gửi duyệt lại. Số tiền in ra phải đúng số người ký đã gật.';
+    }
     if (rows.some((r) => r.state === APPROVAL_STATES.SUBMITTED)) {
       return 'Hồ sơ đang chờ người ký duyệt — chưa cấp thẻ được.';
     }
@@ -473,8 +582,30 @@ export class CardApprovalsService {
     if (companies !== null) where.companyId = { in: companies };
     if (sites !== null) where.cemeteryId = { in: sites };
 
+    /* `select` TƯỜNG MINH, và CỐ Ý bỏ `quoteSnapshot`.
+     *
+     * Màn "hồ sơ đang ở chặng nào" chỉ cần trạng thái và mốc thời gian — nó không cần bảng kê
+     * từng dòng tiền. Trả cả ảnh chụp báo giá ra đây là phát một bản sao đầy đủ của thứ màn xem
+     * trước đã che, cho đúng những vai cầm `cemetery.card.submit` mà không cầm
+     * `cemetery.card_fee.view`. Lưới che ở controller vẫn bắt `quoteTotal`, nhưng cách chắc hơn
+     * là ĐỪNG LẤY thứ mình không cần. */
     return this.prisma.cardIssueApproval.findMany({
       where,
+      select: {
+        id: true,
+        state: true,
+        cemeteryId: true,
+        approverSignerId: true,
+        approverUserId: true,
+        submittedBy: true,
+        submittedAt: true,
+        decidedAt: true,
+        decisionNote: true,
+        expiresAt: true,
+        consumedCardPrintLogId: true,
+        quoteTotal: true,
+        waiveRequested: true,
+      },
       orderBy: { submittedAt: 'desc' },
       take: 20,
     });
@@ -516,6 +647,39 @@ export class CardApprovalsService {
     return { companyId, required: row?.required ?? false, updatedAt: row?.updatedAt ?? null };
   }
 
+  /* Dựng câu cho ca "khách đã có hồ sơ đang chờ".
+   *
+   * Hai câu, vì hai người đứng trước cửa có hai việc làm được khác hẳn nhau:
+   *   · CHÍNH người đã gửi  → họ huỷ được, nên đưa MÃ hồ sơ để bấm huỷ luôn. Không nêu mã thì
+   *     ngay cả người đúng cũng phải tự đi tra id mới gọi được đường huỷ.
+   *   · NGƯỜI KHÁC          → họ KHÔNG huỷ được (`cancel` chỉ cho người gửi). Nói thẳng điều đó
+   *     kèm TÊN người gửi, để việc duy nhất họ làm được — đi hỏi người kia — là việc rõ ràng.
+   *
+   * Tra thêm một truy vấn CHỈ trên đường lỗi, không phải đường thường. Đây cũng là nếp
+   * `effectiveSchedule` đã dùng: gọi tên công ty bằng một truy vấn phụ chỉ khi sắp ném.
+   */
+  private async openRequestHint(customerId: string, callerUserId: string): Promise<string> {
+    const open = await this.prisma.cardIssueApproval.findFirst({
+      where: { customerId, state: APPROVAL_STATES.SUBMITTED },
+      select: { id: true, submittedBy: true, submittedAt: true },
+    });
+    if (open === null) {
+      /* Vừa có người quyết xong giữa lúc ta va ràng buộc và lúc ta đi tra. Đừng bịa một câu
+       * chắc chắn, bảo họ thử lại. */
+      return 'Khách này vừa có một hồ sơ đang chờ duyệt — mở lại danh sách rồi thử lại.';
+    }
+    const when = open.submittedAt.toLocaleString('vi-VN');
+    if (open.submittedBy === callerUserId) {
+      return `Bạn đã có một hồ sơ đang chờ duyệt cho khách này (mã ${open.id}, gửi lúc ${when}) — huỷ hồ sơ đó rồi gửi lại.`;
+    }
+    const sender = await this.prisma.user.findUnique({
+      where: { id: open.submittedBy },
+      select: { fullName: true, email: true },
+    });
+    const who = sender?.fullName ?? sender?.email ?? 'một người khác';
+    return `Khách này đã có một hồ sơ đang chờ duyệt do ${who} gửi lúc ${when}. Bạn không huỷ được hồ sơ của người khác — chờ người ký quyết, hoặc nhờ ${who} huỷ rồi gửi lại.`;
+  }
+
   /* Bó CẢ HAI TRỤC — công ty TRƯỚC, rồi nghĩa trang.
    *
    * `assertSiteFor` MỘT MÌNH KHÔNG ĐỦ: `ScopeService.checkSite` thoát ngay khi mức là GROUP
@@ -530,7 +694,10 @@ export class CardApprovalsService {
   /* Dịch lỗi trùng của CSDL thành câu người đọc hiểu — và PHẢI ĐÚNG INDEX NÀO.
    * Bảng có hai unique index, cả hai đều ra P2002. Không nhận ra thì NÉM NGUYÊN lỗi gốc: đoán
    * bừa nguyên nhân chính là lớp lỗi đang tránh. */
-  private async wrapDuplicate<T>(run: () => Promise<T>): Promise<T> {
+  private async wrapDuplicate<T>(
+    run: () => Promise<T>,
+    openHint?: () => Promise<string>,
+  ): Promise<T> {
     try {
       return await run();
     } catch (err) {
@@ -538,7 +705,7 @@ export class CardApprovalsService {
         const target = duplicateTarget(err);
         if (target.includes('card_issue_approvals_one_open')) {
           throw new ConflictException(
-            'Khách này đã có một hồ sơ đang chờ duyệt — chờ người ký quyết, hoặc huỷ hồ sơ cũ rồi gửi lại.',
+            openHint === undefined ? 'Khách này đã có một hồ sơ đang chờ duyệt.' : await openHint(),
           );
         }
         if (target.includes('card_issue_approvals_one_consumer')) {

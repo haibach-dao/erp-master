@@ -295,6 +295,18 @@ export class CardsService {
      * KHÔNG chặn ở `preview` (bản xem trước có dấu chìm, anh Bách chốt 02/09 giữ nút In) và
      * KHÔNG chặn ở `reprint` (in lại tờ cũ vì máy in kẹt là lỗi công ty, không sinh số không
      * thu tiền). Cửa chỉ đứng ở chỗ CẤP SỐ và THU TIỀN. */
+    /* Khách có mộ ở TỪ HAI nghĩa trang trở lên: `submitForApproval` từ chối (người duyệt gắn
+     * theo nghĩa trang), nên khi cửa bật họ không gửi được ⇒ không duyệt được ⇒ không cấp
+     * được. Nói THẲNG ca đó ở đây, đừng để họ nhận câu "chưa có hồ sơ nào được duyệt" rồi đi
+     * bấm Gửi duyệt và ăn một câu lỗi khác hẳn. Việc tách thẻ theo nghĩa trang (anh Bách chốt
+     * điều 9) chưa dựng — đó là lối ra thật cho ca này. */
+    const cemeteryCount = new Set(card.plots.map((p) => p.cemeteryId)).size;
+    if (cemeteryCount > 1 && (await this.approvals.isRequired(companyId))) {
+      throw new ConflictException(
+        `Khách này có mộ ở ${String(cemeteryCount)} nghĩa trang, mà người duyệt gắn theo từng nghĩa trang — chưa gửi duyệt chung một hồ sơ được, nên chưa cấp thẻ được khi công ty đang bật cửa phê duyệt.`,
+      );
+    }
+
     const approval = await this.approvals.assertApproved(
       this.approvalSubject(companyId, customerId, card.plots, quote, waive),
       caller.userId,
@@ -442,11 +454,16 @@ export class CardsService {
       );
     }
 
-    const waive = await this.fees.resolveWaive(dto, caller.userId);
     const quote = await this.fees.quote({ customerId, companyId, plots: card.plots }, new Date());
 
+    /* KHÔNG gọi `resolveWaive` ở đây — anh Bách chốt hướng A 07/09/2026: miễn phí nằm NGOÀI
+     * luồng duyệt ở lát 1. Gọi nó là bắt người gửi phải cầm `cemetery.card_fee.waive` chỉ để
+     * XIN, mà xin miễn không phải là được miễn. Xem chú thích dài ở `SubmitCardApprovalDto`. */
     return this.approvals.create(
-      this.approvalSubject(companyId, customerId, card.plots, quote, waive),
+      this.approvalSubject(companyId, customerId, card.plots, quote, {
+        waived: false,
+        waiveReason: null,
+      }),
       dto.approverSignerId,
       caller,
     );
