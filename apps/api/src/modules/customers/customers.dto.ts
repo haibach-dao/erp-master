@@ -5,13 +5,24 @@ import {
   IsIn,
   IsInt,
   IsISO8601,
+  IsNotEmpty,
   IsOptional,
   IsString,
   Max,
   Min,
   MinLength,
 } from 'class-validator';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
+
+/* Cắt khoảng trắng hai đầu TRƯỚC khi kiểm.
+ *
+ * `@IsNotEmpty` không cắt gì cả, nên thiếu bước này thì `'   '` là một giá trị hợp lệ — và
+ * nó đi thẳng vào cột `company_id` như một công ty có thật. Hậu quả giống hệt chuỗi rỗng
+ * (`notBlank` bắt được, nhưng `=== null` thì không), chỉ khác là nhìn mắt thường không thấy.
+ */
+const trim = Transform(({ value }: { value: unknown }) =>
+  typeof value === 'string' ? value.trim() : value,
+);
 
 export class CreatePersonDto {
   @ApiProperty() @IsString() @MinLength(1) fullName!: string;
@@ -82,7 +93,28 @@ export class CreateCustomerDto {
   @ApiPropertyOptional() @IsOptional() @IsString() orgName?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() phone?: string;
   @ApiPropertyOptional() @IsOptional() @IsEmail() email?: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() companyId?: string;
+
+  /* CÔNG TY CHỦ QUẢN — BẮT BUỘC (anh Bách chốt 09/09/2026).
+   *
+   * ÉP Ở ĐÂY, KHÔNG Ở CSDL. Quyết định 27/08/2026 của chính anh Bách là GIỮ cột
+   * `cemetery.customers.company_id` CHO PHÉP NULL, nên không có migration nào đổi cột thành
+   * NOT NULL và không thêm CHECK. Hai quyết định không đá nhau: cột vẫn nhận NULL cho những
+   * dòng lịch sử, nhưng từ hôm nay không đường ghi nào sinh thêm dòng như thế.
+   *
+   * VÌ SAO BẮT BUỘC. `companyId` là NEO PHẠM VI của cả hồ sơ: `search` bó theo nó,
+   * `deleteCustomer` bó theo nó, biểu phí cấp thẻ tra theo nó. Hồ sơ không có công ty thì
+   * rơi ra ngoài MỌI hàng rào đó — không hiện với người mức COMPANY, không xoá được, không
+   * tính được phí. Tới trước lượt này form web KHÔNG hề gửi trường này, nên mọi khách tạo
+   * từ giao diện đều ra đời trong đúng trạng thái đó.
+   *
+   * `@IsNotEmpty` chứ không chỉ `@IsString`: `''` là chuỗi hợp lệ, và nó lưu được nguyên
+   * chữ rỗng — một hồ sơ trông như đã có công ty với mọi phép so `=== null`.
+   */
+  @ApiProperty({ description: 'Công ty chủ quản hồ sơ — BẮT BUỘC, là neo phạm vi của hồ sơ' })
+  @trim
+  @IsString({ message: 'Công ty không hợp lệ' })
+  @IsNotEmpty({ message: 'Phải chọn công ty chủ quản cho hồ sơ khách hàng' })
+  companyId!: string;
 }
 
 export class CreateRelationshipDto {
@@ -178,6 +210,32 @@ export class UpdateCustomerDto {
   @ApiPropertyOptional() @IsOptional() @IsString() orgName?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() phone?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() email?: string;
+
+  /* ĐỔI CÔNG TY CHỦ QUẢN — đường sửa mở ra 09/09/2026 cùng lượt với ô bắt buộc lúc tạo.
+   *
+   * PHẢI KHAI Ở ĐÂY thì mới đi xuống được. `main.ts` dựng `ValidationPipe` với
+   * `whitelist: true`, nên trường nào DTO không khai sẽ bị VỨT IM LẶNG: màn hình gửi đúng,
+   * API trả 200, cột không đổi, và không có một dòng lỗi nào. Đó chính là trạng thái của
+   * `companyId` trên đường này cho tới hôm nay — cộng thêm việc `updateCustomer` cũng không
+   * ghi cột đó, nên câu chặn ở `deleteCustomer` ("gán công ty cho hồ sơ trước khi xoá") chỉ
+   * sang một cái ô KHÔNG TỒN TẠI.
+   *
+   * TUỲ CHỌN, không bắt buộc: không gửi = giữ nguyên. Ép bắt buộc ở đường sửa là bắt người
+   * chỉ muốn đổi số điện thoại phải nhắc lại công ty mỗi lần — và một trường bị nhắc lại
+   * máy móc là chỗ người ta chọn nhầm.
+   *
+   * NHƯNG rỗng KHÔNG theo nếp "rỗng = xoá giá trị" của mấy trường trên: gỡ công ty ra là
+   * dựng lại đúng hồ sơ mồ côi mà lượt này sinh ra để dẹp. Service từ chối, ở đó câu báo
+   * lỗi nói được đúng lý do nghiệp vụ.
+   */
+  @ApiPropertyOptional({
+    description: 'Đổi công ty chủ quản. Không gửi = giữ nguyên; gửi rỗng bị TỪ CHỐI.',
+  })
+  @IsOptional()
+  @trim
+  @IsString({ message: 'Công ty không hợp lệ' })
+  companyId?: string;
+
   @ApiPropertyOptional() @IsOptional() person?: UpdatePersonDto;
 }
 

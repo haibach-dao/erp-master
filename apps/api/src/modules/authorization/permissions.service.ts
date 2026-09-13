@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { grantInForce } from '../../common/lifecycle/active';
 import { PrismaService } from '../../prisma/prisma.service';
 import type { PermissionGrant } from './policy.types';
 import { permissionMatches } from './policy-evaluator';
@@ -42,6 +43,21 @@ export interface EffectiveAccess {
   };
 }
 
+/* MỘT QUYẾT ĐỊNH, MỘT MỐC THỜI GIAN.
+ *
+ * Mọi hàm dưới đây nhận `now` ở tham số cuối và chuyền nó xuống, thay vì mỗi chỗ tự gọi
+ * `new Date()`. Không phải chuyện gu: một câu trả lời "người này vào được không" thường ghép
+ * từ HAI, BA lượt đọc CSDL (grant theo vai, phạm vi theo nghĩa trang, chuỗi luật). Mỗi lượt
+ * tự lấy đồng hồ riêng thì giữa chúng có một khoảng thật — đúng bằng thời gian đi và về của
+ * lượt đọc trước — và một grant hết hạn CHÍNH TRONG khoảng đó được lượt này tính là còn, lượt
+ * kia tính là hết. Chuyện hiếm, nhưng ở tầng quyền thì "hiếm" đọc ra thành một lần cấp quyền
+ * không giải thích được, không lặp lại được, không tìm ra được.
+ *
+ * `now` để MẶC ĐỊNH `new Date()` nên mọi nơi gọi cũ vẫn đúng; chỗ nào ghép nhiều lượt đọc thì
+ * lấy mốc một lần ở đầu rồi truyền xuống. Cùng lý do đó, `AccessRulesService.explain` lấy mốc
+ * TRƯỚC khi gọi `evaluateRules` và truyền chính mốc ấy vào — máy thử luật phải xét đúng thời
+ * điểm mà máy thật xét, nếu không nó là một máy thử nói dối.
+ */
 @Injectable()
 export class PermissionsService {
   constructor(private readonly prisma: PrismaService) {}
@@ -57,8 +73,8 @@ export class PermissionsService {
    *
    * Because nothing narrows, the ordered rule chain is the only remaining brake.
    */
-  async getGrants(userId: string): Promise<PermissionGrant[]> {
-    const assignments = await this.activeAssignments(userId);
+  async getGrants(userId: string, now: Date = new Date()): Promise<PermissionGrant[]> {
+    const assignments = await this.activeAssignments(userId, now);
     const grants: PermissionGrant[] = [];
     for (const a of assignments) {
       for (const rp of a.role.rolePermissions) {
@@ -86,11 +102,12 @@ export class PermissionsService {
    * việc gom hai chỗ kiểm về một chỗ.
    */
   async holdsForMasking(userId: string, code: string): Promise<boolean> {
+    const now = new Date();
     const meta = await this.getPermissionMeta(code);
     if (meta === null) {
       return false;
     }
-    const grants = await this.getGrants(userId);
+    const grants = await this.getGrants(userId, now);
     return grants.some((g) =>
       permissionMatches(g.permission, code, { wildcardExempt: meta.wildcardExempt }),
     );
@@ -104,13 +121,13 @@ export class PermissionsService {
    * which the audit role never granted them. Union means "add up what each role gives",
    * not "take the widest thing you hold anywhere and apply it everywhere".
    */
-  async scopeLevelFor(userId: string, code: string): Promise<ScopeLevel> {
-    const ruling = await this.evaluateRules(userId, code);
+  async scopeLevelFor(userId: string, code: string, now: Date = new Date()): Promise<ScopeLevel> {
+    const ruling = await this.evaluateRules(userId, code, now);
     if (ruling === 'DENY') {
       return 'NONE';
     }
     const meta = await this.getPermissionMeta(code);
-    const grants = await this.getGrants(userId);
+    const grants = await this.getGrants(userId, now);
     let level: ScopeLevel = 'NONE';
     for (const g of grants) {
       const covers = permissionMatches(g.permission, code, {
@@ -136,18 +153,22 @@ export class PermissionsService {
    * inherent to an ordered rule list, which is why every rule carries a reason and why
    * the chain is printable in evaluation order.
    */
-  async evaluateRules(userId: string, code: string): Promise<Ruling> {
-    const now = new Date();
+  async evaluateRules(userId: string, code: string, now: Date = new Date()): Promise<Ruling> {
     const [rules, roles] = await Promise.all([
       this.prisma.accessRule.findMany({
         where: {
+          /* Luật NHẮM ĐÍCH DANH người này, hoặc luật áp cho mọi người (`subjectUserId: null`).
+           * Khoá `OR` này là của RIÊNG mệnh đề trên, nên cửa sổ hiệu lực phải vào `AND` chứ
+           * KHÔNG trải ra: `grantInForce` cũng mang một khoá `OR`, và hai khoá `OR` trong cùng
+           * một object thì khoá sau đè khoá trước — mất im lặng một nửa điều kiện, không lỗi,
+           * không cảnh báo. Ở tầng quyền thì "mất im lặng" nghĩa là luật DENY hết hạn vẫn chặn,
+           * hoặc luật ALLOW đã hết hạn vẫn mở. Xem chú thích BẪY ở `common/lifecycle/active.ts`. */
           OR: [{ subjectUserId: userId }, { subjectUserId: null }],
-          validFrom: { lte: now },
-          AND: [{ OR: [{ validTo: null }, { validTo: { gt: now } }] }],
+          AND: [grantInForce(now)],
         },
         orderBy: [{ priority: 'asc' }, { createdAt: 'asc' }],
       }),
-      this.roleCodesOf(userId),
+      this.roleCodesOf(userId, now),
     ]);
 
     for (const rule of rules) {
@@ -168,18 +189,18 @@ export class PermissionsService {
   }
 
   /** Codes the chain currently blocks, evaluated against the catalog the caller holds. */
-  private async deniedAmong(userId: string, codes: string[]): Promise<string[]> {
+  private async deniedAmong(userId: string, codes: string[], now: Date): Promise<string[]> {
     const out: string[] = [];
     for (const code of codes) {
-      if ((await this.evaluateRules(userId, code)) === 'DENY') {
+      if ((await this.evaluateRules(userId, code, now)) === 'DENY') {
         out.push(code);
       }
     }
     return out.sort();
   }
 
-  private async roleCodesOf(userId: string): Promise<string[]> {
-    const assignments = await this.activeAssignments(userId);
+  private async roleCodesOf(userId: string, now: Date = new Date()): Promise<string[]> {
+    const assignments = await this.activeAssignments(userId, now);
     return [...new Set(assignments.map((a) => a.role.code))];
   }
 
@@ -204,16 +225,14 @@ export class PermissionsService {
    * ask the user to type a companyId, which is the same as letting the caller choose
    * their own scope. The lists below are what the server is willing to accept from them.
    */
-  async getEffectiveAccess(userId: string): Promise<EffectiveAccess> {
-    const now = new Date();
+  async getEffectiveAccess(userId: string, now: Date = new Date()): Promise<EffectiveAccess> {
+    /* MỘT mốc cho CẢ HAI trục. Trước đây `now` ở đây chỉ đi vào trục NGHĨA TRANG, còn trục
+     * VAI đi qua `activeAssignments()` và hàm đó tự gọi `new Date()` của riêng nó — một quyết
+     * định, hai đồng hồ, lệch nhau đúng một vòng gọi CSDL. */
     const [assignments, sites] = await Promise.all([
-      this.activeAssignments(userId),
+      this.activeAssignments(userId, now),
       this.prisma.scopeAssignment.findMany({
-        where: {
-          userId,
-          validFrom: { lte: now },
-          OR: [{ validTo: null }, { validTo: { gt: now } }],
-        },
+        where: { userId, ...grantInForce(now) },
         select: { cemeteryId: true },
       }),
     ]);
@@ -235,7 +254,7 @@ export class PermissionsService {
     }
 
     // A blocked code must not be advertised to the UI as something the caller holds.
-    const denied = await this.deniedAmong(userId, [...permissions]);
+    const denied = await this.deniedAmong(userId, [...permissions], now);
     const denySet = new Set(denied);
 
     return {
@@ -251,17 +270,15 @@ export class PermissionsService {
     };
   }
 
-  /* Assignments in force right now. An expired grant simply stops existing — nobody has
+  /* Assignments in force at `now`. An expired grant simply stops existing — nobody has
    * to remember to go and revoke it, which is the entire point of having a `valid_to`.
+   *
+   * Nhận mốc của NGƯỜI GỌI thay vì tự lấy: xem chú thích "MỘT QUYẾT ĐỊNH, MỘT MỐC THỜI GIAN"
+   * ở đầu lớp.
    */
-  private activeAssignments(userId: string) {
-    const now = new Date();
+  private activeAssignments(userId: string, now: Date = new Date()) {
     return this.prisma.roleAssignment.findMany({
-      where: {
-        userId,
-        validFrom: { lte: now },
-        OR: [{ validTo: null }, { validTo: { gt: now } }],
-      },
+      where: { userId, ...grantInForce(now) },
       include: { role: { include: { rolePermissions: { include: { permission: true } } } } },
     });
   }

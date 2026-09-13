@@ -92,8 +92,22 @@ function clampLimit(limit: number | undefined): number {
   return Math.min(Math.floor(limit), MAX_LIMIT);
 }
 
+/* "TRỐNG" gồm CẢ CHUỖI TOÀN KHOẢNG TRẮNG — sửa 10/09/2026.
+ *
+ * Bản cũ chỉ so `!== ''`, nên `'   '` được tính là CÓ giá trị. Ở hai chỗ dùng nó làm hàng rào
+ * phạm vi (`deleteCustomer`, `resolveCompanyChange`, `assertPersonInScope`) đó là FAIL-OPEN:
+ * một hồ sơ có `company_id = '   '` đi thẳng xuống `assertCompanyFor`, nơi người mức GROUP đi
+ * qua tuốt — đúng cái lỗ mà mấy chú thích "trống gồm cả chuỗi rỗng" tuyên bố là đã bịt.
+ *
+ * `@Transform(trim)` ở DTO chỉ canh được đường GHI MỚI. Dòng đã nằm sẵn trong CSDL, dòng do
+ * script seed ghi, và dòng ghi thẳng bằng psql thì không đi qua DTO — mà cột `company_id` vẫn
+ * NULLABLE và không có CHECK nào (quyết định 27/08/2026 giữ nguyên). Nên phép hỏi phải tự cắt.
+ *
+ * Chiều đổi là FAIL-CLOSED: giá trị toàn khoảng trắng nay bị coi là trống, tức bị CHẶN thêm
+ * chứ không bao giờ được cho qua thêm. Ở bốn chỗ dùng làm BỘ LỌC (`search`) thì cùng ý: một
+ * bộ lọc bằng `'   '` là không lọc gì. */
 function notBlank(v: string | undefined | null): boolean {
-  return v !== undefined && v !== null && v !== '';
+  return v !== undefined && v !== null && v.trim() !== '';
 }
 
 /* "Đã mất" suy từ SỰ TỒN TẠI của hồ sơ người mất, không từ một cờ riêng — cùng một sự thật
@@ -220,7 +234,44 @@ export class CustomersService {
     return { person, warnings };
   }
 
-  async createCustomer(dto: CreateCustomerDto, actor: string | null) {
+  /* Công ty đích phải CÓ THẬT trong danh mục `org.companies`.
+   *
+   * `assertCompanyFor` KHÔNG trả lời câu này: nó hỏi "người này với tới công ty đó không",
+   * và nó thoát ngay ở dòng đầu cho mức GROUP. Nên một id gõ sai (hay một công ty đã bị dọn
+   * đi) sẽ đi lọt và neo hồ sơ vào một công ty ma — hồ sơ đó vô hình với MỌI màn hình bó
+   * theo công ty, kể cả với chính người vừa tạo nó. Cùng lớp lỗi với `companyId = ''`, chỉ
+   * khác là lần này chuỗi trông có vẻ hợp lệ.
+   */
+  private async assertCompanyExists(companyId: string): Promise<void> {
+    const company = await this.prisma.company.findUnique({
+      where: { id: companyId },
+      select: { id: true },
+    });
+    if (company === null) {
+      throw new NotFoundException(
+        'Không tìm thấy công ty này trong danh mục — chọn lại công ty chủ quản cho hồ sơ.',
+      );
+    }
+  }
+
+  /* CÔNG TY LÀ BẮT BUỘC KHI TẠO KHÁCH (anh Bách chốt 09/09/2026).
+   *
+   * `companyId` là NEO PHẠM VI của cả hồ sơ, nên bỏ trống nó là tạo ra một hồ sơ nằm ngoài
+   * mọi hàng rào: `search` không trả về, `deleteCustomer` từ chối, biểu phí cấp thẻ không tra
+   * ra giá. DTO ép có mặt và khác rỗng; ở đây bỏ hẳn `?? null` — còn `?? null` là còn một
+   * đường ghi NULL sống sót sau lưng DTO.
+   *
+   * VÀ PHẢI KIỂM PHẠM VI, không chỉ kiểm có mặt. Một ô bắt buộc mà không hỏi phạm vi là mời
+   * người ở công ty A gõ id công ty B vào: hồ sơ ra đời ngay trong nhà người khác, và kể từ
+   * giây đó mọi hàng rào bó theo `companyId` đều tính nó là của B. Hỏi TRƯỚC khi ghi bất cứ
+   * thứ gì — `createPerson` bên dưới ghi một dòng `persons` thật, nên chặn muộn là để lại một
+   * hồ sơ nhân thân mồ côi.
+   */
+  async createCustomer(dto: CreateCustomerDto, caller: Caller) {
+    await this.scope.assertCompanyFor(caller.userId, caller.permission, dto.companyId);
+    await this.assertCompanyExists(dto.companyId);
+
+    const actor = caller.userId;
     let personId = dto.personId ?? null;
     let warnings: DedupWarning[] = [];
 
@@ -249,7 +300,7 @@ export class CustomersService {
         orgName: dto.orgName ?? null,
         phone: dto.phone ?? null,
         email: dto.email ?? null,
-        companyId: dto.companyId ?? null,
+        companyId: dto.companyId,
       },
     });
     await this.audit.record({
@@ -608,7 +659,8 @@ export class CustomersService {
    * CCCD sửa được nhưng phải sinh lại CẢ BA cột (hash để chống trùng, masked để hiện,
    * cipher để lưu) — sửa một cột là ba câu trả lời khác nhau về cùng một số.
    */
-  async updateCustomer(customerId: string, dto: UpdateCustomerDto, actor: string | null) {
+  async updateCustomer(customerId: string, dto: UpdateCustomerDto, caller: Caller) {
+    const actor = caller.userId;
     const before = await this.prisma.customer.findUnique({
       where: { id: customerId },
       include: { person: true },
@@ -618,6 +670,8 @@ export class CustomersService {
     }
 
     const customerData: Prisma.CustomerUpdateInput = {};
+    const companyChange = await this.resolveCompanyChange(before.companyId, dto, caller);
+    if (companyChange !== null) customerData.companyId = companyChange.to;
     if (dto.type !== undefined) customerData.type = dto.type;
     if (dto.orgName !== undefined) customerData.orgName = dto.orgName === '' ? null : dto.orgName;
     if (dto.phone !== undefined) customerData.phone = dto.phone === '' ? null : dto.phone;
@@ -684,7 +738,91 @@ export class CustomersService {
         changedPersonFields: Object.keys(personData),
       },
     });
+
+    /* DÒNG AUDIT RIÊNG cho lần đổi công ty, kèm before/after.
+     *
+     * `CUSTOMER.UPDATED` ngay trên chỉ ghi TÊN trường đã đổi — cố ý, vì nó cũng phủ CCCD và
+     * chép giá trị vào nhật ký là mở cửa sau vòng qua lớp che. Nhưng công ty thì ngược lại:
+     * nó KHÔNG phải dữ liệu cá nhân, nó là NEO PHẠM VI, và câu duy nhất cần trả lời sau này
+     * là "hồ sơ đi TỪ đâu SANG đâu, ai đẩy". Đọc `changedCustomerFields: ['companyId']` chỉ
+     * biết có đổi, không lần lại được một hồ sơ đi lạc.
+     */
+    if (companyChange !== null) {
+      await this.audit.record({
+        actorType: 'USER',
+        actorId: actor,
+        action: 'CUSTOMER.COMPANY_CHANGED',
+        entityType: 'customer',
+        entityId: customerId,
+        beforeData: { companyId: companyChange.from },
+        afterData: { companyId: companyChange.to },
+      });
+    }
     return updated;
+  }
+
+  /* ĐỔI CÔNG TY LÀ CHUYỂN HỒ SƠ SANG NHÀ KHÁC — bó CẢ HAI ĐẦU.
+   *
+   * Trả `null` nghĩa là không có gì đổi (không gửi, hoặc gửi đúng công ty đang có), và lúc đó
+   * KHÔNG được chạm vào cột.
+   *
+   * HAI ĐẦU, không một. Thiếu vế nào cũng mở một lỗ, và hai lỗ đó ngược chiều nhau:
+   *   - thiếu ĐẦU HIỆN TẠI: người ở công ty B KÉO hồ sơ của công ty A về mình — họ với tới
+   *     đích (B là của họ) và không ai hỏi họ có được đụng vào hồ sơ đang ở A hay không.
+   *   - thiếu ĐẦU ĐÍCH: người ở công ty A ĐẨY hồ sơ của mình sang B — hồ sơ biến mất khỏi
+   *     tầm nhìn của chính A, và không ai ở B yêu cầu điều đó.
+   * Cả hai đều là mất quyền kiểm soát một hồ sơ, chỉ khác ai là người mất.
+   *
+   * HỒ SƠ ĐANG TRỐNG Ô CÔNG TY là ca phải mở, không phải ca chặn cứng: chính nó là thứ câu từ
+   * chối ở `deleteCustomer` bảo người dùng đi sửa. Nhưng "trống" thì không quy được hồ sơ về
+   * phạm vi nào, nên không thể hỏi `assertCompanyFor` trên đầu hiện tại (nó thoát ngay cho
+   * GROUP, và ném câu "Phải chỉ rõ công ty…" — câu nói về truy vấn danh sách — cho COMPANY).
+   * Hỏi bằng `visibleCompanyIdsFor`: `null` = không bị bó = mức GROUP. Người mức COMPANY nhận
+   * một hồ sơ chưa từng thuộc về ai là tự cấp cho mình một hồ sơ — cùng lớp lỗi với "thiếu
+   * đầu hiện tại", chỉ khác là đầu đó trống.
+   *
+   * "TRỐNG" gồm CẢ CHUỖI RỖNG, nên hỏi bằng `notBlank` — cùng nếp với `deleteCustomer` và
+   * `assertPersonInScope`. So `=== null` là để hồ sơ `companyId = ''` đi thẳng xuống
+   * `assertCompanyFor`, nơi mức GROUP đi qua tuốt.
+   */
+  private async resolveCompanyChange(
+    current: string | null,
+    dto: UpdateCustomerDto,
+    caller: Caller,
+  ): Promise<{ from: string | null; to: string } | null> {
+    if (dto.companyId === undefined) {
+      return null;
+    }
+    const target = dto.companyId;
+
+    /* Rỗng KHÔNG theo nếp "rỗng = xoá giá trị" của các trường khác trong cùng DTO: gỡ công ty
+     * ra là dựng lại đúng hồ sơ mồ côi mà lượt này sinh ra để dẹp. */
+    if (!notBlank(target)) {
+      throw new BadRequestException(
+        'Công ty không được để trống — hồ sơ khách hàng phải thuộc một công ty. Chọn công ty khác thay vì bỏ trống ô này.',
+      );
+    }
+    if (target === current) {
+      return null;
+    }
+
+    // ĐẦU 1 — công ty HIỆN TẠI: được động vào hồ sơ này không.
+    if (notBlank(current)) {
+      await this.scope.assertCompanyFor(caller.userId, caller.permission, current);
+    } else {
+      const visible = await this.scope.visibleCompanyIdsFor(caller.userId, caller.permission);
+      if (visible !== null) {
+        throw new ForbiddenException(
+          'Hồ sơ này chưa được gắn công ty nên không quy được về phạm vi nào — chỉ người có phạm vi toàn tập đoàn mới nhận nó về được.',
+        );
+      }
+    }
+
+    // ĐẦU 2 — công ty ĐÍCH: được đặt hồ sơ vào đó không, và công ty đó có thật không.
+    await this.scope.assertCompanyFor(caller.userId, caller.permission, target);
+    await this.assertCompanyExists(target);
+
+    return { from: current, to: target };
   }
 
   /* ---- Xoá hẳn hồ sơ khách hàng ----
@@ -706,8 +844,13 @@ export class CustomersService {
    *
    * Trả về danh sách CHẶN chứ không phải một câu "không xoá được": người dùng cần biết
    * phải dọn cái gì trước, không phải biết là mình vừa thất bại.
+   *
+   * PHẠM VI: bó theo công ty của CHÍNH HỒ SƠ, tính THEO MÃ `crm.customer.delete`. Tới
+   * 09/09/2026 đường này không kiểm phạm vi một dòng nào — gate quyền trả lời "có được xoá
+   * khách hàng không", nó KHÔNG trả lời "xoá được khách hàng NÀO", nên người ở công ty A
+   * xoá hẳn khách của công ty B và chiều đó không đảo ngược được.
    */
-  async deleteCustomer(customerId: string, actor: string | null) {
+  async deleteCustomer(customerId: string, caller: Caller) {
     const customer = await this.prisma.customer.findUnique({
       where: { id: customerId },
       include: { person: { select: { id: true, fullName: true } } },
@@ -715,6 +858,37 @@ export class CustomersService {
     if (customer === null) {
       throw new NotFoundException('Không tìm thấy khách hàng');
     }
+
+    /* Hỏi phạm vi TRƯỚC khi động vào bất cứ dữ liệu nào — chặn sau khi đã xoá xong một nửa
+     * thì không còn là chặn.
+     *
+     * BẪY NULL: `Customer.companyId` CHO PHÉP NULL, nên khuôn "có công ty thì kiểm, NULL
+     * thì cho qua" là fail-open — mà ô công ty thì ai tạo khách cũng bỏ trống được, tức là
+     * ai cũng tự tạo ra được một hồ sơ nằm ngoài mọi hàng rào. Không quy được hồ sơ về
+     * công ty nào thì TỪ CHỐI, kể cả người mức GROUP (`assertCompanyFor` thoát ngay ở dòng
+     * đầu cho GROUP, nên dựa vào nó là để hồ sơ trống ô công ty lọt qua). Cùng nếp với
+     * `assertPersonInScope` ở đường đọc CCCD: quy không ra neo thì chặn, không phải cho qua.
+     *
+     * "TRỐNG" gồm CẢ CHUỖI RỖNG, nên hỏi bằng `notBlank` chứ không so `=== null`. `''` tới
+     * được thật ở dữ liệu cũ: trước 09/09/2026 DTO chỉ `@IsOptional() @IsString()` (không
+     * `@IsNotEmpty`) và `createCustomer` ghi thẳng `dto.companyId ?? null`, nên `''` lưu
+     * nguyên chữ rỗng; bảng `customers` vẫn không có CHECK nào trên `company_id` và sẽ không
+     * có (quyết định 27/08/2026 GIỮ cột cho phép NULL). So `=== null` là để đúng cái bẫy mà
+     * chú thích này tuyên bố đang bịt vẫn mở: hồ sơ `companyId = ''` bị mức GROUP xoá HẲN.
+     *
+     * CÂU TỪ CHỐI PHẢI CHỈ SANG MỘT LỐI CÓ THẬT. Tới 09/09/2026 nó bảo "gán công ty cho hồ
+     * sơ trước khi xoá" trong khi KHÔNG có đường nào gán được: `UpdateCustomerDto` không khai
+     * `companyId` (mà `whitelist: true` thì vứt im lặng trường không khai), và
+     * `updateCustomer` chỉ ghi type/orgName/phone/email. Người đọc đi tìm một cái ô không tồn
+     * tại rồi kết luận là hệ báo sai. Đường đó nay đã mở, nên câu chỉ thẳng tới chỗ bấm.
+     */
+    if (!notBlank(customer.companyId)) {
+      throw new ForbiddenException(
+        'Hồ sơ này chưa được gắn công ty nên không xác định được phạm vi — mở màn hình Hồ sơ khách hàng, bấm Sửa và chọn công ty chủ quản, rồi mới xoá được.',
+      );
+    }
+    await this.scope.assertCompanyFor(caller.userId, caller.permission, customer.companyId);
+
     const personId = customer.person?.id ?? null;
 
     /* Rào chắn SINH RA từ sổ đăng ký, không viết tay từng lời gọi.
@@ -883,7 +1057,7 @@ export class CustomersService {
 
     await this.audit.record({
       actorType: 'USER',
-      actorId: actor,
+      actorId: caller.userId,
       action: 'CUSTOMER.DELETED',
       entityType: 'customer',
       entityId: customerId,
@@ -1167,13 +1341,18 @@ export class CustomersService {
    * `Customer.companyId` CHO PHÉP NULL, nên "chỉ kiểm khi khác null" ở bước 1 chính là
    * fail-open: mọi khách chưa gán công ty sẽ thành cửa mở. Null ở bước 1 thì RƠI SANG
    * bước 2, không phải cho qua.
+   *
+   * Và "trống" gồm CẢ CHUỖI RỖNG — cùng lý do với `deleteCustomer`: DTO không có
+   * `@IsNotEmpty` và CSDL không có CHECK nên `''` lưu được. Hỏi bằng `notBlank` để hai
+   * cách trống đi chung một đường; so `!== null` thì `''` được coi là CÓ neo và đem thẳng
+   * xuống `assertCompanyFor`, nơi người mức GROUP đi qua tuốt.
    */
   private async assertPersonInScope(personId: string, caller: Caller): Promise<void> {
     const customer = await this.prisma.customer.findUnique({
       where: { personId },
       select: { companyId: true },
     });
-    if (customer !== null && customer.companyId !== null) {
+    if (customer !== null && notBlank(customer.companyId)) {
       await this.scope.assertCompanyFor(caller.userId, caller.permission, customer.companyId);
       return;
     }

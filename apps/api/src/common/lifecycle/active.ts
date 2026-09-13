@@ -115,14 +115,49 @@ export function inEffect(now: Date = new Date()) {
   ];
 }
 
-/* Grant/luật còn hiệu lực theo `validFrom`/`validTo` — cùng ý với `inEffect` nhưng khác
- * tên cột. Hai bộ cột khác nhau ở hai nhóm bảng, nên hai hàm; gộp làm một hàm nhận tên
- * cột thì mất kiểu và Prisma không kiểm được nữa. */
-export function stillValid(now: Date = new Date()) {
-  return [
-    { OR: [{ validFrom: null }, { validFrom: { lte: now } }] },
-    { OR: [{ validTo: null }, { validTo: { gte: now } }] },
-  ];
+/* GRANT/LUẬT CÒN HIỆU LỰC theo `validFrom`/`validTo` — cùng ý với `inEffect` nhưng khác
+ * tên cột. Hai bộ cột khác nhau ở hai nhóm bảng, nên hai hàm; gộp làm một hàm nhận tên cột
+ * thì mất kiểu và Prisma không kiểm được nữa.
+ *
+ * MỘT bản cho cả ba bảng grant: `RoleAssignment`, `ScopeAssignment`, `AccessRule`.
+ *
+ * BẢN NÀY THAY `stillValid()` (gộp 09/09/2026). Bản cũ tên mơ hồ và KHÔNG DÙNG ĐƯỢC: nó có
+ * nhánh `{ validFrom: null }` trong khi `valid_from` là NOT NULL ở cả ba bảng — nhánh đó
+ * còn không qua nổi kiểu Prisma. Hệ quả đo được: không một chỗ nào gọi nó, và mảnh này bị
+ * CHÉP TAY ở sáu chỗ khác nhau. Một bản dùng chung mà không ai dùng được thì mọi nơi tự
+ * chép lấy — đúng cái bệnh cả file này sinh ra để chữa.
+ *
+ * `gt` CHỨ KHÔNG `gte`, và đây là chỗ quyết định chứ không phải chuyện gu. `PermissionsService`
+ * — tầng THỰC SỰ trả lời "người này vào được hay không" — dùng `gt` ở mọi chỗ. Lấy `gte` thì
+ * đúng khoảnh khắc `validTo = now` sinh ra một lằn ranh: danh mục người ký nói "được ký",
+ * còn `PermissionGuard` nói 403. Người dùng nhìn thấy nút bấm được, bấm vào thì bị từ chối —
+ * và không có gì trên màn hình giải thích nổi. Mọi tầng phải trả lời GIỐNG NHAU.
+ *
+ * TRẢ OBJECT để trộn thẳng vào `where`: `where: { userId, ...grantInForce(now) }`.
+ *
+ * BẪY: mệnh đề này có khoá `OR`. Chỗ nào ĐÃ có `OR` của riêng nó (ví dụ
+ * `accessRule` lọc `subjectUserId`) thì phải đặt vào `AND: [grantInForce(now)]`, KHÔNG trải
+ * ra — trải ra là một khoá đè lên khoá kia và mất im lặng một nửa điều kiện.
+ *
+ * Là HÀM và dựng object MỚI mỗi lần, cùng lý do đã ghi ở `activeBurial()`: Prisma đòi mảng
+ * khả biến, và trả về một hằng dùng chung là mở đường cho một chỗ nào đó sửa tại chỗ rồi
+ * đổi nghĩa cho toàn hệ. */
+export function grantInForce(now: Date = new Date()) {
+  return { validFrom: { lte: now }, OR: [{ validTo: null }, { validTo: { gt: now } }] };
+}
+
+/* CÙNG MỘT LUẬT, dạng VỊ TỪ trên một dòng đã đọc về — cho chỗ đã cầm bản ghi trong tay và
+ * chỉ cần dán nhãn "còn hiệu lực" lên nó (`AccessRulesService.list`).
+ *
+ * Nằm SÁT `grantInForce` là cố ý. Đây là hai dạng của MỘT luật, và biên `>` ở đây phải khớp
+ * `gt` ở trên. Để nó ở service thì có ngày `gt` bên trên thành `>=` bên dưới, và màn hình
+ * quản trị dán nhãn "còn hiệu lực" lên đúng cái luật mà chuỗi duyệt đã bỏ qua — một màn
+ * hình nói dối về chính thứ nó quản. */
+export function grantInForceAt(
+  row: { validFrom: Date; validTo: Date | null },
+  now: Date = new Date(),
+): boolean {
+  return row.validFrom <= now && (row.validTo === null || row.validTo > now);
 }
 
 /** Mục con của hồ sơ nhân thân còn dùng (số điện thoại, địa chỉ, học vấn, tài khoản). */

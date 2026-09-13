@@ -17,6 +17,12 @@ import { Tabs, TabPanel, type TabItem } from '@/components/ui/tabs';
 
 export interface CustomerFormValue {
   type: string;
+  /* Công ty chủ quản. BẮT BUỘC lúc tạo, SỬA ĐƯỢC ở màn hồ sơ (anh Bách chốt 09/09/2026).
+   *
+   * Nằm trong `CustomerFormValue` chứ không dựng riêng ở từng trang: một bộ trường, hai chỗ
+   * dùng — đúng lý do đã ghi ở đầu tệp. Dựng riêng thì ô này chỉ mọc ở màn tạo, và màn hồ sơ
+   * lại không sửa được công ty, tức là tái lập đúng cái ngõ cụt vừa dẹp. */
+  companyId: string;
   fullName: string;
   gender: string;
   dateOfBirth: string;
@@ -35,6 +41,7 @@ export interface CustomerFormValue {
 
 export const EMPTY_CUSTOMER_FORM: CustomerFormValue = {
   type: 'INDIVIDUAL',
+  companyId: '',
   fullName: '',
   gender: '',
   dateOfBirth: '',
@@ -65,12 +72,21 @@ export function CustomerFormTabs({
   /** Sửa hồ sơ đã có: không cho đổi loại khách hàng — đổi cá nhân thành tổ chức là bỏ hồ
    *  sơ nhân thân, và đó là việc khác chứ không phải sửa một trường. */
   lockType = false,
+  /** Công ty người dùng được chọn. Danh sách này ĐÃ bó theo phạm vi ở API (`listCompanies`
+   *  lọc theo `visibleCompanyIdsFor`), nên người phụ trách một công ty chỉ thấy đúng công ty
+   *  đó — mời chọn rồi ăn 403 là bắt người dùng thử đến khi trúng. */
+  companies = [],
+  /** `null` = chọn được. Khác `null` = ô bị khoá, và CHÍNH chuỗi này là lý do hiện ra cho
+   *  người dùng đọc. Một ô xám không kèm lý do là chỗ người ta ngồi đoán. */
+  companyBlocked = null,
 }: {
   value: CustomerFormValue;
   onChange: (patch: Partial<CustomerFormValue>) => void;
   tab: string;
   onTabChange: (id: string) => void;
   lockType?: boolean;
+  companies?: { id: string; code: string; name: string }[];
+  companyBlocked?: string | null;
 }) {
   const individual = value.type === 'INDIVIDUAL';
 
@@ -89,6 +105,53 @@ export function CustomerFormTabs({
               <option value="ORGANIZATION">Tổ chức</option>
               <option value="AGENT">Đại lý</option>
               <option value="PROSPECT">Tiềm năng</option>
+            </Select>
+          </Field>
+
+          {/* CÔNG TY CHỦ QUẢN — bắt buộc lúc tạo, sửa được ở màn hồ sơ.
+              Đây là NEO PHẠM VI của cả hồ sơ: danh sách khách, quyền xoá và biểu phí cấp thẻ
+              đều bó theo nó. Bỏ trống là tạo ra một hồ sơ không màn hình nào bó tới được. */}
+          <Field
+            label="Công ty chủ quản"
+            htmlFor="companyId"
+            required
+            {...(companyBlocked !== null
+              ? { hint: companyBlocked }
+              : {
+                  hint: 'Quyết định ai nhìn thấy và xử lý được hồ sơ này. Đổi công ty là chuyển hồ sơ sang đơn vị khác.',
+                })}
+          >
+            {/* KHÔNG đặt `required` lên chính ô này, dù nó là trường bắt buộc.
+
+                Hai lý do. Một: câu chặn của trình duyệt ("Please select an item in the list")
+                là TIẾNG ANH và không sửa được — nút chặn ở đây phải nói tiếng Việt, nên việc
+                chặn thuộc về nút Lưu kèm câu giải thích, đúng khuôn `blocked` của repo.
+                Hai: form này dùng chung cho màn SỬA, nơi một hồ sơ cũ có thể đang trống ô
+                công ty — `required` sẽ chặn cả người chỉ muốn đổi số điện thoại của hồ sơ đó,
+                bằng một câu họ không đọc được. Dấu sao đỏ vẫn còn (`required` trên `Field`),
+                nên người nhập vẫn thấy đây là trường bắt buộc. */}
+            <Select
+              id="companyId"
+              value={value.companyId}
+              disabled={companyBlocked !== null}
+              onChange={(e) => onChange({ companyId: e.target.value })}
+            >
+              <option value="">— Chọn công ty —</option>
+              {/* Công ty ĐANG GẮN mà không nằm trong danh sách chọn được: giữ một dòng cho
+                  nó, nếu không `<select>` hiện RỖNG trong khi hồ sơ vẫn có công ty — người
+                  đọc tưởng hồ sơ chưa gắn ai và sẽ gán đè sang công ty khác. Danh sách này
+                  bó theo `org.company.view`, còn hồ sơ thì tới từ `crm.customer.*`; hai mã
+                  khác nhau nên hai phạm vi lệch nhau được. */}
+              {value.companyId !== '' && !companies.some((c) => c.id === value.companyId) ? (
+                <option value={value.companyId}>
+                  Công ty hiện tại của hồ sơ (ngoài danh sách bạn chọn được)
+                </option>
+              ) : null}
+              {companies.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.code} — {c.name}
+                </option>
+              ))}
             </Select>
           </Field>
 

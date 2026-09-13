@@ -140,6 +140,14 @@ export interface DedupWarning {
 
 export interface CreateCustomerInput {
   type: string;
+  /* CÔNG TY CHỦ QUẢN — BẮT BUỘC (anh Bách chốt 09/09/2026).
+   *
+   * Không phải `?:`. Tới trước lượt này trường này KHÔNG hề được khai ở đây, nên form web
+   * không gửi nó và MỌI khách tạo từ giao diện ra đời với `company_id` rỗng — tức là nằm
+   * ngoài mọi hàng rào bó theo công ty: không hiện với người mức COMPANY, không xoá được,
+   * không tra ra biểu phí cấp thẻ. Khai bắt buộc ở đây để TypeScript chặn ngay tại chỗ gọi,
+   * chứ không để API trả 400 rồi mới biết. */
+  companyId: string;
   person?: {
     fullName: string;
     gender?: string;
@@ -1183,6 +1191,13 @@ export interface UpdateCustomerInput {
   orgName?: string;
   phone?: string;
   email?: string;
+  /* ĐỔI CÔNG TY CHỦ QUẢN — tuỳ chọn: không gửi = giữ nguyên.
+   *
+   * KHÁC mấy trường trên ở chỗ chuỗi rỗng: ở đây rỗng KHÔNG có nghĩa "xoá giá trị", server
+   * TỪ CHỐI nó. Gỡ công ty ra là dựng lại đúng hồ sơ mồ côi mà lượt 09/09/2026 sinh ra để
+   * dẹp. Server còn bó phạm vi CẢ HAI đầu (công ty hiện tại và công ty đích), nên chọn sai
+   * sẽ nhận 403 kèm câu tiếng Việt chứ không im lặng. */
+  companyId?: string;
   /* Trường của nhân thân. KHÁC payload tạo mới ở một điểm: chuỗi rỗng ở đây nghĩa là
    * XOÁ giá trị cũ, không phải "bỏ qua". Không phân biệt được thì không có cách nào xoá
    * một giá trị đã nhập sai. */

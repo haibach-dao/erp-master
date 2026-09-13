@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { ulid } from 'ulid';
+import { grantInForce, grantInForceAt } from '../../common/lifecycle/active';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { PermissionsService } from './permissions.service';
@@ -39,10 +40,11 @@ export class AccessRulesService {
       orderBy: [{ priority: 'asc' }, { createdAt: 'asc' }],
     });
     const now = new Date();
-    return rows.map((r) => ({
-      ...r,
-      active: r.validFrom <= now && (r.validTo === null || r.validTo > now),
-    }));
+    /* Dạng VỊ TỪ của CÙNG luật mà `evaluateRules` lọc bằng `grantInForce` — cố ý dùng chung
+     * một định nghĩa. Tự viết lại phép so ở đây là mở đường cho ngày biên `>` bên này lệch
+     * `gt` bên kia, và khi đó màn hình quản trị dán nhãn "còn hiệu lực" lên đúng cái luật mà
+     * chuỗi duyệt đã bỏ qua. */
+    return rows.map((r) => ({ ...r, active: grantInForceAt(r, now) }));
   }
 
   /* Thêm luật vào CUỐI chuỗi.
@@ -171,17 +173,28 @@ export class AccessRulesService {
    * nào khớp và ma trận vai mới là chỗ quyết.
    */
   async explain(userId: string, code: string) {
-    const ruling = await this.permissions.evaluateRules(userId, code);
+    /* MỐC LẤY TRƯỚC, RỒI MỚI CHẠY MÁY THẬT — và chính mốc ấy được truyền vào.
+     *
+     * Trước đây `now` lấy SAU `evaluateRules`, tức cách nhau nguyên một vòng gọi CSDL, trong
+     * khi chú thích ngay dưới lại hứa "PHẢI khớp từng chữ". Một luật hết hạn đúng trong khoảng
+     * đó thì máy thật đã xét nó là còn, còn màn thử luật lại đọc ra là hết — và màn thử luật
+     * nói khác máy thật thì tệ hơn hẳn không có màn thử luật, vì người ta tin nó. */
     const now = new Date();
+    const ruling = await this.permissions.evaluateRules(userId, code, now);
     const rules = await this.prisma.accessRule.findMany({
+      /* PHẢI khớp từng chữ với `PermissionsService.evaluateRules` — đây là màn "thử luật", và
+       * một máy thử trả lời khác máy thật thì tệ hơn không có máy thử.
+       *
+       * `AND: [grantInForce(now)]` chứ không trải ra: mệnh đề `subjectUserId` ngay trên đã
+       * chiếm khoá `OR`, mà `grantInForce` cũng mang một khoá `OR`. Trải ra là khoá sau đè
+       * khoá trước và mất im lặng một nửa điều kiện. */
       where: {
         OR: [{ subjectUserId: userId }, { subjectUserId: null }],
-        validFrom: { lte: now },
-        AND: [{ OR: [{ validTo: null }, { validTo: { gt: now } }] }],
+        AND: [grantInForce(now)],
       },
       orderBy: [{ priority: 'asc' }, { createdAt: 'asc' }],
     });
-    const access = await this.permissions.getEffectiveAccess(userId);
+    const access = await this.permissions.getEffectiveAccess(userId, now);
     const matched =
       rules.find(
         (r) =>
@@ -195,7 +208,7 @@ export class AccessRulesService {
       /* NO_MATCH thì ma trận vai quyết. Nói ra cả điều đó, vì "không luật nào khớp" và
        * "bị chặn" là hai câu trả lời khác nhau mà người dùng rất dễ đọc lẫn. */
       fallsBackToRoleMatrix: ruling === 'NO_MATCH',
-      scopeLevel: await this.permissions.scopeLevelFor(userId, code),
+      scopeLevel: await this.permissions.scopeLevelFor(userId, code, now),
     };
   }
 

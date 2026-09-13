@@ -432,6 +432,43 @@ describe('cửa phê duyệt in thẻ mộ', () => {
     expect(assertSiteFor).toHaveBeenCalledWith(CALLER.userId, CALLER.permission, 'cem-1');
   });
 
+  /* Tư cách người ký là GIAO của hai trục có `validTo` và TỰ HẾT HẠN. Hỏi CSDL mà quên cửa sổ
+   * hiệu lực thì vai đã hết nhiệm kỳ hôm qua vẫn đủ tư cách hôm nay, và hồ sơ được gửi cho một
+   * người mà `PermissionGuard` sẽ từ chối lúc họ bấm Duyệt — hồ sơ nằm đó vĩnh viễn.
+   *
+   * MỘT mốc `now` cho CẢ HAI truy vấn. Hai mốc lệch nhau là một cửa sổ hiệu lực có hai biên, và
+   * đúng cái khoảnh khắc giữa hai mốc ấy sinh ra một ca "lúc được lúc không" không ai dựng lại
+   * được. Cùng lý lẽ vì sao cả hai lấy mảnh từ `common/lifecycle/active.ts` thay vì tự viết. */
+  it('chỉ tính vai và phân công CÒN HIỆU LỰC, và cả hai dùng CHUNG một mốc thời gian', async () => {
+    const { svc, prisma } = build();
+    await svc.create(SUBJECT, 'signer-1', CALLER);
+
+    const p = prisma as unknown as {
+      roleAssignment: { findFirst: ReturnType<typeof vi.fn> };
+      scopeAssignment: { findFirst: ReturnType<typeof vi.fn> };
+    };
+    const roleWhere = p.roleAssignment.findFirst.mock.calls[0]?.[0]?.where as Record<
+      string,
+      unknown
+    >;
+    const siteWhere = p.scopeAssignment.findFirst.mock.calls[0]?.[0]?.where as Record<
+      string,
+      unknown
+    >;
+
+    for (const where of [roleWhere, siteWhere]) {
+      expect(where.validFrom).toEqual({ lte: expect.any(Date) });
+      expect(where.OR).toEqual([{ validTo: null }, { validTo: { gt: expect.any(Date) } }]);
+    }
+
+    /* So bằng THAM CHIẾU, không so chuỗi ISO. Hai lệnh `new Date()` cách nhau vài micro giây
+     * vẫn ra cùng một mili giây, nên so chuỗi thì hai mốc lệch nhau vẫn xanh — một phép kiểm
+     * không kiểm gì. Cùng một object thì mới chắc là cùng một mốc. */
+    expect((roleWhere.validFrom as { lte: Date }).lte).toBe(
+      (siteWhere.validFrom as { lte: Date }).lte,
+    );
+  });
+
   /* Câu chặn phải nêu ĐÚNG MỘT việc người đang đứng trước cửa LÀM ĐƯỢC.
    *
    * Bản đầu nói chung một câu cho mọi người: "chờ người ký quyết, hoặc huỷ hồ sơ cũ rồi gửi
