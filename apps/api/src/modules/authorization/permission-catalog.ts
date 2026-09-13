@@ -536,6 +536,18 @@ export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
     'cemetery.hold.view',
     'crm.customer.view',
     'crm.customer.create',
+    /* ĐI KÈM `crm.customer.create`, không phải một quyền quản trị mới (anh Bách chốt
+     * 10/09/2026). Từ 09/09 ô CÔNG TY CHỦ QUẢN là BẮT BUỘC khi tạo khách, và đường duy nhất
+     * điền nó là ô chọn lấy dữ liệu từ `GET /cemetery/companies` — route gác bằng
+     * `org.company.view`. Đo 10/09: mã đó chỉ ADMIN cầm, nên ba vai tạo được khách hàng đều
+     * KHÔNG đọc nổi danh mục công ty ⇒ nút Lưu xám vĩnh viễn. Cấp mã tạo mà không cấp mã đọc
+     * danh mục thì mã tạo chỉ còn trên giấy.
+     *
+     * Phạm vi phải BẰNG phạm vi của `crm.customer.create` (ở đây helper `role(...)` gán
+     * COMPANY cho cả mảng nên tự khớp). Rộng hơn là mời người ta chọn một công ty rồi ăn 403
+     * lúc Lưu; hẹp hơn là ô chọn rỗng. Migration đi kèm suy phạm vi từ CHÍNH mã đó trên CSDL
+     * sống, để hai nơi không lệch nhau. */
+    'org.company.view',
     'crm.person.view',
     'contract.record.view',
     'contract.party.view',
@@ -579,6 +591,10 @@ export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
     'crm.customer.create',
     'crm.customer.update',
     'crm.customer.search',
+    /* Đọc danh mục CÔNG TY để điền ô bắt buộc lúc tạo/sửa khách — cùng lý do đã ghi ở
+     * `CSKH_TIEP_DON`. Vai này là diễn viên chính: nó cầm cả `create` LẪN `update`, nên thiếu
+     * mã này thì vừa không tạo được khách mới, vừa không sửa được công ty chủ quản của hồ sơ cũ. */
+    'org.company.view',
     'crm.person.view',
     'crm.person.view_contact', // G0-Q1 sửa 2026-08-25: người bán cần gọi được cho khách
     'crm.person.create',
@@ -612,6 +628,10 @@ export const ROLE_CATALOG: Readonly<Record<string, RoleDef>> = {
       'crm.customer.view',
       'crm.customer.create',
       'crm.customer.search',
+      /* Đọc danh mục CÔNG TY để điền ô bắt buộc lúc tạo khách — cùng lý do đã ghi ở
+       * `CSKH_TIEP_DON`. Vai này bó COMPANY dù dữ liệu nhân thân là LIÊN CÔNG TY: hồ sơ
+       * khách hàng vẫn phải neo vào một công ty, và đó chính là ô đang bắt buộc. */
+      'org.company.view',
       'crm.person.view',
       'crm.person.create',
       'crm.person.update',

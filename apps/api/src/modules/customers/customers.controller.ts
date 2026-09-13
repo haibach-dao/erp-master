@@ -53,10 +53,14 @@ export class CustomersController {
     return this.svc.createPerson(dto, this.actor(req));
   }
 
+  /* `callerOf(req)` chứ KHÔNG phải `this.actor(req)`: từ 09/09/2026 công ty là BẮT BUỘC khi
+   * tạo khách, và service kiểm phạm vi trên công ty client gửi lên. `actor` chỉ mang `userId`,
+   * mà phạm vi tính THEO TỪNG MÃ QUYỀN — thiếu mã là hỏi phạm vi trên một câu khác câu đang
+   * chạy. Cùng khuôn với `search`, `deleteCustomer` và `revealNationalId`. */
   @Post('customers')
   @RequirePermission('crm.customer.create')
   createCustomer(@Body() dto: CreateCustomerDto, @Req() req: Request) {
-    return this.svc.createCustomer(dto, this.actor(req));
+    return this.svc.createCustomer(dto, callerOf(req));
   }
 
   /* Danh sách + bộ lọc khách hàng. LỌC Ở SERVER, không ở giao diện.
@@ -88,18 +92,27 @@ export class CustomersController {
 
   /* Sửa và xoá khai SAU `customers/:id` cho gọn nhóm, nhưng chúng dùng động từ HTTP khác
    * nên không đụng thứ tự khớp route — Express khớp theo (động từ, đường dẫn). */
+  /* `callerOf(req)` vì DTO nay nhận `companyId`, và ĐỔI CÔNG TY là chuyển hồ sơ sang nhà
+   * khác — service bó phạm vi trên CẢ công ty hiện tại lẫn công ty đích. Các trường còn lại
+   * (họ tên, liên lạc, nhân thân) vẫn CHƯA bó theo bản ghi: đó là quyết định 27/08/2026 còn
+   * treo, ghi rõ ở đầu sổ `test/route-caller-invariants.spec.ts`. */
   @Patch('customers/:id')
   @RequirePermission('crm.customer.update')
   updateCustomer(@Param('id') id: string, @Body() dto: UpdateCustomerDto, @Req() req: Request) {
-    return this.svc.updateCustomer(id, dto, this.actor(req));
+    return this.svc.updateCustomer(id, dto, callerOf(req));
   }
 
   /* Xoá HẲN. Service từ chối khi còn bất kỳ nghiệp vụ nào trỏ tới, và câu từ chối liệt kê
-   * đúng cái đang chặn — người dùng cần biết phải dọn gì, không phải biết mình thất bại. */
+   * đúng cái đang chặn — người dùng cần biết phải dọn gì, không phải biết mình thất bại.
+   *
+   * `callerOf(req)` chứ KHÔNG phải `this.actor(req)`: `actor` chỉ mang `userId`, mà phạm vi
+   * tính THEO TỪNG MÃ QUYỀN — thiếu mã là hỏi phạm vi trên một câu khác câu đang chạy. Mã
+   * đến từ `req.requiredPermission` do `PermissionGuard` vừa đặt, nên nó chắc chắn khớp
+   * `@RequirePermission` ngay trên. Cùng khuôn với `search` và `revealNationalId`. */
   @Delete('customers/:id')
   @RequirePermission('crm.customer.delete')
   deleteCustomer(@Param('id') id: string, @Req() req: Request) {
-    return this.svc.deleteCustomer(id, this.actor(req));
+    return this.svc.deleteCustomer(id, callerOf(req));
   }
 
   @Post('relationships')

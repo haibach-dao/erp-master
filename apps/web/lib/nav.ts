@@ -158,10 +158,19 @@ export const NAV: NavGroup[] = [
     label: 'Quản trị',
     items: [
       {
+        /* GÁC BẰNG MÃ GHI, KHÔNG BẰNG `org.company.view` — đổi 10/09/2026 cùng lượt cấp mã đó
+         * cho ba vai tác nghiệp (tiếp đón · kinh doanh · hồ sơ nhân thân). Họ cần
+         * `org.company.view` để ĐIỀN Ô công ty chủ quản lúc tạo khách, chứ không phải để vào
+         * mục Quản trị. Giữ nguyên mã cũ thì mục này mọc ra cho cả ba ghế, nằm trong nhóm
+         * "Quản trị", và bấm vào chỉ có một EmptyState "chưa dựng cây tổ chức" — một mục menu
+         * nói sai về việc người ta được làm.
+         *
+         * `canAny` nên đây là HOẶC: ai định hình được cây tổ chức thì thấy mục này. Hôm nay
+         * hai mã S3 đó chỉ ADMIN cầm, nên mục này về đúng chỗ nó thuộc về. */
         href: '/organization',
         label: 'Tổ chức',
         icon: Building2,
-        permissions: ['org.company.view'],
+        permissions: ['org.company.create', 'org.company.update'],
       },
       {
         href: '/organization/roles',

@@ -30,6 +30,7 @@ import {
   deactivatePersonSubRecord,
   deleteCustomer,
   getCustomerDetail,
+  listCompanies,
   listRelationshipTypes,
   updateCustomer,
   verifyBurial,
@@ -44,6 +45,8 @@ import {
   type CustomerFormValue,
 } from '@/components/customer-form';
 import { birthOrder, bothDirections, relationshipLabel } from '@/lib/relationship';
+import { useAuth } from '@/lib/auth';
+import { can } from '@/lib/permissions';
 import { cn } from '@/lib/utils';
 import { CustomerGraveActions } from '@/components/customer-grave-actions';
 import { Tabs, TabPanel, type TabItem } from '@/components/ui/tabs';
@@ -167,10 +170,22 @@ function toDateInput(v: string | null): string {
   return Number.isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
 }
 
+/* "Có công ty" theo ĐÚNG nghĩa server dùng: `notBlank` ở `customers.service.ts` cắt khoảng
+ * trắng rồi mới so. So `=== null || === ''` ở đây thì một hồ sơ `company_id = '   '` sẽ không
+ * hiện cảnh báo trong khi server vẫn từ chối xoá nó — màn hình nói một điều, cửa nói điều khác. */
+function hasCompany(companyId: string | null): boolean {
+  return companyId !== null && companyId.trim() !== '';
+}
+
 function formFromCustomer(c: CustomerDetail): CustomerFormValue {
   const p = c.person;
   return {
     type: c.type,
+    /* Công ty HIỆN TẠI của hồ sơ. Đổ đúng giá trị đang có, kể cả khi nó rỗng: rỗng ở đây là
+     * sự thật ("hồ sơ chưa gắn công ty") và cũng chính là thứ đang chặn nút Xoá — người dùng
+     * phải nhìn thấy nó để sửa. `changedOnly` so với chính giá trị này, nên không đổi thì
+     * không có gì được gửi lên. */
+    companyId: c.companyId ?? '',
     fullName: p?.fullName ?? '',
     gender: p?.gender ?? '',
     dateOfBirth: toDateInput(p?.dateOfBirth ?? null),
@@ -192,6 +207,11 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
   const { id } = use(params);
   const qc = useQueryClient();
   const router = useRouter();
+  const { user } = useAuth();
+  /* Đổi công ty chủ quản là CHUYỂN HỒ SƠ SANG ĐƠN VỊ KHÁC, nên nó gác bằng đúng mã của đường
+   * ghi hồ sơ khách hàng. Đây là hàng rào cho MẮT NHÌN, không phải hàng rào thật: server bó
+   * phạm vi CẢ HAI đầu và sẽ trả 403 dù màn hình có mở ô ra. */
+  const canEditCompany = can(user, 'crm.customer.update');
   const [adding, setAdding] = useState<SubKind | null>(null);
   const [relOpen, setRelOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
@@ -210,6 +230,15 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
   const refresh = () => void qc.invalidateQueries({ queryKey: ['customerDetail', id] });
 
   const relTypes = useQuery({ queryKey: ['relationshipTypes'], queryFn: listRelationshipTypes });
+
+  /* Danh mục công ty cho ô "Công ty chủ quản" trong hộp thoại Sửa. Cùng `queryKey` với mọi
+   * trang khác nên react-query dùng lại một bản duy nhất; chỉ hỏi khi hộp thoại mở và người
+   * dùng thật sự sửa được — gọi khi biết chắc sẽ ăn 403 là tự sinh tiếng ồn trong nhật ký. */
+  const companies = useQuery({
+    queryKey: ['companies'],
+    queryFn: listCompanies,
+    enabled: editOpen && canEditCompany,
+  });
   /* Chọn người có quan hệ từ danh sách KHÁCH HÀNG. Người mất cũng là khách hàng, nên
    * không cần một đường tra cứu nhân thân riêng — và một đường riêng là chỗ dữ liệu lại
    * lệch ra ngoài danh sách khách như trước. */
@@ -330,12 +359,17 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
     mutationFn: () => {
       const base = formFromCustomer(c);
       const diff = changedOnly(editForm, base);
-      const { type, orgName, phone, email, ...personFields } = diff;
+      /* `companyId` PHẢI bóc riêng ở đây. Mọi khoá không được nêu tên rơi vào `personFields`
+       * và đi lên trong `person` — mà `UpdatePersonDto` không khai `companyId`, nên
+       * `whitelist: true` bên API sẽ VỨT IM LẶNG: màn hình gửi đúng, API trả 200, cột không
+       * đổi, không một dòng lỗi nào. */
+      const { type, companyId, orgName, phone, email, ...personFields } = diff;
       const person = Object.fromEntries(
         Object.entries(personFields).filter(([, v]) => v !== undefined),
       );
       return updateCustomer(id, {
         ...(type !== undefined ? { type } : {}),
+        ...(companyId !== undefined ? { companyId } : {}),
         ...(orgName !== undefined ? { orgName } : {}),
         ...(phone !== undefined ? { phone } : {}),
         ...(email !== undefined ? { email } : {}),
@@ -394,6 +428,51 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
    * `useQuery`/`useMemo` ở đây thì phải đưa lên trên chúng. */
   const blockingBurials = c.restingPlaces.filter((r) => r.status !== 'Cancelled');
 
+  /* Ô "Công ty chủ quản": `null` = sửa được, khác `null` = ô khoá VÀ đây chính là câu nói vì
+   * sao. Nêu ĐÍCH DANH mã quyền còn thiếu, không nói chung chung "bạn không có quyền" — người
+   * đọc phải mang được một cái tên cụ thể sang cho quản trị, nếu không họ chỉ biết là mình
+   * đang bị chặn. Hai mã KHÁC NHAU cho hai việc khác nhau: `crm.customer.update` là quyền ghi
+   * hồ sơ khách, `org.company.view` là quyền đọc danh mục công ty để có gì mà chọn. */
+  /* HỒ SƠ MỒ CÔI CHỈ NGƯỜI MỨC TOÀN TẬP ĐOÀN NHẬN VỀ ĐƯỢC — thêm 10/09/2026 sau một lượt soi
+   * độc lập. Đây là ca mà màn hình bảo đi làm một việc rồi server từ chối đúng việc đó.
+   *
+   * `resolveCompanyChange` hỏi `visibleCompanyIdsFor` trên công ty HIỆN TẠI; hồ sơ trống ô
+   * công ty thì không quy được về phạm vi nào, nên chỉ người KHÔNG bị bó (mức GROUP) mới nhận
+   * nó về. Người mức COMPANY làm đúng câu Alert ở đầu trang — bấm Sửa, chọn công ty của chính
+   * mình, bấm Lưu — và ăn 403.
+   *
+   * Trước lượt cấp `org.company.view` hôm nay, ca này KHÔNG tới được: ô chọn ăn 403 nên nó
+   * xám sẵn. Mở được ô ra thì phải mở kèm câu nói trước.
+   *
+   * `scope.unrestricted` là MỨC RỘNG NHẤT người này cầm trên MỌI mã, còn server hỏi theo
+   * riêng mã `crm.customer.update`. Hai thứ không bằng nhau, nên chỉ dùng nó theo chiều CHẮC
+   * CHẮN ĐÚNG: `unrestricted === false` ⇒ mã nào cũng không thể ở mức GROUP ⇒ server chắc
+   * chắn từ chối. Chiều ngược lại thì im, để server nói. */
+  const orphanRecord = !hasCompany(c.companyId);
+  const cannotAdoptOrphan = orphanRecord && user?.scope.unrestricted !== true;
+
+  const companyBlocked: string | null = !canEditCompany
+    ? 'Không sửa được công ty chủ quản: cần mã quyền crm.customer.update.'
+    : companies.isError
+      ? 'Không đọc được danh mục công ty: cần mã quyền org.company.view.'
+      : cannotAdoptOrphan
+        ? 'Hồ sơ này chưa gắn công ty nào, nên chỉ người có phạm vi toàn tập đoàn mới gán được công ty cho nó. Nhờ quản trị gán giúp.'
+        : null;
+
+  /* Một chỗ quyết nút "Lưu thay đổi" có bấm được không, và trả về chính câu giải thích.
+   *
+   * Ô Công ty là ô DUY NHẤT trong form này không theo nếp "rỗng = xoá giá trị": server TỪ
+   * CHỐI rỗng, vì gỡ công ty ra là dựng lại đúng hồ sơ mồ côi đang chặn nút Xoá ở đầu trang.
+   * Chặn ngay đây thay vì để người dùng bấm Lưu rồi đọc một câu 400.
+   *
+   * Chỉ chặn khi hồ sơ VỐN ĐÃ có công ty mà ô vừa bị xoá trắng. Hồ sơ chưa gắn công ty thì ô
+   * rỗng là trạng thái ban đầu hợp lệ — họ mở form ra chính là để chọn, và `changedOnly`
+   * không gửi gì khi giá trị không đổi. */
+  const clearedCompany = editForm.companyId.trim() === '' && hasCompany(c.companyId);
+  const editBlocked: string | null = clearedCompany
+    ? 'ô Công ty chủ quản đang trống. Hồ sơ khách hàng phải thuộc một công ty — chọn lại một công ty thay vì bỏ trống.'
+    : null;
+
   /* Hai câu xác nhận trước khi lưu. `source` là NGƯỜI VỪA CHỌN, `target` là khách hàng
    * này — đúng chiều sẽ ghi xuống CSDL, nên câu hiện ra chính là điều sắp được lưu, không
    * phải một bản diễn giải gần đúng. */
@@ -420,6 +499,30 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
             ? 'Chưa ghi ngày mất.'
             : `Ngày mất: ${fmtDate(p.deceased.dateOfDeath) ?? '—'}.`}{' '}
           Không gán thêm phần mộ cho người đã mất — chuyển quyền phải qua thủ tục kế thừa.
+        </Alert>
+      ) : null}
+
+      {/* HỒ SƠ CHƯA GẮN CÔNG TY — nói ra ở chỗ nhìn thấy, đừng để nó chỉ hiện ra lúc bấm Xoá.
+          Công ty chủ quản là NEO PHẠM VI: danh sách khách, quyền xoá và biểu phí cấp thẻ đều
+          bó theo nó, nên hồ sơ trống ô này rơi ra ngoài cả ba. Trước 09/09/2026 câu chặn ở
+          nút Xoá bảo "gán công ty cho hồ sơ trước khi xoá" trong khi không có ô nào để gán —
+          nay ô đó nằm ngay sau nút Sửa, nên câu này chỉ đúng chỗ đi. */}
+      {orphanRecord ? (
+        <Alert variant="warning" title="Hồ sơ chưa gắn công ty chủ quản">
+          Hồ sơ này không thuộc công ty nào, nên nó không hiện trong danh sách của người phụ trách
+          công ty, không tra ra được biểu phí cấp thẻ, và chưa xoá được.{' '}
+          {/* Câu chỉ đường phải đúng với NGƯỜI ĐANG ĐỌC. Người mức công ty bấm Sửa rồi chọn
+              xong vẫn ăn 403 ở server, nên bảo họ đi làm việc đó là mách một lối cụt. */}
+          {cannotAdoptOrphan ? (
+            <>
+              Chỉ người có <strong>phạm vi toàn tập đoàn</strong> mới gán được công ty cho một hồ sơ
+              chưa thuộc về ai — nhờ quản trị gán giúp.
+            </>
+          ) : (
+            <>
+              Bấm <strong>Sửa</strong> rồi chọn công ty chủ quản.
+            </>
+          )}
         </Alert>
       ) : null}
 
@@ -1097,13 +1200,26 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
         open={editOpen}
         onClose={() => setEditOpen(false)}
         title="Sửa hồ sơ khách hàng"
-        description="Ô để trống nghĩa là XOÁ giá trị cũ. Chỉ trường thực sự đổi mới được gửi đi."
+        description="Ô để trống nghĩa là XOÁ giá trị cũ — riêng ô Công ty chủ quản thì không, bỏ trống nó bị từ chối. Chỉ trường thực sự đổi mới được gửi đi."
         footer={
           <>
+            {/* Nút bị chặn phải NÓI RÕ lý do. Ô Công ty là ô DUY NHẤT trong form này không
+                theo nếp "rỗng = xoá": gỡ công ty ra là biến hồ sơ thành mồ côi, và chính hồ
+                sơ mồ côi là thứ đang chặn nút Xoá ở đầu trang. */}
+            {editBlocked !== null ? (
+              <p className="mr-auto text-xs text-muted-foreground" aria-live="polite">
+                Chưa lưu được: {editBlocked}
+              </p>
+            ) : null}
             <Button variant="secondary" onClick={() => setEditOpen(false)}>
               Huỷ
             </Button>
-            <Button form="edit-form" type="submit" loading={saveEdit.isPending}>
+            <Button
+              form="edit-form"
+              type="submit"
+              disabled={editBlocked !== null}
+              loading={saveEdit.isPending}
+            >
               {saveEdit.isPending ? 'Đang lưu…' : 'Lưu thay đổi'}
             </Button>
           </>
@@ -1113,6 +1229,10 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
           id="edit-form"
           onSubmit={(e) => {
             e.preventDefault();
+            /* Chặn ở CẢ form, không chỉ ở thuộc tính `disabled` của nút: form còn gửi được
+             * bằng phím Enter, và một phép chặn chỉ sống trên một cái nút là phép chặn biến
+             * mất lặng lẽ ở lần sửa giao diện tới. */
+            if (editBlocked !== null) return;
             saveEdit.mutate();
           }}
         >
@@ -1134,6 +1254,8 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
             tab={editTab}
             onTabChange={setEditTab}
             lockType
+            companies={companies.data ?? []}
+            companyBlocked={companyBlocked}
           />
         </form>
       </Dialog>

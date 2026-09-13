@@ -353,3 +353,52 @@ describe('cái quét route tự nó phải đúng', () => {
     expect(scanned.map((r) => r.id)).toEqual(['GET /demo/wrapped', 'GET /demo']);
   });
 });
+
+/* (e) MÃ CẤP ĐI KÈM MÃ ĐỌC DANH MỤC — thêm 10/09/2026 sau một sự cố đã xảy ra thật.
+ *
+ * Từ 09/09/2026 ô CÔNG TY CHỦ QUẢN là BẮT BUỘC khi tạo khách hàng, và đường duy nhất điền nó
+ * là ô chọn lấy dữ liệu từ `GET /cemetery/companies` — route gác bằng `org.company.view`. Đo
+ * 10/09: mã đó CHỈ ADMIN cầm, nên cả ba vai tạo được khách hàng đều không đọc nổi danh mục
+ * công ty và nút Lưu xám VĨNH VIỄN. Cấp được mà không đọc nổi thứ để điền ô bắt buộc thì mã
+ * cấp chỉ còn trên giấy.
+ *
+ * VÌ SAO PHÉP KIỂM NÀY Ở ĐÂY, KHÔNG Ở MIGRATION: migration đi kèm có một bước gác cùng ý,
+ * nhưng nó KHÔNG BAO GIỜ chạy trong CI — job `database` áp migration lên một CSDL TRỐNG, nên
+ * `authz.role_permissions` rỗng và thân migration thoát sớm ở nhánh `NOT matrix_seeded`. Bước
+ * gác đó chỉ cắn trên CSDL thật, một lần. Đây là chỗ duy nhất phép kiểm chạy mỗi lần đẩy mã.
+ *
+ * ĐẦU VÀO LÀM NÓ ĐỎ (đã thử tay, không phải lời hứa): xoá dòng `'org.company.view'` khỏi bất
+ * kỳ vai nào trong ba vai ở `ROLE_CATALOG` thì phép kiểm này gọi đích danh vai đó.
+ */
+describe('(e) vai tạo được khách hàng phải đọc được danh mục công ty', () => {
+  const NEEDS = 'crm.customer.create';
+  const READS = 'org.company.view';
+
+  const holders = Object.entries(ROLE_CATALOG)
+    .filter(([, def]) => def.grants.some((g) => g.code === NEEDS))
+    .map(([code, def]) => ({ code, def }));
+
+  it('tìm thấy vai nào đó cầm mã tạo khách — canh chính bộ lọc trên', () => {
+    expect(holders.length).toBeGreaterThan(0);
+  });
+
+  it.each(holders.map((h) => h.code))('%s cũng cầm org.company.view', (code) => {
+    const def = ROLE_CATALOG[code];
+    expect(
+      def?.grants.map((g) => g.code),
+      `Vai ${code} cầm ${NEEDS} nhưng không cầm ${READS}. Ô công ty chủ quản là BẮT BUỘC khi tạo khách, và ô chọn gác bằng ${READS} — thiếu nó thì vai này bấm Lưu không được, im lặng, không lý do.`,
+    ).toContain(READS);
+  });
+
+  /* Phạm vi phải BẰNG, không rộng hơn: `createCustomer` hỏi phạm vi theo mã `crm.customer.create`.
+   * Cấp `org.company.view` rộng hơn là mời người ta chọn một công ty ngoài tầm rồi ăn 403 lúc
+   * Lưu — một ô chọn bày ra thứ không dùng được thì tệ hơn ô chọn rỗng. */
+  it.each(holders.map((h) => h.code))('%s cầm hai mã đó ở CÙNG một phạm vi', (code) => {
+    const def = ROLE_CATALOG[code];
+    const scopeOf = (c: string) => def?.grants.find((g) => g.code === c)?.scope;
+    expect(
+      scopeOf(READS),
+      `Vai ${code}: phạm vi ${READS} phải bằng phạm vi ${NEEDS} (${String(scopeOf(NEEDS))}).`,
+    ).toBe(scopeOf(NEEDS));
+  });
+});

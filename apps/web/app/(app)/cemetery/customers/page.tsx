@@ -4,7 +4,13 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ChevronRight, Plus, Users } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { createCustomer, listCustomers, type CustomerFilters, type DedupWarning } from '@/lib/api';
+import {
+  createCustomer,
+  listCompanies,
+  listCustomers,
+  type CustomerFilters,
+  type DedupWarning,
+} from '@/lib/api';
 import { customerType } from '@/lib/status';
 import {
   CustomerFormTabs,
@@ -62,6 +68,15 @@ export default function CustomersPage() {
     queryFn: () => listCustomers(filters),
   });
 
+  /* Danh sách công ty cho ô CHỌN CÔNG TY. Cùng `queryKey: ['companies']` với mọi trang khác
+   * nên react-query dùng lại một bản duy nhất — không thêm lượt gọi nào khi người dùng vừa
+   * đi từ trang Phần mộ sang. Chỉ hỏi khi hộp thoại mở: danh sách này không dùng cho bảng. */
+  const companies = useQuery({
+    queryKey: ['companies'],
+    queryFn: listCompanies,
+    enabled: open,
+  });
+
   const q = filters.q ?? '';
   const filtering = activeFilterCount(filters) > 0;
 
@@ -71,6 +86,7 @@ export default function CustomersPage() {
     mutationFn: () =>
       createCustomer({
         type: form.type,
+        companyId: form.companyId,
         ...(individual
           ? {
               person: {
@@ -102,6 +118,24 @@ export default function CustomersPage() {
   });
 
   const set = (patch: Partial<CustomerFormValue>) => setForm((f) => ({ ...f, ...patch }));
+
+  /* MỘT chỗ quyết nút Lưu có bấm được không, và trả về CHÍNH câu giải thích. Khuôn này đã
+   * dùng ở `cards/page.tsx` (`issueBlocked`) và `card-fees/page.tsx` — gom về một biểu thức
+   * thay vì nhét thêm điều kiện vào `disabled`, vì mỗi lần thêm một điều kiện mà không nói ra
+   * là một lần người dùng nhìn một cái nút xám mà không biết vì sao.
+   *
+   * Danh mục công ty RỖNG là một lý do KHÁC "chưa chọn": nó nghĩa là không có công ty nào để
+   * chọn, và người dùng có ngồi mở ô chọn cả buổi cũng không ra. Chỉ dám nói câu đó khi danh
+   * mục đã VỀ THẬT (`isSuccess`) — lúc đang tải hay lỗi mạng thì danh sách cũng rỗng, mà bảo
+   * người ta đi xin quyền là chỉ sai đường. */
+  const companyList = companies.data ?? [];
+  const createBlocked: string | null = companies.isError
+    ? 'không đọc được danh mục công ty — cần mã quyền org.company.view để chọn công ty chủ quản.'
+    : companies.isSuccess && companyList.length === 0
+      ? 'bạn chưa được gán công ty nào, nên chưa có công ty chủ quản để chọn. Liên hệ quản trị.'
+      : form.companyId === ''
+        ? 'chưa chọn công ty chủ quản.'
+        : null;
 
   return (
     <section className="space-y-6">
@@ -279,13 +313,25 @@ export default function CustomersPage() {
         open={open}
         onClose={() => setOpen(false)}
         title="Khách hàng mới"
-        description="Chỉ họ tên là bắt buộc. Các trường còn lại bổ sung sau ở màn hình hồ sơ."
+        description="Họ tên và công ty chủ quản là bắt buộc. Các trường còn lại bổ sung sau ở màn hình hồ sơ."
         footer={
           <>
+            {/* Nút bị chặn phải NÓI RÕ lý do, ngay cạnh chính cái nút đó. `mr-auto` đẩy câu
+                này về sát lề trái của hàng nút — đọc được mà không phải đi tìm. */}
+            {createBlocked !== null ? (
+              <p className="mr-auto text-xs text-muted-foreground" aria-live="polite">
+                Chưa lưu được: {createBlocked}
+              </p>
+            ) : null}
             <Button variant="secondary" onClick={() => setOpen(false)}>
               Huỷ
             </Button>
-            <Button form="customer-form" type="submit" loading={create.isPending}>
+            <Button
+              form="customer-form"
+              type="submit"
+              disabled={createBlocked !== null}
+              loading={create.isPending}
+            >
               {create.isPending ? 'Đang lưu…' : 'Lưu khách hàng'}
             </Button>
           </>
@@ -295,6 +341,11 @@ export default function CustomersPage() {
           id="customer-form"
           onSubmit={(e) => {
             e.preventDefault();
+            /* Nút Lưu đã `disabled`, nhưng chặn lại ở đây nữa: `disabled` là chuyện của MỘT
+             * cái nút, còn form còn gửi được bằng phím Enter và bằng bất cứ nút submit nào
+             * thêm vào sau này. Một phép chặn chỉ sống trên thuộc tính của nút là phép chặn
+             * biến mất lặng lẽ ở lần sửa giao diện tới. */
+            if (createBlocked !== null) return;
             create.mutate();
           }}
         >
@@ -304,7 +355,18 @@ export default function CustomersPage() {
             </Alert>
           ) : null}
 
-          <CustomerFormTabs value={form} onChange={set} tab={formTab} onTabChange={setFormTab} />
+          <CustomerFormTabs
+            value={form}
+            onChange={set}
+            tab={formTab}
+            onTabChange={setFormTab}
+            companies={companyList}
+            companyBlocked={
+              companies.isError
+                ? 'Không đọc được danh mục công ty — cần mã quyền org.company.view.'
+                : null
+            }
+          />
         </form>
       </Dialog>
     </section>

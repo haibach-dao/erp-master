@@ -84,6 +84,19 @@ const NO_RECORD_SCOPE: Readonly<Record<string, string>> = {
  * miễn người chưa có) hay không. Đó là phương án giữ được quyết định trên mà vẫn thu hẹp
  * được phần lớn bề mặt — nhưng nó là fail-open có chủ ý, nên phải do người quyết, không phải
  * do tôi suy ra.
+ *
+ * ---- 09/09/2026, anh Bách quyết: BẮT BUỘC chọn công ty khi TẠO khách + MỞ đường SỬA công ty.
+ *
+ * Hai dòng `createCustomer` và `updateCustomer` rời sổ này vì cả hai nay đã truyền người gọi
+ * xuống và bó phạm vi thật trên TRỤC CÔNG TY. Cột `cemetery.customers.company_id` VẪN cho
+ * phép NULL — quyết định 27/08/2026 không bị đụng tới; ép ở DTO + service + màn hình.
+ *
+ * NỢ CÒN LẠI, ghi ra để không ai đọc "đã rời sổ" thành "đã bó xong": `updateCustomer` bó công
+ * ty hiện tại/đích khi payload CÓ `companyId`, nhưng khi payload KHÔNG có thì các trường còn
+ * lại (họ tên, liên lạc, nhân thân) vẫn sửa được trên hồ sơ của công ty khác. Đó đúng là câu
+ * hỏi "bó theo companyId và cho NULL đi qua hay không" ở đoạn trên, và nó vẫn đang chờ quyết
+ * — cùng một câu với `customerDetail` ngay dưới. Bộ quét không thấy nợ này vì nó soi ROUTE có
+ * truyền người gọi hay không, không soi truyền xuống rồi dùng tới đâu.
  */
 const MEASURED_DEBT: Readonly<Record<string, string>> = {
   'modules/audit/audit.controller.ts:list':
@@ -108,14 +121,8 @@ const MEASURED_DEBT: Readonly<Record<string, string>> = {
     'Đã ghi nợ riêng và nêu để quyết: `Person` là dữ liệu LIÊN CÔNG TY, `Customer.companyId` cho phép NULL nên kiểm có điều kiện là fail-open. Khác `revealNationalId` (đã bó): đó là ĐỌC nên mặc định chặn được, đây là GHI hợp lệ nên chặn hết là chặn nghiệp vụ thật.',
   'modules/customers/customers.controller.ts:createPerson':
     'Tạo nhân thân MỚI — cùng câu hỏi neo với `createDeceased`: nhân thân chưa thuộc công ty nào lúc tạo.',
-  'modules/customers/customers.controller.ts:createCustomer':
-    'Tạo khách hàng. Chủ doanh nghiệp đã chốt 27/08/2026: `companyId` GIỮ cho phép NULL, nên không bắt buộc công ty lúc tạo. Còn lại: có kiểm phạm vi khi companyId ĐƯỢC gửi lên hay không.',
   'modules/customers/customers.controller.ts:customerDetail':
-    'Hồ sơ khách 360: gom quan hệ nhân thân, phần mộ đứng tên, hồ sơ an táng. Chốt 27/08/2026 GIỮ NULL, dựa vào gate quyền ở cửa vào. Còn lại: bó theo companyId và cho NULL đi qua hay không — xem chú thích đầu sổ.',
-  'modules/customers/customers.controller.ts:updateCustomer':
-    'Cùng neo với `customerDetail`, chiều GHI nên nguy hiểm hơn. Cùng chịu quyết định GIỮ NULL ngày 27/08/2026.',
-  'modules/customers/customers.controller.ts:deleteCustomer':
-    'Xoá khách hàng — chiều KHÔNG ĐẢO NGƯỢC, nên nếu nhóm `customers` được bó thì đây là đường làm trước. Cùng chịu quyết định GIỮ NULL ngày 27/08/2026.',
+    'Hồ sơ khách 360: gom quan hệ nhân thân, phần mộ đứng tên, hồ sơ an táng. Chốt 27/08/2026 GIỮ NULL, dựa vào gate quyền ở cửa vào. Còn lại: bó theo companyId và cho NULL đi qua hay không — xem chú thích đầu sổ. `updateCustomer` (chiều GHI) chia đúng câu hỏi này cho phần payload KHÔNG mang companyId.',
   'modules/customers/customers.controller.ts:createRelationship':
     'Quan hệ nhân thân nối HAI người, có thể thuộc hai công ty khác nhau — neo phải chốt là bên nào, hay cả hai.',
   'modules/customers/customers.controller.ts:endRelationship':
