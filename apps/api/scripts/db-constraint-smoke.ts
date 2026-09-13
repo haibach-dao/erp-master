@@ -106,6 +106,52 @@ const APPROVAL = (o: {
                   ${q(o.consumed)}, ${o.consumedAt === true ? 'now()' : 'NULL'})`;
 };
 
+/* PHÍ CẤP THẺ MỘ — 02/09/2026. Bảng KHÔNG có một khoá ngoại nào (đo bằng `pg_constraint`
+ * ngày 09/09/2026), nên chuỗi bịa dùng được và bộ thử này chạy mà không phải seed gì —
+ * cùng điều kiện đã cho `card_signers` chạy được.
+ *
+ * `card_print_log_id`, `fee_schedule_id`, `charged_by` là cột TRẦN, không ràng buộc nào soi,
+ * nên đổ giá trị bù nhìn. Mọi cột còn lại đều bị một CHECK hoặc index soi nên để mở.
+ *
+ * MẶC ĐỊNH là `REPRINT` chứ không phải `FIRST_ISSUE`, và đó là chủ ý: `FIRST_ISSUE` nằm dưới
+ * một partial unique index, nên lấy nó làm mặc định thì các ca soi CHECK sẽ có lúc đỏ vì cái
+ * index — đỏ đúng chỗ nhưng SAI LÝ DO, và loại đỏ đó dạy người đọc sai. */
+const CHARGE = (o: {
+  id: string;
+  kind?: string;
+  customer?: string;
+  plot?: string;
+  unit?: number;
+  remains?: number;
+  /** Bỏ trống thì tự tính đúng bằng đơn giá × số cốt, tức là hợp lệ. */
+  amount?: number;
+  waived?: boolean;
+  waiveReason?: string | null;
+}) => {
+  const q = (v: string | null | undefined) => (v === null || v === undefined ? 'NULL' : `'${v}'`);
+  const unit = o.unit ?? 50000;
+  const remains = o.remains ?? 1;
+  return `INSERT INTO cemetery.grave_card_fee_charges
+            (id, company_id, card_print_log_id, customer_id, grave_plot_id,
+             fee_kind, fee_schedule_id, unit_price, remains_count, fee_amount,
+             waived, waive_reason, charged_by)
+          VALUES ('${o.id}', 'cty-A', 'log-${o.id}',
+                  '${o.customer ?? 'kh-1'}', '${o.plot ?? 'mo-1'}',
+                  '${o.kind ?? 'REPRINT'}', 'bieuphi-1',
+                  ${unit}, ${remains}, ${o.amount ?? unit * remains},
+                  ${String(o.waived ?? false)}, ${q(o.waiveReason)}, 'u-thu-ngan')`;
+};
+
+/* BIỂU PHÍ ĐÃ BAN HÀNH — cũng không khoá ngoại. `company_id` cố ý là chuỗi bịa `cty-A` để
+ * không đụng ba dòng biểu phí thật đang nằm trong CSDL dev (đo 09/09/2026): mọi phép thử
+ * đều rollback, nhưng một ca đỏ vì trùng với dữ liệu thật thì đọc lên hiểu sai hoàn toàn. */
+const SCHEDULE = (o: { id: string; company?: string; cardType?: string; from?: string }) =>
+  `INSERT INTO cemetery.grave_card_fee_schedules
+     (id, company_id, card_type, first_issue_fee, reprint_fee_per_remains,
+      effective_from, decision_ref, created_by)
+   VALUES ('${o.id}', '${o.company ?? 'cty-A'}', '${o.cardType ?? 'GRAVE'}',
+           200000, 50000, DATE '${o.from ?? '2026-01-01'}', 'QD-01', 'u-tgd')`;
+
 const CASES: readonly Case[] = [
   {
     /* Bản 03/09 là "toàn hệ nhiều nhất MỘT người mặc định". Anh Bách chốt 05/09 người ký gắn
@@ -331,6 +377,165 @@ const CASES: readonly Case[] = [
     ],
     expect: 'reject',
     expectError: 'Key (consumed_card_print_log_id)',
+  },
+
+  /* ---------- PHÍ CẤP THẺ MỘ (02/09/2026) ---------- */
+
+  {
+    /* Luật tiền: cấp giấy LẦN ĐẦU 200.000đ phẳng, mỗi phần mộ đúng MỘT lần. Suy từ
+     * `print_number = 1` là sai ở ca thường gặp nhất — khách đã có thẻ cho mộ A rồi mua thêm
+     * mộ B — nên partial index này là chỗ DUY NHẤT ép được luật. Nó cũng là thứ chặn hai quầy
+     * bấm cấp thẻ cùng lúc (TOCTOU), thứ mà kiểm-rồi-ghi ở tầng service không chặn nổi. */
+    name: 'grave_card_fee_charges · MỘT phần mộ của MỘT khách chỉ thu giá LẦN ĐẦU đúng một lần',
+    statements: [
+      CHARGE({ id: 'fc1', kind: 'FIRST_ISSUE', customer: 'kh-9', plot: 'mo-9', unit: 200000 }),
+      CHARGE({ id: 'fc2', kind: 'FIRST_ISSUE', customer: 'kh-9', plot: 'mo-9', unit: 200000 }),
+    ],
+    expect: 'reject',
+    expectError: 'Key (customer_id, grave_plot_id)',
+  },
+  {
+    /* Ca NHẬN bắt buộc của partial index trên. Ai "sửa cho gọn" nó thành unique toàn phần
+     * `(customer_id, grave_plot_id)` thì mọi ca CHẶN ở trên vẫn xanh y nguyên, và cái vỡ là
+     * cả nghiệp vụ IN LẠI: khách in lại thẻ lần thứ hai cho cùng phần mộ sẽ bị CSDL từ chối,
+     * mà không có gì trong repo nói vì sao. Đúng ca này là thứ duy nhất thấy được. */
+    name: 'grave_card_fee_charges · IN LẠI nhiều lần trên cùng một phần mộ thì PHẢI cho qua',
+    statements: [
+      CHARGE({ id: 'fc1', kind: 'REPRINT', customer: 'kh-9', plot: 'mo-9' }),
+      CHARGE({ id: 'fc2', kind: 'REPRINT', customer: 'kh-9', plot: 'mo-9' }),
+    ],
+    expect: 'accept',
+  },
+  {
+    name: 'grave_card_fee_charges · loại phí là TẬP ĐÓNG (tên thứ ba không lọt)',
+    statements: [CHARGE({ id: 'fc1', kind: 'FIRST_PRINT' })],
+    expect: 'reject',
+    expectError: 'grave_card_fee_charges_fee_kind_check',
+  },
+  {
+    /* CA ĐÃ TỪNG LỌT THẬT, 02/09/2026 — và là lý do nếp `IS TRUE` ra đời trong repo này.
+     *
+     * Với `waived = true, waive_reason = NULL`: vế một ra FALSE, vế hai ra NULL, cả biểu thức
+     * ra NULL, và CHECK của Postgres CHO QUA khi biểu thức là NULL. Bỏ cái bọc `IS TRUE` đi
+     * thì ràng buộc trông y hệt mà vô hiệu, và thứ lọt ra là những lần miễn tiền không ai
+     * chịu trách nhiệm. Không có ca này thì lần vô hiệu tiếp theo cũng lặng lẽ như lần đầu. */
+    name: 'grave_card_fee_charges · MIỄN PHÍ mà không nêu lý do thì bị chặn',
+    statements: [CHARGE({ id: 'fc1', waived: true, waiveReason: null })],
+    expect: 'reject',
+    expectError: 'grave_card_fee_charges_waive_check',
+  },
+  {
+    /* Chiều ngược lại của cùng ràng buộc, và cũng là một câu chuyện sai: một dòng có nêu lý do
+     * miễn nhưng `waived = false` đọc lên là "đã miễn" khi tra sổ, còn tiền thì vẫn thu. */
+    name: 'grave_card_fee_charges · nêu lý do miễn mà KHÔNG miễn thì bị chặn',
+    statements: [CHARGE({ id: 'fc1', waived: false, waiveReason: 'COMPANY_FAULT' })],
+    expect: 'reject',
+    expectError: 'grave_card_fee_charges_waive_check',
+  },
+  {
+    /* Ca NHẬN của `waive_check`. Bọc `IS TRUE` sai chỗ — ví dụ bọc riêng từng vế thay vì bọc
+     * cả biểu thức — vẫn chặn đúng hai ca trên nhưng chặn luôn ca này, tức là không ai miễn
+     * được phí nữa. Miễn phí là quyết định có thật của nghiệp vụ (lỗi thuộc về công ty, khách
+     * nộp lại thẻ cũ), nên nó phải ghi được. */
+    name: 'grave_card_fee_charges · MIỄN PHÍ có nêu lý do đúng thì PHẢI cho qua',
+    statements: [CHARGE({ id: 'fc1', waived: true, waiveReason: 'COMPANY_FAULT' })],
+    expect: 'accept',
+  },
+  {
+    name: 'grave_card_fee_charges · số cốt phải từ MỘT trở lên',
+    statements: [CHARGE({ id: 'fc1', unit: 50000, remains: 0, amount: 0 })],
+    expect: 'reject',
+    expectError: 'grave_card_fee_charges_amount_check',
+  },
+  {
+    /* Bất biến của DỮ LIỆU, không phải phép tính của một phiên bản mã: bảng append-only nên
+     * một dòng thu sai tiền nằm đó mãi, không sửa được, chỉ ghi bù được. */
+    name: 'grave_card_fee_charges · số tiền phải đúng bằng đơn giá × số cốt',
+    statements: [CHARGE({ id: 'fc1', unit: 50000, remains: 3, amount: 50000 })],
+    expect: 'reject',
+    expectError: 'grave_card_fee_charges_amount_check',
+  },
+  {
+    name: 'grave_card_fee_schedules · MỘT công ty chỉ có MỘT biểu phí cho mỗi loại thẻ mỗi ngày hiệu lực',
+    statements: [SCHEDULE({ id: 'fs1' }), SCHEDULE({ id: 'fs2' })],
+    expect: 'reject',
+    expectError: 'Key (company_id, card_type, effective_from)',
+  },
+  {
+    /* Ca NHẬN. Ai rút khoá xuống còn `(company_id, card_type)` thì ca CHẶN ở trên vẫn xanh,
+     * còn thứ vỡ là khả năng ĐỔI GIÁ: bảng append-only nên đổi giá = ban hành một dòng mới có
+     * ngày hiệu lực mới, và rút khoá đi tức là công ty này vĩnh viễn không đổi được biểu phí. */
+    name: 'grave_card_fee_schedules · biểu phí mới cho NGÀY HIỆU LỰC khác thì PHẢI cho qua',
+    statements: [
+      SCHEDULE({ id: 'fs1', from: '2026-01-01' }),
+      SCHEDULE({ id: 'fs2', from: '2027-01-01' }),
+    ],
+    expect: 'accept',
+  },
+
+  /* ---------- APPEND-ONLY: BỐN TRIGGER CỦA HAI BẢNG TIỀN PHÍ ----------
+   *
+   * Đơn giá đã ban hành và khoản tiền đã thu của khách không sửa được, kể cả bằng tay trên
+   * CSDL. Đối chiếu bằng NGUYÊN CÂU thông báo, kể cả TÊN BẢNG, chứ không phải mỗi chữ
+   * "append-only" — vì cái bẫy ở đây không phải trigger biến mất mà là trigger gắn nhầm hàm.
+   * Migration 02/09 cố ý viết `cemetery.prevent_mutation()` riêng thay vì dùng lại
+   * `audit.prevent_mutation()`, bởi hàm audit hard-code chuỗi "audit_events is append-only":
+   * gắn nhầm nó vào đây thì vẫn chặn, vẫn xanh nếu chỉ soi chữ "append-only", và người dùng
+   * nhận một câu lỗi nói SAI tên bảng. Đối chiếu cả tên bảng là thứ bắt được đúng lần đó. */
+
+  {
+    name: 'grave_card_fee_schedules · SỬA một dòng biểu phí đã ban hành thì bị chặn',
+    statements: [
+      SCHEDULE({ id: 'fs1' }),
+      "UPDATE cemetery.grave_card_fee_schedules SET first_issue_fee = 1 WHERE id = 'fs1'",
+    ],
+    expect: 'reject',
+    expectError: 'cemetery.grave_card_fee_schedules is append-only: UPDATE is not allowed',
+  },
+  {
+    name: 'grave_card_fee_schedules · XOÁ một dòng biểu phí đã ban hành thì bị chặn',
+    statements: [
+      SCHEDULE({ id: 'fs1' }),
+      "DELETE FROM cemetery.grave_card_fee_schedules WHERE id = 'fs1'",
+    ],
+    expect: 'reject',
+    expectError: 'cemetery.grave_card_fee_schedules is append-only: DELETE is not allowed',
+  },
+  {
+    /* TRUNCATE đi vòng qua trigger FOR EACH ROW — nó không xoá theo hàng nên không có hàng nào
+     * để trigger bắt. Phải là trigger FOR EACH STATEMENT riêng mới bịt được, và bảng
+     * `audit.audit_events` đang hở đúng chỗ này (đo 02/09/2026). Mất sạch bảng này bằng một
+     * câu lệnh là mất luôn khả năng đối chứng với người đã trả tiền. */
+    name: 'grave_card_fee_schedules · XOÁ TRẮNG cả bảng biểu phí thì bị chặn',
+    statements: ['TRUNCATE cemetery.grave_card_fee_schedules'],
+    expect: 'reject',
+    expectError: 'cemetery.grave_card_fee_schedules is append-only: TRUNCATE is not allowed',
+  },
+  {
+    name: 'grave_card_fee_charges · SỬA một khoản phí đã thu thì bị chặn',
+    statements: [
+      CHARGE({ id: 'fc1' }),
+      "UPDATE cemetery.grave_card_fee_charges SET fee_amount = 0 WHERE id = 'fc1'",
+    ],
+    expect: 'reject',
+    expectError: 'cemetery.grave_card_fee_charges is append-only: UPDATE is not allowed',
+  },
+  {
+    /* Sửa khoản thu sai = ghi một dòng mới, không xoá dòng cũ. Xoá được nghĩa là một lần thu
+     * tiền của khách biến mất khỏi sổ mà không để lại dấu. */
+    name: 'grave_card_fee_charges · XOÁ một khoản phí đã thu thì bị chặn',
+    statements: [
+      CHARGE({ id: 'fc1' }),
+      "DELETE FROM cemetery.grave_card_fee_charges WHERE id = 'fc1'",
+    ],
+    expect: 'reject',
+    expectError: 'cemetery.grave_card_fee_charges is append-only: DELETE is not allowed',
+  },
+  {
+    name: 'grave_card_fee_charges · XOÁ TRẮNG cả bảng khoản đã thu thì bị chặn',
+    statements: ['TRUNCATE cemetery.grave_card_fee_charges'],
+    expect: 'reject',
+    expectError: 'cemetery.grave_card_fee_charges is append-only: TRUNCATE is not allowed',
   },
 ];
 
