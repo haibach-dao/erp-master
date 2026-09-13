@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { AccessRulesService } from './access-rules.service';
 import type { PrismaService } from '../../prisma/prisma.service';
@@ -201,5 +201,74 @@ describe('explain — thử chuỗi luật cho một (người, mã)', () => {
     });
     const out = await svc.explain('u1', 'crm.person.view_sensitive');
     expect(out.matchedRule).toBeNull();
+  });
+
+  /* CÁI BẪY của `grantInForce()`: nó MANG một khoá `OR`, mà mệnh đề ngay trên cũng có `OR` của
+   * riêng nó (lọc `subjectUserId`). Trải cả hai vào cùng một object thì khoá sau ĐÈ khoá trước
+   * — JavaScript im lặng, TypeScript im lặng, Prisma im lặng.
+   *
+   * Mất khoá nào cũng hỏng, và hỏng theo hướng nguy hiểm:
+   *   · mất `OR` chủ thể → luật nhắm đích danh NGƯỜI KHÁC bị đem ra áp cho người này;
+   *   · mất cửa sổ hiệu lực → luật DENY đã hết hạn vẫn chặn, luật ALLOW đã hết hạn vẫn mở.
+   *
+   * Nên kiểm CẢ HAI còn nguyên trong một mệnh đề, chứ không kiểm riêng từng cái. */
+  it('giữ CẢ HAI: lọc chủ thể và cửa sổ hiệu lực — không khoá nào đè khoá nào', async () => {
+    const { svc, prisma } = build({ rules: [rule('r1', 10)] });
+    await svc.explain('u1', 'crm.person.view_sensitive');
+
+    const findMany = (prisma as unknown as { accessRule: { findMany: ReturnType<typeof vi.fn> } })
+      .accessRule.findMany;
+    const where = findMany.mock.calls[0]?.[0]?.where as Record<string, unknown>;
+
+    expect(where.OR).toEqual([{ subjectUserId: 'u1' }, { subjectUserId: null }]);
+    expect(where.AND).toEqual([
+      {
+        validFrom: { lte: expect.any(Date) },
+        OR: [{ validTo: null }, { validTo: { gt: expect.any(Date) } }],
+      },
+    ]);
+  });
+});
+
+/* Màn quản trị dán nhãn "còn hiệu lực" lên từng luật. Nhãn đó phải nói ĐÚNG cái mà chuỗi duyệt
+ * làm — một màn hình nói dối về chính thứ nó quản còn tệ hơn một màn hình không có nhãn.
+ *
+ * Nên biên ở đây là `>` để khớp `gt` của `grantInForce`, và ca `validTo` ĐÚNG BẰNG bây giờ là ca
+ * duy nhất phân biệt được `gt` với `gte`. Đó chính là chỗ đã lệch một lần: danh mục người ký nói
+ * "được ký" trong khi `PermissionGuard` nói 403.
+ */
+describe('list — nhãn "còn hiệu lực" phải khớp từng chữ với chuỗi duyệt', () => {
+  const NOW = new Date('2026-09-09T10:00:00Z');
+
+  function at(over: Record<string, unknown>) {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    return build({ rules: [rule('r1', 10, over)] });
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('luật vô thời hạn thì còn hiệu lực', async () => {
+    const { svc } = at({ validTo: null });
+    expect((await svc.list())[0]?.active).toBe(true);
+  });
+
+  it('luật đã qua hạn thì hết hiệu lực', async () => {
+    const { svc } = at({ validTo: new Date('2026-09-09T09:59:59Z') });
+    expect((await svc.list())[0]?.active).toBe(false);
+  });
+
+  it('luật chưa tới ngày bắt đầu thì CHƯA có hiệu lực', async () => {
+    const { svc } = at({ validFrom: new Date('2026-09-10T00:00:00Z') });
+    expect((await svc.list())[0]?.active).toBe(false);
+  });
+
+  /* Ca vạch ra lằn ranh `gt` / `gte`. Lấy `gte` thì dòng này thành `true`, và màn hình sẽ nói
+   * "còn hiệu lực" về đúng cái luật mà `evaluateRules` vừa bỏ qua. */
+  it('validTo ĐÚNG BẰNG bây giờ là HẾT hiệu lực — biên `gt`, không phải `gte`', async () => {
+    const { svc } = at({ validTo: NOW });
+    expect((await svc.list())[0]?.active).toBe(false);
   });
 });

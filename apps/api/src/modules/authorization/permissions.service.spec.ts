@@ -228,4 +228,54 @@ describe('validity window — an expired grant stops existing on its own', () =>
     expect(where.validFrom).toBeDefined();
     expect(where.OR).toEqual([{ validTo: null }, { validTo: { gt: expect.any(Date) } }]);
   });
+
+  /* CÁI BẪY của `grantInForce()`: nó mang một khoá `OR`, mà mệnh đề lọc luật ở `evaluateRules`
+   * cũng có `OR` của riêng nó (`subjectUserId` đích danh hoặc `null` = áp cho mọi người). Hai
+   * khoá `OR` trong cùng một object thì khoá sau ĐÈ khoá trước — không lỗi, không cảnh báo, mất
+   * im lặng một nửa điều kiện.
+   *
+   * Mất khoá nào cũng hỏng, và hỏng ở tầng quyền:
+   *   · mất `OR` chủ thể → luật nhắm đích danh người khác bị áp cho người này;
+   *   · mất cửa sổ hiệu lực → luật DENY đã hết hạn vẫn chặn, luật ALLOW đã hết hạn vẫn mở.
+   *
+   * Cách viết đúng là `AND: [grantInForce(now)]`. Kiểm CẢ HAI còn nguyên trong một mệnh đề. */
+  it('lọc luật giữ CẢ HAI: chủ thể và cửa sổ hiệu lực — không khoá nào đè khoá nào', async () => {
+    const rules = vi.fn().mockResolvedValue([]);
+    const svc = new PermissionsService({
+      roleAssignment: { findMany: vi.fn().mockResolvedValue([]) },
+      scopeAssignment: { findMany: vi.fn().mockResolvedValue([]) },
+      accessRule: { findMany: rules },
+      permission: { findUnique: vi.fn().mockResolvedValue(null) },
+    } as unknown as PrismaService);
+
+    await svc.evaluateRules('u1', 'crm.person.view_sensitive');
+    const where = rules.mock.calls[0]?.[0]?.where as Record<string, unknown>;
+
+    expect(where.OR).toEqual([{ subjectUserId: 'u1' }, { subjectUserId: null }]);
+    expect(where.AND).toEqual([
+      {
+        validFrom: { lte: expect.any(Date) },
+        OR: [{ validTo: null }, { validTo: { gt: expect.any(Date) } }],
+      },
+    ]);
+  });
+
+  /* Phạm vi nghĩa trang (`scopeAssignment`) là TRỤC THỨ HAI của quyền hiệu dụng, và nó cũng có
+   * `validTo`. Quên cửa sổ ở đây thì người đã bị gỡ phân công hôm qua vẫn phủ nghĩa trang đó hôm
+   * nay — mà `validTo` sinh ra chính là để không ai phải nhớ đi thu hồi. */
+  it('trục nghĩa trang cũng chỉ lấy phân công còn hiệu lực', async () => {
+    const sites = vi.fn().mockResolvedValue([]);
+    const svc = new PermissionsService({
+      roleAssignment: { findMany: vi.fn().mockResolvedValue([]) },
+      scopeAssignment: { findMany: sites },
+      accessRule: { findMany: vi.fn().mockResolvedValue([]) },
+      permission: { findUnique: vi.fn().mockResolvedValue(null) },
+    } as unknown as PrismaService);
+
+    await svc.getEffectiveAccess('u1');
+    const where = sites.mock.calls[0]?.[0]?.where as Record<string, unknown>;
+    expect(where.userId).toBe('u1');
+    expect(where.validFrom).toEqual({ lte: expect.any(Date) });
+    expect(where.OR).toEqual([{ validTo: null }, { validTo: { gt: expect.any(Date) } }]);
+  });
 });

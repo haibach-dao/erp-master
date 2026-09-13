@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { ulid } from 'ulid';
+import { grantInForce } from '../../common/lifecycle/active';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { ScopeService } from '../authorization/scope.service';
@@ -298,18 +299,9 @@ export class CardSignersService {
           'Dòng người ký này có từ trước khi danh mục gắn vào tài khoản và nghĩa trang, nên không dùng lại được. Thêm người ký mới.',
       };
     }
-    const now = new Date();
-    /* CỐ Ý KHÔNG dùng `stillValid()` của `common/lifecycle/active.ts`, dù nếp nhà là dùng
-     * mảnh chung. Mảnh đó viết `validTo: { gte: now }`, còn `PermissionsService.activeAssignments`
-     * — thứ THỰC SỰ quyết định người này có vào được hay không — viết `gt`. Hai bên lệch
-     * nhau đúng một khoảnh khắc, và nếu lấy `gte` thì có một lằn ranh mà danh mục nói "được
-     * ký" trong khi tầng quyền nói "không". Câu hỏi ở đây là câu hỏi về QUYỀN, nên bám theo
-     * tầng quyền.
-     *
-     * Đây là một lệch có thật giữa hai định nghĩa trong repo, không phải chỗ này bịa ra: nếu
-     * hợp nhất `stillValid` và `activeAssignments` về một bản thì xoá luôn chú thích này và
-     * dùng mảnh chung. */
-    const inForce = { validFrom: { lte: now }, OR: [{ validTo: null }, { validTo: { gt: now } }] };
+    /* Mảnh CHUNG, không chép tay. Câu hỏi ở đây là câu hỏi về QUYỀN, nên phải trả lời đúng
+     * y như `PermissionsService` — xem lý lẽ chọn `gt` ở `common/lifecycle/active.ts`. */
+    const inForce = grantInForce();
 
     const [holdsRole, coversSite] = await Promise.all([
       this.prisma.roleAssignment.findFirst({

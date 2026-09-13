@@ -7,6 +7,7 @@ import {
 import { Prisma } from '@prisma/client';
 import { createHash } from 'node:crypto';
 import { ulid } from 'ulid';
+import { grantInForce } from '../../common/lifecycle/active';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { ScopeService } from '../authorization/scope.service';
@@ -156,16 +157,24 @@ export class CardApprovalsService {
      * Thiếu phép kiểm này thì hồ sơ gửi cho một người đã rời ghế: họ mở hộp thư ra không thấy
      * gì (`listInbox` lọc theo phạm vi), hoặc thấy mà bấm Duyệt thì `PermissionGuard` từ chối
      * vì mã `cemetery.card.approve` của họ đã rụng. Hồ sơ nằm đó vĩnh viễn, và người gửi chỉ
-     * biết là "chờ mãi không thấy hồi âm". */
+     * biết là "chờ mãi không thấy hồi âm".
+     *
+     * Cửa sổ hiệu lực lấy từ `grantInForce` — ĐÚNG mảnh `CardSignersService.list` dùng để tính
+     * cờ `eligible`, và đúng mảnh `PermissionsService` dùng để trả lời 403. Ba nơi, một định
+     * nghĩa: lệch một biên là danh mục hiện "được ký" trong khi cửa gửi duyệt nói "không còn
+     * đủ tư cách".
+     *
+     * MỘT mốc `now` cho CẢ HAI truy vấn, không phải hai lần `new Date()`. Hai mốc lệch nhau là
+     * một cửa sổ có hai biên, và đúng khoảnh khắc giữa hai mốc ấy sinh ra một ca "lúc được lúc
+     * không" mà không ai dựng lại được để đi tìm. */
     const now = new Date();
-    const inForce = { validFrom: { lte: now }, OR: [{ validTo: null }, { validTo: { gt: now } }] };
     const [holdsRole, coversSite] = await Promise.all([
       this.prisma.roleAssignment.findFirst({
-        where: { userId: signer.userId, role: { code: SIGNER_ROLE }, ...inForce },
+        where: { userId: signer.userId, role: { code: SIGNER_ROLE }, ...grantInForce(now) },
         select: { id: true },
       }),
       this.prisma.scopeAssignment.findFirst({
-        where: { userId: signer.userId, cemeteryId: subject.cemeteryId, ...inForce },
+        where: { userId: signer.userId, cemeteryId: subject.cemeteryId, ...grantInForce(now) },
         select: { id: true },
       }),
     ]);
