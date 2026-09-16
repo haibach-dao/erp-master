@@ -151,8 +151,10 @@ export class PermissionsService {
    * ở công ty B dùng được `cemetery.plot.update` sang công ty B — bằng một mã mà vai kinh
    * doanh không hề cấp. Đúng lớp lỗi đã vá cho trục nghĩa trang hôm 27/08, chỉ khác trục.
    *
-   * Trả hai giá trị từ MỘT hàm, trên MỘT lượt đọc, với MỘT mốc `now` — để không còn chỗ nào
-   * ghép được mức của lượt này với danh sách của lượt kia.
+   * Trả hai giá trị từ MỘT hàm, với MỘT mốc `now` — để không còn chỗ nào ghép được mức của
+   * lượt này với danh sách của lượt kia. (Không phải một lượt ĐỌC: bên trong vẫn có chuỗi
+   * luật, danh mục và bảng gán, cộng bảng nghĩa trang chạy song song. Thứ được gom về một là
+   * QUYẾT ĐỊNH và MỐC THỜI GIAN, không phải số truy vấn.)
    *
    * GIỚI HẠN CÓ THẬT, KHÔNG SỬA ĐƯỢC Ở TẦNG NÀY: `siteIds` vẫn là danh sách toàn-người-gọi.
    * Bảng `authz.scope_assignments` gắn NGƯỜI với NGHĨA TRANG và KHÔNG có cột vai — xem chú
@@ -204,13 +206,30 @@ export class PermissionsService {
         const matches = permissionMatches(rp.permission.code, code, {
           ...(meta === null ? {} : { wildcardExempt: meta.wildcardExempt }),
         });
-        if (matches) {
-          covers = true;
-          /* Cùng luật ưu tiên với `getGrants`: phạm vi ghi đè trên DÒNG GÁN thắng phạm vi
-           * mặc định của vai. `broader` ép mọi chuỗi ngoài GROUP/COMPANY/SITE về `NONE`,
-           * đúng như nhánh `isScope` của `getGrants` rồi cũng cho ra `NONE`. */
-          level = broader(level, a.scope ?? rp.scope);
+        if (!matches) {
+          continue;
         }
+        /* Cùng luật ưu tiên với `getGrants`: phạm vi ghi đè trên DÒNG GÁN thắng phạm vi mặc
+         * định của vai. `broader` ép mọi chuỗi ngoài GROUP/COMPANY/SITE về `NONE`, đúng như
+         * nhánh `isScope` của `getGrants` rồi cũng cho ra `NONE`. */
+        const granted = a.scope ?? rp.scope;
+        /* PHỦ MÃ THÔI CHƯA ĐỦ — phạm vi của chính grant đó phải là thứ hệ THỰC THI được.
+         *
+         * Bản đầu bật `covers` ngay khi mã khớp, không hỏi phạm vi. Hậu quả đi NGƯỢC ý người
+         * ghi: một dòng gán mang `scope = 'DEPARTMENT'` (hệ không thực thi, `broader` ném về
+         * `NONE`) vẫn góp `companyId` của nó vào tập. Người vừa giữ vai đó ở công ty A vừa
+         * giữ một vai mức COMPANY ở công ty B sẽ có `level = COMPANY` và `companyIds =
+         * [A, B]` — tức công ty A KHÔNG bị thu hẹp mà còn được với tới ở mức COMPANY, rộng
+         * hơn cả trước khi ai đó gõ `DEPARTMENT` vào ô phạm vi.
+         *
+         * Cột `role_assignments.scope` không có đường GHI nào trong sản xuất, nên chỉ tới
+         * được qua seed, migration hay `psql` — đúng những kênh mà chú thích ở `scope.service
+         * .ts` đã thừa nhận là vẫn mở, và là lý do cổng `NONE` vẫn cần tồn tại. */
+        if (!isEnforcedScope(granted)) {
+          continue;
+        }
+        covers = true;
+        level = broader(level, granted);
       }
       if (covers && a.companyId !== null) {
         companyIds.add(a.companyId);

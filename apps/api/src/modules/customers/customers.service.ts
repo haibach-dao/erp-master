@@ -272,7 +272,15 @@ export class CustomersService {
     await this.assertCompanyExists(dto.companyId);
 
     const actor = caller.userId;
-    let personId = dto.personId ?? null;
+    /* MỘT phép hỏi "trống" cho cả hàm, đặt ngay ở đây.
+     *
+     * `personId` là `@IsOptional() @IsString()` không có `@IsNotEmpty`, nên `''` gửi lên
+     * được. Bản đầu của lát này hỏi hai kiểu ở hai chỗ — `notBlank(personId)` cho phép kiểm
+     * phạm vi, rồi `personId === null` tám dòng dưới cho việc tạo nhân thân — và hai câu trả
+     * lời khác nhau đúng ở `''`: nó vừa KHÔNG bị hỏi phạm vi (vì `notBlank` sai) vừa KHÔNG
+     * rơi vào nhánh tạo nhân thân (vì khác `null`), rồi đi thẳng xuống lệnh ghi với một khoá
+     * ngoại rỗng. Chuẩn hoá một lần ở đây thì cả hàm chỉ còn một khái niệm "trống". */
+    let personId = notBlank(dto.personId) ? (dto.personId as string) : null;
     /* Nhân thân CÓ SẴN cũng phải nằm trong phạm vi, không chỉ công ty của hồ sơ.
      *
      * Hỏi ở đây — TRƯỚC `createPerson` và trước mọi lệnh ghi — vì cùng lý do mà
@@ -280,12 +288,9 @@ export class CustomersService {
      * chặn. Đường này không ghi nhân thân (đã có `personId` thì `createPerson` không chạy),
      * nhưng thứ tự vẫn phải đúng để lần sau ai thêm một lệnh ghi vào giữa thì không tự sinh
      * ra lỗ.
-     *
-     * `notBlank` chứ không `!== null`: `personId` là `@IsOptional() @IsString()`, không có
-     * `@IsNotEmpty`, nên `''` gửi lên được và sẽ lọt qua phép so với `null`.
      */
-    if (notBlank(personId)) {
-      await this.assertPersonClaimable(personId as string, caller);
+    if (personId !== null) {
+      await this.assertPersonClaimable(personId, caller);
     }
     let warnings: DedupWarning[] = [];
 
