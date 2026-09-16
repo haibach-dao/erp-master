@@ -57,12 +57,22 @@ function build(opts: {
       }),
     },
     company: { findUnique: vi.fn().mockResolvedValue({ id: CO_A }) },
+    /* MOCK PHẢI KIỂM `where`, nếu không nó không canh được gì.
+     *
+     * `BurialRecord.deceasedPersonId` chứa `DeceasedPerson.id`, KHÔNG phải `Person.id` —
+     * hỏi sai cột thì Prisma lặng lẽ trả `null`, không nổ. Một `mockResolvedValue` trả cùng
+     * giá trị bất kể đối số sẽ XANH cho cả cách hỏi đúng lẫn cách hỏi sai, và bốn ca "neo an
+     * táng" dưới đây từng xanh đúng như thế: chúng khẳng định một hành vi mà mã sản xuất
+     * không hề có. Một lượt soi độc lập 16/09/2026 bắt được.
+     *
+     * Nên mock chỉ trả hồ sơ khi được hỏi ĐÚNG `{ deceased: { personId } }`. Đổi về
+     * `{ deceasedPersonId: ... }` là bốn ca kia đỏ ngay. */
     burialRecord: {
-      findFirst: vi
-        .fn()
-        .mockResolvedValue(
-          anchor === 'burial-B' || anchor === 'burial-A' ? { gravePlotId: 'plot-1' } : null,
-        ),
+      findFirst: vi.fn().mockImplementation((args: { where: Record<string, unknown> }) => {
+        const asked = (args.where as { deceased?: { personId?: string } }).deceased?.personId;
+        const hasBurial = anchor === 'burial-B' || anchor === 'burial-A';
+        return Promise.resolve(hasBurial && asked === PERSON ? { gravePlotId: 'plot-1' } : null);
+      }),
     },
     gravePlot: {
       findUnique: vi

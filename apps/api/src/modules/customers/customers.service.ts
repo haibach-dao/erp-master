@@ -1428,8 +1428,29 @@ export class CustomersService {
       return true;
     }
 
+    /* HỎI QUA `deceased: { personId }`, KHÔNG qua `deceasedPersonId`.
+     *
+     * `BurialRecord.deceasedPersonId` chứa `DeceasedPerson.id`, KHÔNG phải `Person.id` — tên
+     * cột có chữ `PersonId` nhưng nó trỏ vào bảng khác (`schema.prisma`, quan hệ `deceased`).
+     * Nhét một `Person.id` vào đó thì truy vấn KHÔNG BAO GIỜ khớp: nó không nổ, không cảnh
+     * báo, chỉ lặng lẽ trả `null`.
+     *
+     * Bẫy này đã được khai bằng chữ ở `common/lifecycle/person-references.ts` và cách hỏi
+     * đúng nằm ngay trong file này (`restingPlacesOf`) — vậy mà nhánh này vẫn sai từ đầu, và
+     * một lượt soi độc lập 16/09/2026 mới bắt được. Hậu quả đi CẢ HAI CHIỀU:
+     *   - đường ĐỌC (`assertPersonInScope`): người phụ trách đúng nghĩa trang vẫn bị 403 khi
+     *     mở CCCD của người đã an táng ở đó — quy không ra neo thì từ chối.
+     *   - đường GHI (`assertPersonClaimable`): không quy ra neo nghĩa là "chưa ai nhận", nên
+     *     nhân thân đã an táng ở công ty khác lại GẮN ĐƯỢC — đúng cái lỗ mà hàm này sinh ra
+     *     để bịt.
+     *
+     * KHÔNG lọc theo trạng thái hồ sơ. Một hồ sơ đã HUỶ vẫn nói lên "nhân thân này vốn là
+     * người của nhà ai", và đó là câu hỏi ở đây — khác câu "người này đang nằm ở đâu" mà
+     * `activeBurial()` trả lời. Thêm bộ lọc trạng thái sẽ khiến hồ sơ huỷ thành "không có
+     * neo", tức mở lại đúng lỗ vừa bịt ở đường GHI. Nếu muốn đổi, đó là quyết định riêng.
+     */
     const burial = await this.prisma.burialRecord.findFirst({
-      where: { deceasedPersonId: personId },
+      where: { deceased: { personId } },
       select: { gravePlotId: true },
       orderBy: { createdAt: 'desc' },
     });

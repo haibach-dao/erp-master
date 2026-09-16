@@ -40,7 +40,10 @@ function build(opts: {
    * trục độ nhạy, không bị phép kiểm phạm vi chặn trước và báo sai chỗ hỏng. */
   contract?: { companyId: string; gravePlotId: string } | null;
   burial?: { gravePlotId: string } | null;
-  deceased?: { personId: string } | null;
+  /* `id` chứ KHÔNG phải `personId`, và hai giá trị cố ý KHÁC nhau: `BurialRecord.
+   * deceasedPersonId` chứa `DeceasedPerson.id`, không phải `Person.id`. Fixture cũ chỉ có
+   * `personId` nên mọi cách hỏi đều ra cùng kết quả — test xanh mà không canh gì. */
+  deceased?: { id: string } | null;
   deceasedBurial?: { gravePlotId: string } | null;
   plot?: { companyId: string; cemeteryId: string } | null;
 }) {
@@ -63,13 +66,18 @@ function build(opts: {
   /* `burialRecord.findFirst` bị gọi ở HAI chỗ khác nhau: tìm theo `legalDocFileId`, và tìm
    * hồ sơ an táng của người đã mất. Phân biệt bằng chính mệnh đề `where` — dùng một giá trị
    * chung cho cả hai là để test xanh vì lý do sai. */
-  const burialFindFirst = vi
-    .fn()
-    .mockImplementation((args: { where: Record<string, unknown> }) =>
-      Promise.resolve(
-        'legalDocFileId' in args.where ? (opts.burial ?? null) : (opts.deceasedBurial ?? null),
-      ),
-    );
+  const burialFindFirst = vi.fn().mockImplementation((args: { where: Record<string, unknown> }) => {
+    if ('legalDocFileId' in args.where) {
+      return Promise.resolve(opts.burial ?? null);
+    }
+    /* Nhánh "hồ sơ an táng của người đã mất" chỉ khớp khi được hỏi bằng ĐÚNG
+     * `DeceasedPerson.id`. Bản trước trả `opts.deceasedBurial` cho mọi `where`, nên nó xanh
+     * kể cả khi mã sản xuất nhét một `Person.id` vào `deceasedPersonId` — mà đó chính là
+     * lỗi đã nằm ở `files.service.ts` cho tới 16/09/2026. */
+    const asked = (args.where as { deceasedPersonId?: string }).deceasedPersonId;
+    const matches = opts.deceased != null && asked === opts.deceased.id;
+    return Promise.resolve(matches ? (opts.deceasedBurial ?? null) : null);
+  });
   const deceasedFindFirst = vi.fn().mockResolvedValue(opts.deceased ?? null);
   const plotFindUnique = vi
     .fn()

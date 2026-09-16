@@ -38,7 +38,16 @@ function build(
   const prisma = {
     person: { findUnique: vi.fn().mockResolvedValue({ id: PERSON, nationalIdCipher: cipher }) },
     customer: { findUnique: vi.fn().mockResolvedValue(customer) },
-    burialRecord: { findFirst: vi.fn().mockResolvedValue(burial) },
+    /* Mock kiểm `where`: `BurialRecord.deceasedPersonId` chứa `DeceasedPerson.id`, không phải
+     * `Person.id`, nên chỉ trả hồ sơ khi được hỏi qua quan hệ `deceased`. Một
+     * `mockResolvedValue` trần sẽ xanh cho cả cách hỏi sai — xem chú thích dài ở
+     * `customer-person-claim.service.spec.ts`. */
+    burialRecord: {
+      findFirst: vi.fn().mockImplementation((args: { where: Record<string, unknown> }) => {
+        const asked = (args.where as { deceased?: { personId?: string } }).deceased?.personId;
+        return Promise.resolve(asked === PERSON ? burial : null);
+      }),
+    },
     gravePlot: { findUnique: vi.fn().mockResolvedValue(plot) },
   } as unknown as PrismaService;
 
