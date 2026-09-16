@@ -251,3 +251,77 @@ describe('phạm vi theo MÃ QUYỀN — hợp giữa các vai cộng dồn QUY�
     );
   });
 });
+
+/* ---- Mức NONE: không phạm vi nào, nên không với tới bản ghi nào ----
+ *
+ * `NONE` KHÔNG phải một mức hẹp hơn `SITE`. Nó là câu "mã này không được cấp phạm vi nào",
+ * và chỉ sinh ra từ ba nguồn: chuỗi luật truy cập trả DENY, không vai nào phủ mã đó, hoặc
+ * grant mang một scope mà `broader()` không thực thi được (cột `role_permission.scope` mặc
+ * định là `DEPARTMENT`, và màn hình ma trận cấp được cả SELF/ASSIGNED/CUSTOM).
+ *
+ * VÌ SAO NHÓM TEST NÀY PHẢI DỰNG `companyIds` KHÁC RỖNG: ca `NONE` duy nhất có trước nó
+ * (`a caller bound to nothing reaches nothing`) dựng `companyIds: []`, nên nó xanh vì DANH
+ * SÁCH RỖNG chứ không vì mức `NONE` bị chặn — `PolicyEvaluator.includes` từ chối mọi thứ
+ * khi tập rỗng. Hình dạng THẬT của người bị luật DENY chặn một mã là: vẫn được gán vai ở
+ * công ty A, vẫn có dòng phụ trách nghĩa trang, nhưng mức cho MÃ ĐÓ là `NONE`. Ca đó chưa
+ * từng được dựng, và đó là lý do lỗ này sống sót qua mọi lần chạy test.
+ */
+const BI_LUAT_CHAN_NHUNG_VAN_DUOC_GAN = {
+  callerLevel: 'COMPANY' as const,
+  perCode: {
+    'cemetery.plot.view': 'NONE' as const,
+    'cemetery.plot.update': 'COMPANY' as const,
+  },
+  companyIds: ['co-a'],
+  siteIds: ['ct-1'],
+};
+
+describe('mức NONE — không được xử như COMPANY hay như SITE', () => {
+  it('assertCompanyFor: từ chối CHÍNH công ty người đó được gán', async () => {
+    const svc = buildPerCode(BI_LUAT_CHAN_NHUNG_VAN_DUOC_GAN);
+    await expect(svc.assertCompanyFor('u1', 'cemetery.plot.view', 'co-a')).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+  });
+
+  it('assertSiteFor: từ chối CHÍNH nghĩa trang người đó phụ trách', async () => {
+    const svc = buildPerCode(BI_LUAT_CHAN_NHUNG_VAN_DUOC_GAN);
+    await expect(svc.assertSiteFor('u1', 'cemetery.plot.view', 'ct-1')).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+  });
+
+  it('visibleCompanyIdsFor: KHÔNG trả danh sách công ty cho một mã không có phạm vi', async () => {
+    const svc = buildPerCode(BI_LUAT_CHAN_NHUNG_VAN_DUOC_GAN);
+    await expect(svc.visibleCompanyIdsFor('u1', 'cemetery.plot.view')).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+  });
+
+  /* Chỗ rò RỘNG NHẤT trong bốn hàm: `null` ở đây nghĩa là "không bó theo nghĩa trang nào".
+   * Một mã bị luật DENY chặn mà vẫn nhận `null` thì truy vấn danh sách chạy không một mệnh
+   * đề lọc nào — người bị chặn đọc được NHIỀU HƠN người chỉ bị bó theo nghĩa trang. */
+  it('listSiteFilterFor: KHÔNG trả null (tức không-bó) cho một mã không có phạm vi', async () => {
+    const svc = buildPerCode(BI_LUAT_CHAN_NHUNG_VAN_DUOC_GAN);
+    await expect(svc.listSiteFilterFor('u1', 'cemetery.plot.view')).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+  });
+
+  it('nói rõ lý do là KHÔNG CÓ PHẠM VI, không lẫn với "ngoài phạm vi"', async () => {
+    const svc = buildPerCode(BI_LUAT_CHAN_NHUNG_VAN_DUOC_GAN);
+    await expect(svc.assertCompanyFor('u1', 'cemetery.plot.view', 'co-a')).rejects.toThrow(
+      /không được cấp phạm vi nào/,
+    );
+  });
+
+  /* Không phải "chặn tất cho chắc": cùng người, cùng công ty, mã KHÁC có phạm vi thật thì
+   * vẫn phải đi qua. Thiếu ca này thì một bản vá chặn sạch mọi thứ cũng xanh. */
+  it('mã khác của CHÍNH người đó, có phạm vi thật, vẫn đi qua', async () => {
+    const svc = buildPerCode(BI_LUAT_CHAN_NHUNG_VAN_DUOC_GAN);
+    await expect(
+      svc.assertCompanyFor('u1', 'cemetery.plot.update', 'co-a'),
+    ).resolves.toBeUndefined();
+    await expect(svc.visibleCompanyIdsFor('u1', 'cemetery.plot.update')).resolves.toEqual(['co-a']);
+  });
+});

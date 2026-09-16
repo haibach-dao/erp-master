@@ -140,10 +140,35 @@ export class ScopeService {
         'Không xác định được mã quyền đang thi hành — không kiểm được phạm vi',
       );
     }
+    const level = await this.permissions.scopeLevelFor(userId, code as string);
+    /* NONE là TỪ CHỐI, và phải từ chối NGAY ĐÂY.
+     *
+     * `NONE` không phải một mức hẹp hơn `SITE`. Nó là câu "mã này không được cấp phạm vi
+     * nào", và sinh ra từ ba nguồn: chuỗi luật truy cập trả DENY, không vai nào phủ mã đó,
+     * hoặc grant mang một scope mà `broader()` không thực thi được (cột
+     * `role_permission.scope` mặc định là `DEPARTMENT`, và màn hình ma trận cấp được cả
+     * SELF/ASSIGNED/CUSTOM).
+     *
+     * Trước bản này, cả bốn đường bên dưới đọc `NONE` thành một thứ khác hẳn, mỗi đường một
+     * kiểu: `checkCompany` rơi xuống nhánh COMPANY, `checkSite` rơi xuống nhánh SITE,
+     * `visibleCompanyIdsFor` trả nguyên danh sách công ty, còn `listSiteFilterFor` trả
+     * `null` — tức KHÔNG BÓ GÌ. Đường cuối nặng nhất: người bị một luật DENY chặn đọc được
+     * NHIỀU HƠN người chỉ bị bó theo nghĩa trang.
+     *
+     * Chặn ở MỘT chỗ chứ không rải ra bốn chỗ: bốn bản của cùng một luật là bốn thứ sẽ lệch
+     * nhau — đúng lớp lỗi mà `common/lifecycle/active.ts` sinh ra để dẹp.
+     *
+     * Hỏi mức TRƯỚC rồi mới đọc phạm vi, nên lượt đọc thứ hai không xảy ra khi đã bị từ chối.
+     */
+    if (level === 'NONE') {
+      throw new ForbiddenException(
+        'Ngoài phạm vi được gán: mã quyền đang thi hành không được cấp phạm vi nào',
+      );
+    }
     const { scope } = await this.permissions.getEffectiveAccess(userId);
     return {
       subject: { userId, companyIds: scope.companyIds, siteIds: scope.siteIds },
-      level: await this.permissions.scopeLevelFor(userId, code as string),
+      level,
     };
   }
 
