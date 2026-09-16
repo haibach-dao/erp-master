@@ -121,7 +121,12 @@ export class ScopeService {
     }
   }
 
-  /* Cùng subject, nhưng `level` tính THEO MÃ.
+  /* Mức VÀ phạm vi, cả hai tính THEO MÃ, lấy trong MỘT lượt.
+   *
+   * Trước 16/09/2026 chỉ `level` theo mã, còn `companyIds` lấy từ `getEffectiveAccess` —
+   * hợp của MỌI dòng gán, bất kể vai đó có cấp mã đang thi hành hay không. Ghép một mức bó
+   * chặt với một danh sách bó lỏng thì phần bó chặt bị vô hiệu: xem chú thích `scopeForCode`
+   * trong `permissions.service.ts`.
    *
    * Thiếu mã là TỪ CHỐI, không phải rơi về mức toàn-người-gọi. Rơi về là fail-open: route
    * quên khai `@RequirePermission` (hoặc gọi nhầm từ chỗ không đi qua guard) sẽ được kiểm
@@ -140,7 +145,10 @@ export class ScopeService {
         'Không xác định được mã quyền đang thi hành — không kiểm được phạm vi',
       );
     }
-    const level = await this.permissions.scopeLevelFor(userId, code as string);
+    const { level, companyIds, siteIds } = await this.permissions.scopeForCode(
+      userId,
+      code as string,
+    );
     /* NONE là TỪ CHỐI, và phải từ chối NGAY ĐÂY.
      *
      * `NONE` không phải một mức hẹp hơn `SITE`. Nó là câu "mã này không được cấp phạm vi
@@ -158,18 +166,13 @@ export class ScopeService {
      * Chặn ở MỘT chỗ chứ không rải ra bốn chỗ: bốn bản của cùng một luật là bốn thứ sẽ lệch
      * nhau — đúng lớp lỗi mà `common/lifecycle/active.ts` sinh ra để dẹp.
      *
-     * Hỏi mức TRƯỚC rồi mới đọc phạm vi, nên lượt đọc thứ hai không xảy ra khi đã bị từ chối.
      */
     if (level === 'NONE') {
       throw new ForbiddenException(
         'Ngoài phạm vi được gán: mã quyền đang thi hành không được cấp phạm vi nào',
       );
     }
-    const { scope } = await this.permissions.getEffectiveAccess(userId);
-    return {
-      subject: { userId, companyIds: scope.companyIds, siteIds: scope.siteIds },
-      level,
-    };
+    return { subject: { userId, companyIds, siteIds }, level };
   }
 
   /* Scope level for one permission code, unioned across the grants that cover it.

@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ForbiddenException } from '@nestjs/common';
 import { ScopeService } from './scope.service';
-import type { PermissionsService } from './permissions.service';
+import { PermissionsService } from './permissions.service';
+import type { PrismaService } from '../../prisma/prisma.service';
 import { PolicyEvaluator } from './policy-evaluator';
 
 function build(scope: {
@@ -9,16 +10,18 @@ function build(scope: {
   companyIds: string[];
   siteIds?: string[];
 }) {
+  /* Ở nhóm test này, mọi mã có cùng một phạm vi — nên chúng kiểm đúng phần NGỮ NGHĨA của
+   * từng mức (GROUP với tới tất, COMPANY bó theo công ty, SITE bó theo nghĩa trang, NONE
+   * không với tới gì), không lẫn với phần "mã này khác mã kia". Trường hợp các mã LỆCH
+   * nhau có `buildPerCode` lo, còn việc danh sách công ty có thật sự bó theo mã hay không
+   * thì nhóm cuối file lo — nhóm đó chạy `PermissionsService` THẬT, vì đó là chỗ nối giữa
+   * hai lớp và cũng đúng là chỗ đã rò. */
   const permissions = {
-    getEffectiveAccess: vi.fn().mockResolvedValue({
-      roles: [],
-      permissions: [],
-      scope: { siteIds: [], unrestricted: scope.level === 'GROUP', ...scope },
+    scopeForCode: vi.fn().mockResolvedValue({
+      level: scope.level,
+      companyIds: scope.companyIds,
+      siteIds: scope.siteIds ?? [],
     }),
-    /* Ở nhóm test này, mức cho MỌI mã bằng mức của người gọi — nên chúng kiểm đúng phần
-     * ngữ nghĩa phạm vi, không lẫn với phần "mức theo mã khác mức toàn người". Trường hợp
-     * hai mức LỆCH nhau có `buildPerCode` ở dưới lo. */
-    scopeLevelFor: vi.fn().mockResolvedValue(scope.level),
   } as unknown as PermissionsService;
   return new ScopeService(permissions, new PolicyEvaluator());
 }
@@ -155,30 +158,28 @@ describe('ScopeService.listSiteFilter — narrowing list queries', () => {
  * ngày 27/08/2026: người phụ trách nghĩa trang A không được chạm nghĩa trang B, nhưng nếu
  * được gán thêm vai phụ trách B thì phải chạm được.
  */
+/* KHÔNG CÒN trường `callerLevel` ở đây, và sự vắng mặt đó là có ý.
+ *
+ * Bản trước có nó để mô phỏng "mức RỘNG NHẤT người này giữ ở bất cứ đâu" — thứ `loadFor`
+ * từng đọc. Nay `ScopeService` không còn một đường nào chạm tới mức toàn-người-gọi:
+ * `getEffectiveAccess` đã rời khỏi `loadFor`. Không còn gì để mô phỏng, nên không còn
+ * trường. Đó là bằng chứng bằng CẤU TRÚC — mạnh hơn canh bằng test, vì muốn tái lập lỗ cũ
+ * thì phải thêm lại cả một lời gọi, chứ không phải lỡ tay đổi một giá trị.
+ */
 function buildPerCode(opts: {
-  /** Mức RỘNG NHẤT người này giữ ở bất cứ đâu — thứ bản cũ dùng. */
-  callerLevel: 'GROUP' | 'COMPANY' | 'SITE' | 'NONE';
   /** Mức thật sự cấp cho TỪNG MÃ. */
   perCode: Record<string, 'GROUP' | 'COMPANY' | 'SITE' | 'NONE'>;
   companyIds: string[];
   siteIds: string[];
 }) {
   const permissions = {
-    getEffectiveAccess: vi.fn().mockResolvedValue({
-      roles: [],
-      permissions: [],
-      scope: {
-        level: opts.callerLevel,
-        unrestricted: opts.callerLevel === 'GROUP',
+    scopeForCode: vi.fn().mockImplementation((_u: string, code: string) =>
+      Promise.resolve({
+        level: opts.perCode[code] ?? 'NONE',
         companyIds: opts.companyIds,
         siteIds: opts.siteIds,
-      },
-    }),
-    scopeLevelFor: vi
-      .fn()
-      .mockImplementation((_u: string, code: string) =>
-        Promise.resolve(opts.perCode[code] ?? 'NONE'),
-      ),
+      }),
+    ),
   } as unknown as PermissionsService;
   return new ScopeService(permissions, new PolicyEvaluator());
 }
@@ -187,7 +188,6 @@ function buildPerCode(opts: {
  * CHỈ ĐỌC). Mức toàn-người-gọi của họ là GROUP; mức cho `burial.record.cancel` là SITE, vì
  * vai kiểm toán không hề cấp mã đó. */
 const KIEM_TOAN_KIEM_QUAN_LY = {
-  callerLevel: 'GROUP' as const,
   perCode: {
     'burial.record.cancel': 'SITE' as const,
     'burial.record.export': 'GROUP' as const,
@@ -267,7 +267,6 @@ describe('phạm vi theo MÃ QUYỀN — hợp giữa các vai cộng dồn QUY�
  * từng được dựng, và đó là lý do lỗ này sống sót qua mọi lần chạy test.
  */
 const BI_LUAT_CHAN_NHUNG_VAN_DUOC_GAN = {
-  callerLevel: 'COMPANY' as const,
   perCode: {
     'cemetery.plot.view': 'NONE' as const,
     'cemetery.plot.update': 'COMPANY' as const,
@@ -323,5 +322,78 @@ describe('mức NONE — không được xử như COMPANY hay như SITE', () =>
       svc.assertCompanyFor('u1', 'cemetery.plot.update', 'co-a'),
     ).resolves.toBeUndefined();
     await expect(svc.visibleCompanyIdsFor('u1', 'cemetery.plot.update')).resolves.toEqual(['co-a']);
+  });
+});
+
+/* ---- Trục CÔNG TY phải bó THEO MÃ, không phải theo người ----
+ *
+ * Nhóm test này KHÔNG mock `PermissionsService`. Nó dựng bản THẬT trên một Prisma giả, vì
+ * lỗ nằm đúng ở CHỖ NỐI giữa hai lớp: `ScopeService` hỏi mức theo mã, còn danh sách công ty
+ * thì lấy từ `getEffectiveAccess`, vốn gom `companyId` của MỌI dòng gán bất kể vai đó có
+ * cấp mã đang thi hành hay không. Mỗi lớp kiểm riêng đều xanh; chỗ nối mới là chỗ rò.
+ *
+ * Tình huống thật: một người vừa là quản lý nghĩa trang ở công ty A, vừa là nhân viên kinh
+ * doanh ở công ty B. Vai quản lý cấp `cemetery.plot.update`; vai kinh doanh KHÔNG cấp mã đó.
+ * Hợp giữa các vai là cộng dồn QUYỀN, không phải cộng dồn TẦM VỚI.
+ */
+function buildTwoRolesTwoCompanies() {
+  const assignments = [
+    {
+      scope: null,
+      companyId: 'co-a',
+      role: {
+        code: 'QL_NGHIA_TRANG',
+        rolePermissions: [
+          { scope: 'COMPANY', permission: { code: 'cemetery.plot.update' } },
+          { scope: 'COMPANY', permission: { code: 'crm.customer.view' } },
+        ],
+      },
+    },
+    {
+      scope: null,
+      companyId: 'co-b',
+      role: {
+        code: 'KD_KINH_DOANH',
+        rolePermissions: [{ scope: 'COMPANY', permission: { code: 'crm.customer.view' } }],
+      },
+    },
+  ];
+  const permissions = new PermissionsService({
+    roleAssignment: { findMany: vi.fn().mockResolvedValue(assignments) },
+    scopeAssignment: { findMany: vi.fn().mockResolvedValue([]) },
+    accessRule: { findMany: vi.fn().mockResolvedValue([]) },
+    permission: { findUnique: vi.fn().mockResolvedValue(null) },
+  } as unknown as PrismaService);
+  return new ScopeService(permissions, new PolicyEvaluator());
+}
+
+describe('trục CÔNG TY bó theo MÃ QUYỀN — vai nào cấp mã thì với tới công ty của vai đó', () => {
+  it('CHẶN công ty B trên mã mà chỉ vai ở công ty A cấp', async () => {
+    const svc = buildTwoRolesTwoCompanies();
+    await expect(svc.assertCompanyFor('u1', 'cemetery.plot.update', 'co-b')).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+  });
+
+  it('vẫn cho qua công ty A trên chính mã đó', async () => {
+    const svc = buildTwoRolesTwoCompanies();
+    await expect(
+      svc.assertCompanyFor('u1', 'cemetery.plot.update', 'co-a'),
+    ).resolves.toBeUndefined();
+  });
+
+  it('mã mà CẢ HAI vai cùng cấp thì với tới cả hai công ty — không phải chặn bớt cho chắc', async () => {
+    const svc = buildTwoRolesTwoCompanies();
+    await expect(svc.assertCompanyFor('u1', 'crm.customer.view', 'co-a')).resolves.toBeUndefined();
+    await expect(svc.assertCompanyFor('u1', 'crm.customer.view', 'co-b')).resolves.toBeUndefined();
+  });
+
+  it('danh sách công ty cho bộ lọc cũng bó theo mã', async () => {
+    const svc = buildTwoRolesTwoCompanies();
+    await expect(svc.visibleCompanyIdsFor('u1', 'cemetery.plot.update')).resolves.toEqual(['co-a']);
+    await expect(svc.visibleCompanyIdsFor('u1', 'crm.customer.view')).resolves.toEqual([
+      'co-a',
+      'co-b',
+    ]);
   });
 });

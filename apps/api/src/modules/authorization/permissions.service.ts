@@ -21,6 +21,19 @@ export interface PermissionMeta {
  */
 export type ScopeLevel = 'GROUP' | 'COMPANY' | 'SITE' | 'NONE';
 
+/* Phạm vi của MỘT mã quyền: mức, cộng đúng những bản ghi mà mức đó phủ tới.
+ *
+ * Hai trục không đối xứng, và sự bất đối xứng đó là dữ liệu chứ không phải thiếu sót:
+ * `companyIds` bó THEO MÃ (công ty của những dòng gán có grant phủ mã này), còn `siteIds`
+ * là danh sách toàn-người-gọi vì `authz.scope_assignments` không có cột vai. Xem chú thích
+ * ở `scopeForCode`.
+ */
+export interface CodeScope {
+  level: ScopeLevel;
+  companyIds: string[];
+  siteIds: string[];
+}
+
 /* Outcome of the ordered rule chain for one code.
  * NO_MATCH means no rule mentioned it, so the role matrix decides.
  */
@@ -122,22 +135,88 @@ export class PermissionsService {
    * not "take the widest thing you hold anywhere and apply it everywhere".
    */
   async scopeLevelFor(userId: string, code: string, now: Date = new Date()): Promise<ScopeLevel> {
+    return (await this.grantScopeForCode(userId, code, now)).level;
+  }
+
+  /* Phạm vi ĐẦY ĐỦ cho MỘT mã: mức, VÀ những công ty mà mã đó thật sự với tới.
+   *
+   * VÌ SAO PHẢI TRẢ CẢ HAI CÙNG MỘT LƯỢT (đo được, 16/09/2026):
+   *
+   * `scopeLevelFor` đã tính mức THEO MÃ từ lâu, nhưng nơi gọi nó — `ScopeService.loadFor` —
+   * lại lấy danh sách công ty từ `getEffectiveAccess`, vốn gom `companyId` của MỌI dòng gán
+   * còn hiệu lực, bất kể vai đó có cấp mã đang thi hành hay không. Ghép một mức bó theo mã
+   * với một danh sách bó theo NGƯỜI thì phần bó chặt bị phần bó lỏng vô hiệu.
+   *
+   * Hậu quả cụ thể: người vừa là quản lý nghĩa trang ở công ty A vừa là nhân viên kinh doanh
+   * ở công ty B dùng được `cemetery.plot.update` sang công ty B — bằng một mã mà vai kinh
+   * doanh không hề cấp. Đúng lớp lỗi đã vá cho trục nghĩa trang hôm 27/08, chỉ khác trục.
+   *
+   * Trả hai giá trị từ MỘT hàm, trên MỘT lượt đọc, với MỘT mốc `now` — để không còn chỗ nào
+   * ghép được mức của lượt này với danh sách của lượt kia.
+   *
+   * GIỚI HẠN CÓ THẬT, KHÔNG SỬA ĐƯỢC Ở TẦNG NÀY: `siteIds` vẫn là danh sách toàn-người-gọi.
+   * Bảng `authz.scope_assignments` gắn NGƯỜI với NGHĨA TRANG và KHÔNG có cột vai — xem chú
+   * thích thiết kế ở `schema.prisma`, chỗ nói rõ tách khỏi vai là có chủ đích. Nên dữ liệu
+   * để bó trục nghĩa trang theo mã đơn giản là KHÔNG TỒN TẠI; bó được nó đòi thêm cột +
+   * migration + một quyết định nghiệp vụ ("nghĩa trang gán cho người, hay gán cho vai-của-
+   * người") đảo ngược chính chú thích đó. Tên trường để nguyên là `siteIds` chứ không đổi
+   * thành thứ nghe như đã bó, để người đọc sau không tin nhầm.
+   */
+  async scopeForCode(userId: string, code: string, now: Date = new Date()): Promise<CodeScope> {
+    const [byGrant, sites] = await Promise.all([
+      this.grantScopeForCode(userId, code, now),
+      this.prisma.scopeAssignment.findMany({
+        where: { userId, ...grantInForce(now) },
+        select: { cemeteryId: true },
+      }),
+    ]);
+    return { ...byGrant, siteIds: sites.map((s) => s.cemeteryId).sort() };
+  }
+
+  /* Mức và công ty, tính từ CHÍNH những dòng gán phủ mã này — lõi dùng chung, khai một lần.
+   *
+   * `scopeLevelFor` là vỏ mỏng của hàm này thay vì một vòng lặp thứ hai: hai vòng lặp trên
+   * cùng một câu hỏi là hai thứ sẽ lệch nhau. Nó cũng KHÔNG đọc `scope_assignments`, nên ba
+   * nơi chỉ cần mức không phải trả giá cho một lượt đọc chúng không dùng.
+   *
+   * Điều kiện cộng một công ty vào tập là `covers` — dòng gán đó phải có ít nhất một grant
+   * phủ mã. Dòng `companyId = null` đóng góp đúng số không, giữ nguyên nếp cũ: được gán vào
+   * không công ty nào thì không bao giờ có nghĩa là mọi công ty.
+   */
+  private async grantScopeForCode(
+    userId: string,
+    code: string,
+    now: Date,
+  ): Promise<{ level: ScopeLevel; companyIds: string[] }> {
     const ruling = await this.evaluateRules(userId, code, now);
     if (ruling === 'DENY') {
-      return 'NONE';
+      return { level: 'NONE', companyIds: [] };
     }
-    const meta = await this.getPermissionMeta(code);
-    const grants = await this.getGrants(userId, now);
+    const [meta, assignments] = await Promise.all([
+      this.getPermissionMeta(code),
+      this.activeAssignments(userId, now),
+    ]);
     let level: ScopeLevel = 'NONE';
-    for (const g of grants) {
-      const covers = permissionMatches(g.permission, code, {
-        ...(meta === null ? {} : { wildcardExempt: meta.wildcardExempt }),
-      });
-      if (covers) {
-        level = broader(level, g.scope);
+    const companyIds = new Set<string>();
+    for (const a of assignments) {
+      let covers = false;
+      for (const rp of a.role.rolePermissions) {
+        const matches = permissionMatches(rp.permission.code, code, {
+          ...(meta === null ? {} : { wildcardExempt: meta.wildcardExempt }),
+        });
+        if (matches) {
+          covers = true;
+          /* Cùng luật ưu tiên với `getGrants`: phạm vi ghi đè trên DÒNG GÁN thắng phạm vi
+           * mặc định của vai. `broader` ép mọi chuỗi ngoài GROUP/COMPANY/SITE về `NONE`,
+           * đúng như nhánh `isScope` của `getGrants` rồi cũng cho ra `NONE`. */
+          level = broader(level, a.scope ?? rp.scope);
+        }
+      }
+      if (covers && a.companyId !== null) {
+        companyIds.add(a.companyId);
       }
     }
-    return level;
+    return { level, companyIds: [...companyIds].sort() };
   }
 
   /* Walk the ordered rule chain for one code — firewall semantics.
