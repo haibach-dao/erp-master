@@ -273,6 +273,20 @@ export class CustomersService {
 
     const actor = caller.userId;
     let personId = dto.personId ?? null;
+    /* Nhân thân CÓ SẴN cũng phải nằm trong phạm vi, không chỉ công ty của hồ sơ.
+     *
+     * Hỏi ở đây — TRƯỚC `createPerson` và trước mọi lệnh ghi — vì cùng lý do mà
+     * `assertCompanyFor` ở trên phải đứng trước: chặn sau khi đã ghi một nửa thì không còn là
+     * chặn. Đường này không ghi nhân thân (đã có `personId` thì `createPerson` không chạy),
+     * nhưng thứ tự vẫn phải đúng để lần sau ai thêm một lệnh ghi vào giữa thì không tự sinh
+     * ra lỗ.
+     *
+     * `notBlank` chứ không `!== null`: `personId` là `@IsOptional() @IsString()`, không có
+     * `@IsNotEmpty`, nên `''` gửi lên được và sẽ lọt qua phép so với `null`.
+     */
+    if (notBlank(personId)) {
+      await this.assertPersonClaimable(personId as string, caller);
+    }
     let warnings: DedupWarning[] = [];
 
     if (dto.type === 'INDIVIDUAL' && personId === null) {
@@ -1348,13 +1362,70 @@ export class CustomersService {
    * xuống `assertCompanyFor`, nơi người mức GROUP đi qua tuốt.
    */
   private async assertPersonInScope(personId: string, caller: Caller): Promise<void> {
+    const anchored = await this.checkPersonAnchor(personId, caller);
+    if (!anchored) {
+      throw new ForbiddenException(
+        'Không quy được nhân thân này về công ty hay nghĩa trang nào — không kiểm được phạm vi',
+      );
+    }
+  }
+
+  /* GẮN một nhân thân CÓ SẴN vào một khách hàng mới — đường GHI, khác đường ĐỌC ở trên.
+   *
+   * VÌ SAO PHẢI HỎI: `createCustomer` kiểm phạm vi trên `dto.companyId` (công ty của hồ sơ
+   * sắp tạo) nhưng tới 16/09/2026 không hỏi gì về `dto.personId`. Hai trường trả lời hai câu
+   * khác nhau — "hồ sơ này thuộc nhà ai" và "nhân thân này vốn là người của nhà ai" — và chỉ
+   * hỏi câu đầu thì người công ty A gắn được nhân thân của công ty B vào hồ sơ của mình.
+   *
+   * Hậu quả không phải leo thang QUYỀN mà là leo thang PHẠM VI, và nó tự nuôi mình: dòng
+   * `Customer` vừa tạo CHÍNH LÀ cái neo mà `assertPersonInScope` tin ở bước 1. Từ giây sau,
+   * `revealNationalId` quy nhân thân ấy về công ty A và mở CCCD đầy đủ. Mã
+   * `crm.person.view_sensitive` vẫn cần — nhưng phạm vi mới là thứ đáng lẽ ngăn người công
+   * ty A đọc dữ liệu cá nhân của người công ty B.
+   *
+   * `Customer.personId` là `@unique`, nên nhân thân ĐÃ có khách hàng thì vướng ràng buộc CSDL
+   * — nhưng đó là một P2002 nói về chỉ mục, không phải một câu 403 nói về phạm vi, và nó chỉ
+   * nổ SAU khi đã ghi. Nhân thân đã có HỒ SƠ AN TÁNG mà chưa có khách hàng thì không vướng gì
+   * cả, và đó đúng là hình dạng của người đã mất — nhóm đông nhất trong một hệ nghĩa trang,
+   * và dữ liệu cá nhân của họ vẫn được luật bảo vệ.
+   *
+   * CHƯA CÓ NEO NÀO THÌ CHO QUA — và đây là chỗ DUY NHẤT khác `assertPersonInScope`. Đường
+   * ĐỌC quy không ra neo thì TỪ CHỐI, vì đọc mà không biết của ai là đọc liều. Đường GHI
+   * neo ĐẦU TIÊN thì không có neo cũ nào để so: `POST /crm/persons` là endpoint thật, nên
+   * luồng hai bước "tạo nhân thân trước, rồi tạo khách hàng trỏ vào" là luồng thật, và chặn
+   * nó là chặn một việc không ai làm sai được.
+   */
+  private async assertPersonClaimable(personId: string, caller: Caller): Promise<void> {
+    await this.checkPersonAnchor(personId, caller);
+  }
+
+  /* Quy một nhân thân về công ty/nghĩa trang, rồi hỏi phạm vi trên chính neo đó.
+   *
+   * Trả `true` khi tìm được neo và người gọi với tới được; `false` khi KHÔNG có neo nào. Ném
+   * 403 khi có neo mà người gọi không với tới — vì lúc đó câu trả lời đã dứt khoát, và cả hai
+   * nơi gọi đều muốn đúng câu ấy.
+   *
+   * Tách ra vì hai đường chỉ khác nhau ĐÚNG MỘT nhánh ("không có neo"). Viết hai bản đầy đủ
+   * là hai bản sẽ lệch nhau — đúng lớp lỗi mà `common/lifecycle/active.ts` sinh ra để dẹp, và
+   * ở đây nó còn tệ hơn: hai bản luật phạm vi lệch nhau thì bản lỏng hơn là bản có hiệu lực.
+   *
+   * `Customer.companyId` CHO PHÉP NULL, nên "chỉ kiểm khi khác null" ở bước 1 chính là
+   * fail-open: mọi khách chưa gán công ty sẽ thành cửa mở. Null ở bước 1 thì RƠI SANG bước 2,
+   * không phải cho qua.
+   *
+   * Và "trống" gồm CẢ CHUỖI RỖNG — cùng lý do với `deleteCustomer`: DTO không có
+   * `@IsNotEmpty` và CSDL không có CHECK nên `''` lưu được. Hỏi bằng `notBlank` để hai cách
+   * trống đi chung một đường; so `!== null` thì `''` được coi là CÓ neo và đem thẳng xuống
+   * `assertCompanyFor`, nơi người mức GROUP đi qua tuốt.
+   */
+  private async checkPersonAnchor(personId: string, caller: Caller): Promise<boolean> {
     const customer = await this.prisma.customer.findUnique({
       where: { personId },
       select: { companyId: true },
     });
     if (customer !== null && notBlank(customer.companyId)) {
       await this.scope.assertCompanyFor(caller.userId, caller.permission, customer.companyId);
-      return;
+      return true;
     }
 
     const burial = await this.prisma.burialRecord.findFirst({
@@ -1370,13 +1441,11 @@ export class CustomersService {
       if (plot !== null) {
         await this.scope.assertCompanyFor(caller.userId, caller.permission, plot.companyId);
         await this.scope.assertSiteFor(caller.userId, caller.permission, plot.cemeteryId);
-        return;
+        return true;
       }
     }
 
-    throw new ForbiddenException(
-      'Không quy được nhân thân này về công ty hay nghĩa trang nào — không kiểm được phạm vi',
-    );
+    return false;
   }
 
   /* Giải mã và trả CCCD ĐẦY ĐỦ.
