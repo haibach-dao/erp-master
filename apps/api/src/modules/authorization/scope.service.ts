@@ -152,24 +152,46 @@ export class ScopeService {
     /* NONE là TỪ CHỐI, và phải từ chối NGAY ĐÂY.
      *
      * `NONE` không phải một mức hẹp hơn `SITE`. Nó là câu "mã này không được cấp phạm vi
-     * nào", và sinh ra từ ba nguồn: chuỗi luật truy cập trả DENY, không vai nào phủ mã đó,
-     * hoặc grant mang một scope mà `broader()` không thực thi được (cột
-     * `role_permission.scope` mặc định là `DEPARTMENT`, và màn hình ma trận cấp được cả
-     * SELF/ASSIGNED/CUSTOM).
+     * nào". Trước bản này, cả bốn đường bên dưới đọc nó thành một thứ khác hẳn, mỗi đường
+     * một kiểu: `checkCompany` rơi xuống nhánh COMPANY, `checkSite` rơi xuống nhánh SITE,
+     * `visibleCompanyIdsFor` trả nguyên danh sách công ty, `listSiteFilterFor` trả `null`.
      *
-     * Trước bản này, cả bốn đường bên dưới đọc `NONE` thành một thứ khác hẳn, mỗi đường một
-     * kiểu: `checkCompany` rơi xuống nhánh COMPANY, `checkSite` rơi xuống nhánh SITE,
-     * `visibleCompanyIdsFor` trả nguyên danh sách công ty, còn `listSiteFilterFor` trả
-     * `null` — tức KHÔNG BÓ GÌ. Đường cuối nặng nhất: người bị một luật DENY chặn đọc được
-     * NHIỀU HƠN người chỉ bị bó theo nghĩa trang.
+     * HAI NGUỒN `NONE` THẬT SỰ VỚI TỚI ĐƯỢC ĐÂY (đã soi lại 16/09/2026, xem đính chính ở
+     * cuối chú thích):
+     *
+     * 1. Grant mang một scope mà `broader()` không thực thi — cột `role_permissions.scope`
+     *    mặc định `DEPARTMENT`. `PermissionGuard` cho qua vì nó hỏi MÃ, không hỏi PHẠM VI.
+     *    Đường GHI nay đã bị chặn (`AuthzMatrixService.grant` + `isEnforcedScope`), nhưng
+     *    seed, migration và `psql` vẫn ghi thẳng vào cột được, nên cổng này vẫn cần.
+     * 2. Một luật ALLOW trong `access_rules` phủ mã mà không vai nào cấp. Guard trả `true`
+     *    ngay ở nhánh ALLOW; xuống tới đây thì không grant nào phủ nên mức là `NONE`. Luật
+     *    ALLOW nói "được làm", nó KHÔNG nói "ở đâu" — nên không có phạm vi, và không có
+     *    phạm vi thì không với tới bản ghi nào. Đó là lựa chọn fail-closed có chủ đích;
+     *    muốn luật ALLOW tự mang phạm vi thì phải thêm cột, và đó là quyết định riêng.
+     *
+     * ĐÍNH CHÍNH LỜI KHAI CỦA CHÍNH LÁT NÀY (commit b63b1be nói sai hai điều, một lượt soi
+     * độc lập bắt được; giữ lại đây vì cả hai nghe rất hợp lý và sẽ bị nghĩ lại):
+     *
+     * - "Người bị một luật DENY chặn vẫn đọc được" — KHÔNG với tới được qua HTTP.
+     *   `PermissionGuard` gọi `evaluateRules` và ném 403 "Bị luật truy cập chặn" TRƯỚC khi
+     *   controller chạy. `scopeLevelFor` vẫn trả `NONE` cho DENY, nhưng đường request không
+     *   bao giờ tới đây với hình dạng đó.
+     * - "`listSiteFilterFor` trả `null` tức KHÔNG BÓ GÌ" — sai ở cả tám nơi gọi. Mỗi nơi
+     *   hoặc ghép chung `where` với `visibleCompanyIdsFor` (luôn trả MẢNG khi không phải
+     *   GROUP), hoặc đứng sau một `assertCompanyFor` trên cùng mã. Trục công ty vẫn bó.
+     *   Over-reach thật là "thấy cả công ty thay vì chỉ nghĩa trang mình phụ trách" —
+     *   nghiêm trọng, nhưng không phải "không lọc gì".
      *
      * Chặn ở MỘT chỗ chứ không rải ra bốn chỗ: bốn bản của cùng một luật là bốn thứ sẽ lệch
      * nhau — đúng lớp lỗi mà `common/lifecycle/active.ts` sinh ra để dẹp.
-     *
      */
     if (level === 'NONE') {
+      /* KHÔNG mở đầu bằng "Ngoài phạm vi được gán" như hai câu ở `checkCompany`/`checkSite`.
+       * Hai câu đó nói "bản ghi này nằm ngoài phần bạn được giao"; câu này nói "mã quyền
+       * của bạn không được giao phần nào cả" — hai nguyên nhân khác hẳn, và người đọc log
+       * phân biệt được chúng bằng chính câu chữ. */
       throw new ForbiddenException(
-        'Ngoài phạm vi được gán: mã quyền đang thi hành không được cấp phạm vi nào',
+        'Không có phạm vi cho mã quyền đang thi hành: không vai nào cấp nó ở một mức hệ thực thi được',
       );
     }
     return { subject: { userId, companyIds, siteIds }, level };

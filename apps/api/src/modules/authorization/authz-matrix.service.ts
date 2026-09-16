@@ -7,7 +7,7 @@ import {
 import { ulid } from 'ulid';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
-import { isScope } from './scope.enum';
+import { ENFORCED_SCOPES, isEnforcedScope, isScope } from './scope.enum';
 import type { Caller } from './caller';
 import { ScopeService } from './scope.service';
 
@@ -94,6 +94,27 @@ export class AuthzMatrixService {
     await this.assertGroupWide(caller, 'thêm mã quyền cho một vai');
     if (!isScope(scope)) {
       throw new BadRequestException(`Phạm vi không hợp lệ: ${scope}`);
+    }
+    /* KHAI được không có nghĩa là LÀM được.
+     *
+     * `SCOPES` còn giữ SELF/ASSIGNED/DEPARTMENT/CUSTOM cho tương lai, nhưng tầng phạm vi
+     * chưa thực thi mức nào trong bốn mức đó: `broader()` ném chúng về `NONE`, và từ
+     * 16/09/2026 `NONE` là TỪ CHỐI. Cấp một grant như vậy không thu hẹp quyền — nó KHOÁ CHẾT
+     * mã quyền đó cho mọi người giữ vai, ở mọi endpoint có kiểm phạm vi, bằng 403.
+     *
+     * Hỏng theo kiểu khó lần nhất: `PermissionGuard` vẫn cho qua (nó hỏi mã, không hỏi phạm
+     * vi), nên người dùng thấy menu mở, bấm vào thì trang vỡ, và câu 403 không nhắc gì tới
+     * cái ô phạm vi ai đó vừa đổi. Cột `role_permissions.scope` lại mặc định `DEPARTMENT`,
+     * nên đây không phải giá trị hiếm gặp.
+     *
+     * Chặn ở đường GHI, bằng CHÍNH danh sách mà đường ĐỌC dùng.
+     */
+    if (!isEnforcedScope(scope)) {
+      throw new BadRequestException(
+        `Phạm vi ${scope} khai được nhưng hệ CHƯA thực thi — cấp nó sẽ khoá chết mã ` +
+          `${permissionCode} cho mọi người giữ vai ${roleCode}. Chọn một trong: ` +
+          `${ENFORCED_SCOPES.join(', ')}.`,
+      );
     }
     const { role, permission } = await this.resolve(roleCode, permissionCode);
     const existing = await this.prisma.rolePermission.findUnique({

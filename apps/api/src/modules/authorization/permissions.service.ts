@@ -3,7 +3,7 @@ import { grantInForce } from '../../common/lifecycle/active';
 import { PrismaService } from '../../prisma/prisma.service';
 import type { PermissionGrant } from './policy.types';
 import { permissionMatches } from './policy-evaluator';
-import { isScope, type Scope } from './scope.enum';
+import { isEnforcedScope, isScope, type Scope } from './scope.enum';
 
 export interface PermissionMeta {
   code: string;
@@ -367,7 +367,8 @@ export class PermissionsService {
 const RANK: Record<string, number> = { NONE: 0, SITE: 1, COMPANY: 2, GROUP: 3 };
 
 function broader(current: ScopeLevel, candidate: string): ScopeLevel {
-  const next: ScopeLevel =
-    candidate === 'GROUP' || candidate === 'COMPANY' || candidate === 'SITE' ? candidate : 'NONE';
+  // Cùng danh sách mà đường GHI dùng để từ chối (`AuthzMatrixService.grant`), nên không có
+  // chuyện một mức ghi được vào nhưng đọc ra thành `NONE`.
+  const next: ScopeLevel = isEnforcedScope(candidate) ? candidate : 'NONE';
   return (RANK[next] ?? 0) > (RANK[current] ?? 0) ? next : current;
 }

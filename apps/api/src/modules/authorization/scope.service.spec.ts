@@ -307,11 +307,39 @@ describe('mức NONE — không được xử như COMPANY hay như SITE', () =>
     );
   });
 
-  it('nói rõ lý do là KHÔNG CÓ PHẠM VI, không lẫn với "ngoài phạm vi"', async () => {
+  /* Câu báo lỗi phải PHÂN BIỆT ĐƯỢC với hai câu của `checkCompany`/`checkSite`, không chỉ
+   * khác vài chữ cuối. Hai câu kia nói "bản ghi này nằm ngoài phần bạn được giao"; câu này
+   * nói "mã quyền của bạn không được giao phần nào cả" — người đọc log phải tách được hai
+   * nguyên nhân bằng chính câu chữ. Bản đầu của lát này mở đầu bằng NGUYÊN VĂN tiền tố
+   * `Ngoài phạm vi được gán:` nên ca test cũ tự nhận là canh sự phân biệt mà thật ra không
+   * canh được gì; một lượt soi độc lập bắt được, và câu lỗi đã đổi. */
+  it('nói rõ lý do là KHÔNG CÓ PHẠM VI, và KHÔNG mang tiền tố "Ngoài phạm vi được gán"', async () => {
     const svc = buildPerCode(BI_LUAT_CHAN_NHUNG_VAN_DUOC_GAN);
     await expect(svc.assertCompanyFor('u1', 'cemetery.plot.view', 'co-a')).rejects.toThrow(
-      /không được cấp phạm vi nào/,
+      /Không có phạm vi cho mã quyền đang thi hành/,
     );
+    await expect(svc.assertCompanyFor('u1', 'cemetery.plot.view', 'co-a')).rejects.not.toThrow(
+      /^Ngoài phạm vi được gán/,
+    );
+  });
+
+  /* Phép canh này TỪNG nằm ở ca `a caller bound to nothing reaches nothing`, và cổng `NONE`
+   * mới đã vô tình bịt mất nó: ca đó dựng `{ level: 'NONE', companyIds: [] }`, nên từ nay nó
+   * dừng ở cổng `NONE` và không còn chạm tới `PolicyEvaluator` nữa. Nghĩa là nếu ai đó sửa
+   * `checkCompany` thành "danh sách rỗng = không giới hạn" thì KHÔNG một test nào đỏ.
+   *
+   * Dựng lại ở mức COMPANY — mức đi qua được cổng `NONE` — để câu "được gán vào không công
+   * ty nào thì không bao giờ có nghĩa là mọi công ty" vẫn có người canh. */
+  it('mức COMPANY với danh sách công ty RỖNG vẫn với tới KHÔNG công ty nào', async () => {
+    const svc = buildPerCode({
+      perCode: { 'cemetery.plot.view': 'COMPANY' },
+      companyIds: [],
+      siteIds: [],
+    });
+    await expect(svc.assertCompanyFor('u1', 'cemetery.plot.view', 'co-a')).rejects.toThrow(
+      /công ty này không thuộc quyền của bạn/,
+    );
+    await expect(svc.visibleCompanyIdsFor('u1', 'cemetery.plot.view')).resolves.toEqual([]);
   });
 
   /* Không phải "chặn tất cho chắc": cùng người, cùng công ty, mã KHÁC có phạm vi thật thì

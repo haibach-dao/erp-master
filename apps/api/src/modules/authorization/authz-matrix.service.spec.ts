@@ -289,3 +289,49 @@ describe('leo thang quyền — bản đồ vai bó theo công ty người gọi
     expect(prisma.roleAssignment.findMany).not.toHaveBeenCalled();
   });
 });
+
+/* Đường GHI phải từ chối đúng thứ đường ĐỌC không thực thi được.
+ *
+ * `SCOPES` còn khai SELF/ASSIGNED/DEPARTMENT/CUSTOM cho tương lai, nhưng `broader()` ném cả
+ * bốn về `NONE`, và từ 16/09/2026 `NONE` là TỪ CHỐI. Nên cấp một grant như vậy không thu hẹp
+ * quyền — nó KHOÁ CHẾT mã đó cho mọi người giữ vai, ở mọi endpoint có kiểm phạm vi.
+ *
+ * Hỏng theo kiểu khó lần nhất: `PermissionGuard` vẫn cho qua vì nó hỏi MÃ chứ không hỏi PHẠM
+ * VI, nên người dùng thấy menu mở, bấm vào thì trang vỡ, và câu 403 không nhắc gì tới cái ô
+ * phạm vi ai đó vừa đổi. Cột `role_permissions.scope` lại mặc định `DEPARTMENT` — đây không
+ * phải giá trị hiếm gặp.
+ */
+describe('grant — phạm vi KHAI được mà hệ chưa LÀM được thì không cấp', () => {
+  for (const scope of ['DEPARTMENT', 'SELF', 'ASSIGNED', 'CUSTOM']) {
+    it(`từ chối phạm vi ${scope}, và không ghi gì`, async () => {
+      const { svc, prisma } = build();
+      await expect(
+        svc.grant('THU_NGAN', 'crm.customer.view', scope, GRANTER),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.rolePermission.upsert).not.toHaveBeenCalled();
+    });
+  }
+
+  it('nói rõ hậu quả và liệt kê mức dùng được, thay vì chỉ "không hợp lệ"', async () => {
+    const { svc } = build();
+    await expect(svc.grant('THU_NGAN', 'crm.customer.view', 'DEPARTMENT', GRANTER)).rejects.toThrow(
+      /khoá chết mã crm\.customer\.view cho mọi người giữ vai THU_NGAN.*GROUP, COMPANY, SITE/s,
+    );
+  });
+
+  it('chuỗi không phải phạm vi nào cả vẫn báo "không hợp lệ" như cũ', async () => {
+    const { svc } = build();
+    await expect(
+      svc.grant('THU_NGAN', 'crm.customer.view', 'KHONG_CO_THAT', GRANTER),
+    ).rejects.toThrow(/Phạm vi không hợp lệ/);
+  });
+
+  // Không phải "chặn tất cho chắc": ba mức thực thi được vẫn phải cấp bình thường.
+  for (const scope of ['GROUP', 'COMPANY', 'SITE']) {
+    it(`vẫn cấp được phạm vi ${scope}`, async () => {
+      const { svc, prisma } = build();
+      await svc.grant('THU_NGAN', 'crm.customer.view', scope, GRANTER);
+      expect(prisma.rolePermission.upsert).toHaveBeenCalled();
+    });
+  }
+});
