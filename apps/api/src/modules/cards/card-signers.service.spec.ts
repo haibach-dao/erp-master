@@ -101,7 +101,32 @@ function build(opts: BuildOpts = {}) {
     cardSigner: signerDelegate(opts),
     cemetery: {
       findUnique: vi.fn().mockResolvedValue({ id: CEM, name: 'An Lạc Viên', companyId: 'cty-A' }),
-      findMany: vi.fn().mockResolvedValue(opts.cemeteriesOfCompanies ?? [{ id: CEM }]),
+      /* MOCK PHẢI DIỄN GIẢI `where`, nếu không nó không canh được gì.
+       *
+       * Tới 17/09/2026 phép giao hai trục của `visibleCemeteryIds` chạy bằng JS
+       * (`byCompany.filter(...)`) nên một mock trả cứng vẫn bắt được sai sót. Từ khi phép
+       * giao chuyển vào mệnh đề `where`, mock trả cứng KHÔNG còn bắt được gì: một lượt soi
+       * độc lập đo bằng đột biến — bỏ hẳn trục nghĩa trang khỏi mệnh đề — và ba ca dưới đây
+       * VẪN XANH trong khi burials/contracts/holds đỏ.
+       *
+       * Nên mock lọc đúng theo mệnh đề `OR` mà `plotScopeWhere` sinh ra: mỗi mục là
+       * `{ companyId }` (cả công ty) hoặc `{ companyId, id: { in } }` (chỉ nghĩa trang đó). */
+      findMany: vi.fn().mockImplementation((args: { where?: Record<string, unknown> }) => {
+        const nguon = opts.cemeteriesOfCompanies ?? [{ id: CEM }];
+        const w = (args.where ?? {}) as {
+          OR?: { companyId?: string; id?: { in: string[] } }[];
+          companyId?: { in: string[] };
+        };
+        if (w.companyId !== undefined && w.companyId.in.length === 0) {
+          return Promise.resolve([]);
+        }
+        if (w.OR === undefined) {
+          return Promise.resolve(nguon);
+        }
+        return Promise.resolve(
+          nguon.filter((c) => w.OR!.some((m) => m.id === undefined || m.id.in.includes(c.id))),
+        );
+      }),
     },
     user: {
       findUnique: vi
@@ -330,10 +355,14 @@ describe('danh mục người ký thẻ mộ', () => {
   it('người ở mức SITE chỉ thấy người ký của nghĩa trang mình phủ', async () => {
     /* Tập nghĩa trang nay QUY QUA truy vấn ` + String.fromCharCode(96) + `Cemetery` + String.fromCharCode(96) + `, không trả thẳng danh sách phân công:
      * mệnh đề OR giao hai trục ngay trong một truy vấn. Mock phải trả đúng những dòng thoả. */
+    /* `cem-3` PHẢI có trong fixture: nó thuộc công ty người gọi nhưng KHÔNG được giao, nên
+     * nó là thứ duy nhất chứng minh mệnh đề có lọc thật. Fixture chỉ gồm những nghĩa trang
+     * được phép thì cách hỏi đúng và cách hỏi sai cho ra cùng một kết quả — đo bằng đột biến
+     * (bỏ hẳn trục nghĩa trang khỏi mệnh đề) thì ca này vẫn xanh. */
     const { svc, prisma } = build({
       siteFilter: ['cem-1', 'cem-2'],
       companyFilter: ['cty-A'],
-      cemeteriesOfCompanies: [{ id: 'cem-1' }, { id: 'cem-2' }],
+      cemeteriesOfCompanies: [{ id: 'cem-1' }, { id: 'cem-2' }, { id: 'cem-3' }],
     });
     await svc.list({ userId: 'u9', permission: 'cemetery.card_signer.view' });
     const arg = prisma.cardSigner.findMany.mock.calls[0]?.[0] as { where: Record<string, unknown> };

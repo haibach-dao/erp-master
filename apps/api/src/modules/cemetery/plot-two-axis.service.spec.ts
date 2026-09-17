@@ -86,7 +86,14 @@ describe('tạo phần mộ — công ty và nghĩa trang do client gửi phải
     expect(plotCreate).not.toHaveBeenCalled();
   });
 
-  it('hỏi phạm vi bằng công ty CỦA NGHĨA TRANG, không bằng tham số client', async () => {
+  /* Ca này KHÔNG chứng minh được "dùng công ty của nghĩa trang thay vì tham số client", và
+   * tên cũ của nó khẳng định đúng điều đó — một lượt soi độc lập bắt được.
+   *
+   * Lý do: phép đối chiếu ở trên đã ném khi hai giá trị khác nhau, nên mọi đường chạy tới
+   * `assertPlotFor` đều có `cemetery.companyId === dto.companyId`. Hai nguồn không thể phân
+   * biệt được nữa — và đó là TÍNH CHẤT MONG MUỐN, không phải thiếu sót. Cái ca này canh được
+   * là: phép kiểm phạm vi vẫn CHẠY, và chạy SAU phép đối chiếu. */
+  it('vẫn hỏi phạm vi sau khi đã đối chiếu, trên đúng cặp đã xác nhận', async () => {
     const { svc, assertPlotFor } = build({ cemeteryCompany: CO_A });
     await svc.createGravePlot(DTO, CREATOR);
     expect(assertPlotFor).toHaveBeenCalledWith(CREATOR.userId, CREATOR.permission, CO_A, SITE_A1);
