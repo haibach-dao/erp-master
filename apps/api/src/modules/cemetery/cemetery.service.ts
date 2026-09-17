@@ -522,6 +522,22 @@ export class CemeteryService {
    * cấp lại sau tranh chấp. Vì nó vượt mặt chuỗi thẩm định nên nó có mã quyền S3 riêng và
    * ghi nhật ký riêng — không nấp trong một mã sẵn có.
    */
+  /* KHÁCH CỦA CÔNG TY A ĐƯỢC ĐỨNG TÊN MỘ CỦA CÔNG TY B — anh Bách chốt 17/09/2026.
+   *
+   * Hàm này CỐ Ý không so `customer.companyId` với `plot.companyId`. Đó là quyết định nghiệp
+   * vụ, không phải phép kiểm bị bỏ quên — và nó đã được hỏi thẳng rồi trả lời thẳng, sau khi
+   * một lượt soi độc lập chỉ ra đây là nơi sinh ra mọi "cặp lệch công ty" ở hạ nguồn.
+   *
+   * ĐỪNG THÊM RÀNG BUỘC Ở ĐÂY. Thêm vào là chặn một việc nghiệp vụ cho phép, và làm vỡ dữ
+   * liệu đã có.
+   *
+   * HỆ QUẢ PHẢI NHỚ Ở MỌI NƠI KHÁC: `customer.companyId` và `plot.companyId` là HAI câu trả
+   * lời cho HAI câu hỏi khác nhau — "khách này thuộc nhà ai" và "phần mộ này thuộc nhà ai" —
+   * và chúng KHÔNG bảo đảm trùng nhau. Chỗ nào ghép một giá trị của bên này với một giá trị
+   * của bên kia (ví dụ công ty của khách + nghĩa trang của mộ) thì phải quy lại từ ĐÚNG bản
+   * ghi, đừng mượn. Đó là lý do `CardApprovalsService.assertInScope` quy công ty từ chính
+   * nghĩa trang thay vì dùng công ty của khách.
+   */
   async assignUsageRight(
     dto: { gravePlotId: string; holderCustomerId: string; effectiveFrom?: string; note?: string },
     caller: Caller,
