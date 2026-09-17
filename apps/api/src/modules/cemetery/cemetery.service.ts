@@ -1,4 +1,9 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { ulid } from 'ulid';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -103,7 +108,37 @@ export class CemeteryService {
   }
 
   async createGravePlot(dto: CreateGravePlotDto, caller: Caller) {
-    await this.scope.assertPlotFor(caller.userId, caller.permission, dto.companyId, dto.cemeteryId);
+    /* CẢ HAI giá trị đều do client gửi, nên phải ĐỐI CHIẾU chúng với nhau trước.
+     *
+     * `assertPlotFor` tra mức TẠI công ty được truyền vào. Đưa một `companyId` trong phạm vi
+     * kèm một `cemeteryId` của công ty KHÁC thì người mức COMPANY thoát ngay ở vế công ty và
+     * nghĩa trang không bị kiểm dòng nào — rồi phần mộ ra đời mang công ty A nhưng NẰM TRONG
+     * nghĩa trang của công ty B. Nó hiện trên sơ đồ mặt bằng của công ty B (sơ đồ lọc theo
+     * nghĩa trang) mà KHÔNG hiện trong danh sách mộ của công ty B (danh sách lọc theo công
+     * ty), nên chủ nhà không thấy để gỡ.
+     *
+     * Lược đồ không ép được: `GravePlot.companyId` và `cemeteryId` là hai cột rời, không có
+     * khoá ngoại ghép. Nên phép đối chiếu phải nằm ở đây.
+     *
+     * Hỏi phạm vi bằng công ty CỦA NGHĨA TRANG — dữ liệu, không phải tham số client. */
+    const cemetery = await this.prisma.cemetery.findUnique({
+      where: { id: dto.cemeteryId },
+      select: { companyId: true },
+    });
+    if (cemetery === null) {
+      throw new NotFoundException('Không tìm thấy nghĩa trang');
+    }
+    if (cemetery.companyId !== dto.companyId) {
+      throw new BadRequestException(
+        'Nghĩa trang này thuộc một công ty khác — phần mộ phải nằm trong nghĩa trang của chính công ty chủ quản.',
+      );
+    }
+    await this.scope.assertPlotFor(
+      caller.userId,
+      caller.permission,
+      cemetery.companyId,
+      dto.cemeteryId,
+    );
     return this.wrapUnique(
       () =>
         this.prisma.gravePlot.create({
@@ -758,12 +793,22 @@ export class CemeteryService {
   async usageRightHistory(gravePlotId: string, caller: Caller) {
     const plot = await this.prisma.gravePlot.findUnique({
       where: { id: gravePlotId },
-      select: { id: true, companyId: true, plotCode: true },
+      select: { id: true, companyId: true, cemeteryId: true, plotCode: true },
     });
     if (plot === null) {
       throw new NotFoundException('Không tìm thấy lô mộ');
     }
-    await this.scope.assertCompanyFor(caller.userId, caller.permission, plot.companyId);
+    /* CẢ HAI TRỤC, như đường GHI trên cùng thực thể.
+     *
+     * Bản trước chỉ hỏi công ty, nên quản lý nghĩa trang A1 đọc được lịch sử sang tên của một
+     * mộ ở nghĩa trang A2 cùng công ty — trong khi chính họ không sang tên được mộ đó. Đọc rò
+     * đúng thứ ghi đã chặn. */
+    await this.scope.assertPlotFor(
+      caller.userId,
+      caller.permission,
+      plot.companyId,
+      plot.cemeteryId,
+    );
 
     const rights = await this.prisma.graveUsageRight.findMany({
       where: { gravePlotId },
@@ -816,7 +861,15 @@ export class CemeteryService {
     if (plot === null) {
       throw new NotFoundException('Không tìm thấy lô mộ');
     }
-    await this.scope.assertCompanyFor(caller.userId, caller.permission, plot.companyId);
+    /* CẢ HAI TRỤC. Màn này trả tên chủ mộ, mã khách và ngày sinh — chỉ hỏi công ty thì quản lý
+     * nghĩa trang A1 đọc được chủ mộ ở nghĩa trang A2 cùng công ty, trong khi đường GHI trên
+     * chính mộ đó đã chặn họ. */
+    await this.scope.assertPlotFor(
+      caller.userId,
+      caller.permission,
+      plot.companyId,
+      plot.cemeteryId,
+    );
 
     const right = await this.prisma.graveUsageRight.findFirst({
       where: { gravePlotId, ...activeUsageRight },
