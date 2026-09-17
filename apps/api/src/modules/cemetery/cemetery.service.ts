@@ -121,6 +121,15 @@ export class CemeteryService {
      * khoá ngoại ghép. Nên phép đối chiếu phải nằm ở đây.
      *
      * Hỏi phạm vi bằng công ty CỦA NGHĨA TRANG — dữ liệu, không phải tham số client. */
+
+    /* HỎI VẾ CÔNG TY TRƯỚC KHI ĐỌC BẤT CỨ THỨ GÌ.
+     *
+     * Vế này chỉ cần tham số nên hỏi được ngay, và hỏi ngay là đúng: nếu đọc `Cemetery` trước,
+     * người ngoài công ty phân biệt được "nghĩa trang không tồn tại" (404) với "nghĩa trang
+     * thuộc công ty khác" (400) — tức endpoint tạo mộ thành máy dò sự tồn tại và chủ sở hữu
+     * của mọi nghĩa trang trong hệ, chỉ bằng cách đoán id. Chặn ở vế công ty trước thì cả hai
+     * câu đó đều không phát ra. */
+    await this.scope.assertCompanyFor(caller.userId, caller.permission, dto.companyId);
     const cemetery = await this.prisma.cemetery.findUnique({
       where: { id: dto.cemeteryId },
       select: { companyId: true },

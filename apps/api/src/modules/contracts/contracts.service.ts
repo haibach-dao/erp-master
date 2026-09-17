@@ -9,7 +9,6 @@ import { ulid } from 'ulid';
 import { PrismaService } from '../../prisma/prisma.service';
 import type { Caller } from '../authorization/caller';
 import { ScopeService } from '../authorization/scope.service';
-import { plotScopeWhere } from '../authorization/plot-scope-where';
 import { AuditService } from '../audit/audit.service';
 import { activeBurial, activeUsageRight } from '../../common/lifecycle/active';
 import type { AddPartyDto, CreateContractDto, CancelContractDto } from './contracts.dto';
@@ -429,20 +428,34 @@ export class ContractsService {
       );
       where.gravePlotId = gravePlotId;
     } else {
+      /* CHỈ quan tâm công ty đang được hỏi — `where.companyId` đã bó hợp đồng về đúng công ty
+       * đó, nên phạm vi ở các công ty KHÁC không đổi được câu trả lời.
+       *
+       * Và chỉ quy ra id phần mộ KHI công ty này thật sự bị bó theo nghĩa trang. Bản đầu của
+       * lát 17/09 gọi lượt tra mộ cho MỌI mức không phải GROUP — kể cả người mức COMPANY, vốn
+       * trước đó bỏ qua hẳn khối này — nên nó sinh một `IN` dài bằng số mộ của cả công ty. Ở
+       * một nghĩa trang thật, đó là hàng chục nghìn id nhồi vào một truy vấn, mỗi lần mở danh
+       * sách hợp đồng. Một lượt soi độc lập bắt được.
+       *
+       * Không có quan hệ Prisma giữa hợp đồng và phần mộ (hai schema, không khoá ngoại nối),
+       * nên không viết được `where: { gravePlot: { cemeteryId: ... } }` — phải quy ra id trước.
+       *
+       * Danh sách nghĩa trang RỖNG thì `in: []` và kết quả rỗng — ĐÚNG: được gán không nghĩa
+       * trang nào nghĩa là với tới không cái nào, không phải với tới tất cả. */
       const filter = await this.scope.plotScopeFilterFor(caller.userId, caller.permission);
-      const scoped = plotScopeWhere(filter);
-      if (scoped !== null) {
-        /* Không có quan hệ Prisma giữa hợp đồng và phần mộ (hai schema, không khoá ngoại
-         * nối), nên không viết được `where: { gravePlot: { cemeteryId: ... } }` — phải quy
-         * ra id phần mộ trước rồi lọc theo `in`.
-         *
-         * `sites` rỗng thì `in: []` và danh sách rỗng — ĐÚNG: được gán không nghĩa trang
-         * nào nghĩa là với tới không cái nào, không phải với tới tất cả. */
-        const plots = await this.prisma.gravePlot.findMany({
-          where: { companyId, ...scoped },
-          select: { id: true },
-        });
-        where.gravePlotId = { in: plots.map((p) => p.id) };
+      if (filter !== null) {
+        const cuaCongTyNay = filter.find((e) => e.companyId === companyId);
+        if (cuaCongTyNay === undefined) {
+          // Không với tới công ty này — `assertCompanyFor` ở trên lẽ ra đã chặn, nhưng đừng
+          // dựa vào điều đó: không quy được thì trả rỗng, không phải trả tất.
+          where.gravePlotId = { in: [] };
+        } else if (cuaCongTyNay.cemeteryIds !== null) {
+          const plots = await this.prisma.gravePlot.findMany({
+            where: { companyId, cemeteryId: { in: cuaCongTyNay.cemeteryIds } },
+            select: { id: true },
+          });
+          where.gravePlotId = { in: plots.map((p) => p.id) };
+        }
       }
     }
     return this.prisma.externalContract.findMany({ where, orderBy: { createdAt: 'desc' } });

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { CemeteryService } from './cemetery.service';
 import type { PrismaService } from '../../prisma/prisma.service';
 import type { AuditService } from '../audit/audit.service';
@@ -97,6 +97,17 @@ describe('tạo phần mộ — công ty và nghĩa trang do client gửi phải
     const { svc, assertPlotFor } = build({ cemeteryCompany: CO_A });
     await svc.createGravePlot(DTO, CREATOR);
     expect(assertPlotFor).toHaveBeenCalledWith(CREATOR.userId, CREATOR.permission, CO_A, SITE_A1);
+  });
+
+  /* THỨ TỰ: vế công ty hỏi TRƯỚC khi đọc bất cứ thứ gì. Đọc `Cemetery` trước thì người ngoài
+   * công ty phân biệt được "không tồn tại" (404) với "thuộc công ty khác" (400) — endpoint tạo
+   * mộ thành máy dò sự tồn tại và chủ sở hữu của mọi nghĩa trang, chỉ bằng cách đoán id. */
+  it('người ngoài công ty bị chặn TRƯỚC khi hệ đọc bảng nghĩa trang', async () => {
+    const { svc, prisma, assertCompanyFor } = build({ cemeteryCompany: CO_B });
+    assertCompanyFor.mockRejectedValue(new ForbiddenException('Ngoài phạm vi được gán'));
+
+    await expect(svc.createGravePlot(DTO, CREATOR)).rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.cemetery.findUnique).not.toHaveBeenCalled();
   });
 
   it('nghĩa trang không tồn tại thì 404, không phải tạo bừa', async () => {

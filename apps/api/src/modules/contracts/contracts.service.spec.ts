@@ -483,8 +483,10 @@ describe('phạm vi — đường ĐỌC hợp đồng cũng bó, không chỉ �
     await svc.list('co-1', CALLER_VIEW);
 
     expect(plotFindMany).toHaveBeenCalledWith(
+      /* Truy vấn quy-ra-id chỉ cần mệnh đề của CHÍNH công ty đang hỏi — `where.companyId` đã
+       * bó hợp đồng về công ty đó rồi, nên phạm vi ở công ty khác không đổi được câu trả lời. */
       expect.objectContaining({
-        where: { companyId: 'co-1', OR: [{ companyId: CO, cemeteryId: { in: [SITE] } }] },
+        where: { companyId: 'co-1', cemeteryId: { in: [SITE] } },
       }),
     );
     expect(prisma.externalContract.findMany).toHaveBeenCalledWith(
@@ -505,6 +507,21 @@ describe('phạm vi — đường ĐỌC hợp đồng cũng bó, không chỉ �
 
     expect(prisma.externalContract.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: { companyId: 'co-1', gravePlotId: { in: [] } } }),
+    );
+  });
+
+  /* HỒI QUY HIỆU NĂNG, đã xảy ra thật: bản đầu của lát 17/09 gọi lượt tra phần mộ cho MỌI
+   * mức không phải GROUP — kể cả mức COMPANY, vốn trước đó bỏ qua hẳn khối này — nên nó sinh
+   * một `IN` dài bằng số mộ của cả công ty, mỗi lần mở danh sách hợp đồng. */
+  it('mức COMPANY ở chính công ty đang hỏi thì KHÔNG quy ra id phần mộ', async () => {
+    const { svc, prisma, plotScopeFilterFor, plotFindMany } = build(contract());
+    plotScopeFilterFor.mockResolvedValue([{ companyId: 'co-1', cemeteryIds: null }]);
+
+    await svc.list('co-1', CALLER_VIEW);
+
+    expect(plotFindMany).not.toHaveBeenCalled();
+    expect(prisma.externalContract.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { companyId: 'co-1' } }),
     );
   });
 
