@@ -25,7 +25,7 @@ import { join, relative, sep } from 'node:path';
  * lần sau miễn trừ thật lọt theo (đúng bài học của ratchet lọc trạng thái).
  */
 
-/* Hỏi phạm vi = gọi một trong NĂM hàm này. Chỉ còn bản THEO MÃ QUYỀN tồn tại.
+/* Hỏi phạm vi = gọi một trong SÁU hàm này. Chỉ còn bản THEO MÃ QUYỀN tồn tại.
  *
  * `assertSiteFor` ĐÃ BỊ XOÁ (17/09/2026), thay bằng `assertPlotFor` — hàm hỏi CẢ HAI TRỤC
  * trong MỘT lời gọi. Hai lý do, cả hai là lỗi đã xảy ra thật: gọi lẻ vế nghĩa trang thì
@@ -39,7 +39,7 @@ import { join, relative, sep } from 'node:path';
  * Thiếu `levelFor` trong danh sách thì cái lưới báo nhầm ba method đã bó phạm vi ĐÚNG cách
  * — và báo nhầm làm hỏng lưới, vì người ta sẽ ghi bừa lý do miễn trừ cho đỡ đỏ. */
 const SCOPE_CALL =
-  /\b(assertCompanyFor|assertPlotFor|visibleCompanyIdsFor|listSiteFilterFor|levelFor)\s*\(/;
+  /\b(assertCompanyFor|assertPlotFor|plotScopeFilterFor|visibleCompanyIdsFor|listSiteFilterFor|levelFor)\s*\(/;
 
 /** Bản CŨ, tính phạm vi ở mức rộng nhất của người gọi. Đã xoá — canh để không ai dựng lại. */
 const CALLER_WIDE_SCOPE_DECL =

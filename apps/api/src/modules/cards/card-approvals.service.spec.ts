@@ -131,7 +131,13 @@ function build(opts: BuildOpts = {}) {
     return Promise.resolve(hit ?? null);
   });
 
+  /* Nghĩa trang thuộc công ty 'cty-B', trong khi khách thuộc 'cty-A'. Hai giá trị LỆCH nhau
+   * là dựng được thật: `assignUsageRight` gán chủ mộ mà không so công ty của khách với công
+   * ty của phần mộ. Fixture để lệch để phép kiểm phạm vi phải hỏi ĐÚNG công ty của nghĩa
+   * trang, chứ không mượn công ty của khách. */
+  const cemeteryFindUnique = vi.fn().mockResolvedValue({ companyId: 'cty-B' });
   const prisma = {
+    cemetery: { findUnique: cemeteryFindUnique },
     cardIssueApproval: { create, updateMany, findUnique, findMany, findFirst },
     cardSigner: {
       findUnique: vi.fn().mockResolvedValue(
@@ -423,12 +429,19 @@ describe('cửa phê duyệt in thẻ mộ', () => {
     await expect(svc.create(SUBJECT, 'khong-co', CALLER)).rejects.toThrow(NotFoundException);
   });
 
-  /* Bài học lát 0: `assertPlotFor` MỘT MÌNH không chặn được người mức COMPANY — `checkSite`
-   * thoát ngay khi mức là GROUP *hoặc COMPANY*. Phải gọi CẶP. */
-  it('bó CẢ HAI TRỤC lúc gửi — công ty và nghĩa trang', async () => {
-    const { svc, assertPlotFor } = build();
+  /* HAI CÔNG TY KHÁC NHAU, và phải hỏi cả hai.
+   *
+   * Công ty của KHÁCH ('cty-A') và công ty của NGHĨA TRANG ('cty-B') là hai bản ghi khác nhau,
+   * không có gì ép trùng. Bản trước đưa cặp lệch đó thẳng vào `assertPlotFor`, nên nó tra mức
+   * tại công ty của KHÁCH rồi lấy mức ấy phán về nghĩa trang của công ty KHÁC — người mức
+   * COMPANY ở 'cty-A' thoát ngay, nghĩa trang của 'cty-B' không bị kiểm dòng nào. */
+  it('bó CẢ HAI TRỤC lúc gửi — công ty của khách VÀ công ty thật của nghĩa trang', async () => {
+    const { svc, assertPlotFor, assertCompanyFor } = build();
     await svc.create(SUBJECT, 'signer-1', CALLER);
-    expect(assertPlotFor).toHaveBeenCalledWith(CALLER.userId, CALLER.permission, 'cty-A', 'cem-1');
+    // Vế khách: hỏi bằng công ty của hồ sơ.
+    expect(assertCompanyFor).toHaveBeenCalledWith(CALLER.userId, CALLER.permission, 'cty-A');
+    // Vế phần mộ: hỏi bằng công ty CỦA NGHĨA TRANG, không phải của khách.
+    expect(assertPlotFor).toHaveBeenCalledWith(CALLER.userId, CALLER.permission, 'cty-B', 'cem-1');
   });
 
   /* Tư cách người ký là GIAO của hai trục có `validTo` và TỰ HẾT HẠN. Hỏi CSDL mà quên cửa sổ

@@ -87,6 +87,13 @@ function signerDelegate(opts: BuildOpts): SignerDelegate {
  * Tách ra thì mỗi ca đặt mặc định phải khẳng định được cả hai vế: lệnh ghi CÓ trên `tx`, và
  * KHÔNG có trên `prisma`. Vế thứ hai mới là vế bắt lỗi; bỏ nó đi là test lại mù như cũ.
  */
+function suyBoLoc(companies: string[] | null, sites: string[] | null) {
+  if (companies === null) {
+    return null;
+  }
+  return companies.map((companyId) => ({ companyId, cemeteryIds: sites }));
+}
+
 function build(opts: BuildOpts = {}) {
   const tx = { cardSigner: signerDelegate(opts) };
 
@@ -132,6 +139,14 @@ function build(opts: BuildOpts = {}) {
     assertCompanyFor,
     listSiteFilterFor,
     visibleCompanyIdsFor,
+    plotScopeFilterFor: vi
+      .fn()
+      .mockResolvedValue(
+        suyBoLoc(
+          opts.companyFilter === undefined ? null : opts.companyFilter,
+          opts.siteFilter === undefined ? null : opts.siteFilter,
+        ),
+      ),
   } as unknown as ScopeService;
 
   const record = vi.fn().mockResolvedValue(undefined);
@@ -313,7 +328,13 @@ describe('danh mục người ký thẻ mộ', () => {
   });
 
   it('người ở mức SITE chỉ thấy người ký của nghĩa trang mình phủ', async () => {
-    const { svc, prisma } = build({ siteFilter: ['cem-1', 'cem-2'], companyFilter: null });
+    /* Tập nghĩa trang nay QUY QUA truy vấn ` + String.fromCharCode(96) + `Cemetery` + String.fromCharCode(96) + `, không trả thẳng danh sách phân công:
+     * mệnh đề OR giao hai trục ngay trong một truy vấn. Mock phải trả đúng những dòng thoả. */
+    const { svc, prisma } = build({
+      siteFilter: ['cem-1', 'cem-2'],
+      companyFilter: ['cty-A'],
+      cemeteriesOfCompanies: [{ id: 'cem-1' }, { id: 'cem-2' }],
+    });
     await svc.list({ userId: 'u9', permission: 'cemetery.card_signer.view' });
     const arg = prisma.cardSigner.findMany.mock.calls[0]?.[0] as { where: Record<string, unknown> };
     expect(arg.where.cemeteryId).toEqual({ in: ['cem-1', 'cem-2'] });

@@ -4,6 +4,7 @@ import { ulid } from 'ulid';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { ScopeService } from '../authorization/scope.service';
+import { plotScopeWhere } from '../authorization/plot-scope-where';
 import type { Caller } from '../authorization/caller';
 import {
   activeBurial,
@@ -89,18 +90,19 @@ export class BurialsService {
    * biến phép bó thành phép mở toang.
    */
   private async plotIdsInScope(caller: Caller): Promise<string[] | null> {
-    const companies = await this.scope.visibleCompanyIdsFor(caller.userId, caller.permission);
-    const sites = await this.scope.listSiteFilterFor(caller.userId, caller.permission);
-    if (companies === null && sites === null) {
+    /* MỘT bộ lọc theo TỪNG CÔNG TY, không phải hai danh sách phẳng.
+     *
+     * Bản trước hỏi `visibleCompanyIdsFor` và `listSiteFilterFor` rồi ghép hai mệnh đề bằng
+     * AND. Ghép như thế KHÔNG diễn đạt được "công ty A: cả công ty, công ty B: chỉ nghĩa
+     * trang được giao": với người mức COMPANY ở A và SITE ở B, `listSiteFilterFor` trả `null`
+     * (vì `level` toàn cục là COMPANY) nên trục nghĩa trang biến mất và họ thấy TRỌN công ty
+     * B. Xem chú thích `ScopeService.plotScopeFilterFor`. */
+    const filter = await this.scope.plotScopeFilterFor(caller.userId, caller.permission);
+    const where = plotScopeWhere(filter);
+    if (where === null) {
       return null;
     }
-    const plots = await this.prisma.gravePlot.findMany({
-      where: {
-        ...(companies === null ? {} : { companyId: { in: companies } }),
-        ...(sites === null ? {} : { cemeteryId: { in: sites } }),
-      },
-      select: { id: true },
-    });
+    const plots = await this.prisma.gravePlot.findMany({ where, select: { id: true } });
     return plots.map((p) => p.id);
   }
 

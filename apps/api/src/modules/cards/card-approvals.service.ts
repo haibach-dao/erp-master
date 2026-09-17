@@ -564,7 +564,22 @@ export class CardApprovalsService {
     }
   }
 
-  /* HỘP PHÊ DUYỆT của người ký. Chỉ hồ sơ gửi ĐÍCH DANH người này. */
+  /* HỘP PHÊ DUYỆT của người ký. Chỉ hồ sơ gửi ĐÍCH DANH người này.
+   *
+   * VÌ SAO HAI ĐƯỜNG DANH SÁCH DƯỚI ĐÂY KHÔNG DÙNG `plotScopeFilterFor` (quyết định
+   * 17/09/2026, ghi lại để đừng ai "sửa cho đồng bộ" mà không đọc):
+   *
+   * `cardIssueApproval` lưu `companyId` của KHÁCH và `cemeteryId` của PHẦN MỘ — hai giá trị
+   * đến từ hai bản ghi khác nhau, và không có gì ép chúng trùng (xem `assertInScope`). Mệnh
+   * đề "theo từng công ty" mà `plotScopeWhere` dựng giả định hai cột nói về CÙNG một bản ghi;
+   * áp lên bảng này là ghép công ty của khách với nghĩa trang của mộ, tức đúng cặp lệch vừa
+   * phải đi vá ở `assertInScope`.
+   *
+   * Hai đường này đã bị giới hạn bằng một khoá hẹp hơn nhiều: `approverUserId` là chính người
+   * gọi, còn `listForCustomer` là một khách cụ thể. Nên vẫn hỏi hai trục RỜI ở đây là chấp
+   * nhận được, và đó là lựa chọn có chủ đích chứ không phải sót. Muốn bó đúng thì phải thêm
+   * cột công ty CỦA NGHĨA TRANG vào bảng — một quyết định riêng, cần migration.
+   */
   async listInbox(caller: Caller) {
     if (caller.userId === null) {
       return [];
@@ -698,7 +713,41 @@ export class CardApprovalsService {
    * nghĩa trang ở công ty kia.
    */
   private async assertInScope(caller: Caller, companyId: string, cemeteryId: string) {
-    await this.scope.assertPlotFor(caller.userId, caller.permission, companyId, cemeteryId);
+    /* HAI CÔNG TY KHÁC NHAU, và phải hỏi cả hai.
+     *
+     * `companyId` ở đây là công ty của KHÁCH (`card.companyId` ← `customer.companyId`), còn
+     * `cemeteryId` là nghĩa trang của PHẦN MỘ. Hai giá trị đến từ hai bản ghi khác nhau, và
+     * KHÔNG có gì ép chúng trùng: `assignUsageRight` gán chủ mộ mà không so
+     * `customer.companyId` với `plot.companyId`, nên khách công ty A đứng tên mộ ở nghĩa
+     * trang của công ty B là dựng được.
+     *
+     * Đưa cặp lệch đó vào `assertPlotFor` thì nó tra mức TẠI CÔNG TY CỦA KHÁCH rồi lấy mức
+     * ấy phán về NGHĨA TRANG của công ty khác: người mức COMPANY ở công ty A thoát ngay,
+     * nghĩa trang của công ty B không bị kiểm một dòng nào. Chiều ngược lại cũng sai — quản
+     * lý đúng nghĩa trang đó lại bị chặn ở vế công ty.
+     *
+     * Nên quy công ty TỪ CHÍNH NGHĨA TRANG (dữ liệu), rồi hỏi phạm vi trên cặp ĐÚNG. Vế công
+     * ty của khách vẫn hỏi riêng, vì hồ sơ này cũng là hồ sơ của khách đó.
+     *
+     * Cùng lớp lỗi đã vá cho hợp đồng (`ContractsService.assertContractInScope`) trong chính
+     * lát 17/09 — chỗ này bị bỏ sót, một lượt soi độc lập bắt được.
+     */
+    const cemetery = await this.prisma.cemetery.findUnique({
+      where: { id: cemeteryId },
+      select: { companyId: true },
+    });
+    if (cemetery === null) {
+      throw new ForbiddenException(
+        'Không quy được nghĩa trang này về công ty nào — không kiểm được phạm vi',
+      );
+    }
+    await this.scope.assertCompanyFor(caller.userId, caller.permission, companyId);
+    await this.scope.assertPlotFor(
+      caller.userId,
+      caller.permission,
+      cemetery.companyId,
+      cemeteryId,
+    );
   }
 
   /* Dịch lỗi trùng của CSDL thành câu người đọc hiểu — và PHẢI ĐÚNG INDEX NÀO.

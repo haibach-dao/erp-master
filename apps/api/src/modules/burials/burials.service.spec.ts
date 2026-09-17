@@ -28,6 +28,19 @@ const COMPANY = 'cty-1';
  * Giả lập ở mức NGỮ NGHĨA chứ không trả cứng `undefined`: trả cứng thì test vẫn xanh kể cả
  * khi service quên truyền `caller.permission` xuống, mà đó chính là điều đáng kiểm nhất.
  */
+
+/* Bộ lọc danh sách nay hỏi THEO TỪNG CÔNG TY (`plotScopeFilterFor`) chứ không phải hai danh
+ * sách phẳng. Suy từ chính hai fixture cũ để mọi ca test giữ nguyên điều nó vẫn khẳng định:
+ * ở đây mọi công ty cùng một mức, nên ánh xạ là một-một. Trường hợp hai công ty LỆCH mức —
+ * thứ hai danh sách phẳng không diễn đạt nổi — có nhóm test riêng ở `scope.service.spec.ts`,
+ * chạy `PermissionsService` thật. */
+function suyBoLoc(companies: string[] | null, sites: string[] | null) {
+  if (companies === null) {
+    return null;
+  }
+  return companies.map((companyId) => ({ companyId, cemeteryIds: sites }));
+}
+
 function scopeStub(
   opts: { allowedSites?: string[] | null; allowedCompanies?: string[] | null } = {},
 ) {
@@ -67,6 +80,7 @@ function scopeStub(
     assertCompanyFor,
     visibleCompanyIdsFor: vi.fn().mockResolvedValue(allowedCompanies),
     listSiteFilterFor: vi.fn().mockResolvedValue(allowedSites),
+    plotScopeFilterFor: vi.fn().mockResolvedValue(suyBoLoc(allowedCompanies, allowedSites)),
   } as unknown as ScopeService;
   return { scope, seen, assertPlotFor, assertCompanyFor };
 }
@@ -901,7 +915,11 @@ describe('huỷ hồ sơ an táng', () => {
 describe('phạm vi hồ sơ an táng — theo VAI ĐƯỢC GÁN, không theo chức danh', () => {
   const rec = { id: 'br-1', status: 'Draft', gravePlotId: PLOT, slotNumber: 2, version: 0 };
 
-  function buildScoped(opts: { allowedSites: string[] | null; cemeteryId?: string }) {
+  function buildScoped(opts: {
+    allowedSites: string[] | null;
+    allowedCompanies?: string[] | null;
+    cemeteryId?: string;
+  }) {
     const update = vi
       .fn()
       .mockImplementation((args: { data: Record<string, unknown> }) =>
@@ -920,13 +938,26 @@ describe('phạm vi hồ sơ an táng — theo VAI ĐƯỢC GÁN, không theo ch
          * như đang chạy trong khi thực ra là mock tự trả lời — và test "danh sách rỗng"
          * sẽ xanh kể cả khi service bó sai. */
         findMany: vi.fn().mockImplementation((args: { where: Record<string, unknown> }) => {
+          const plot = plotRow(opts.cemeteryId ?? CEMETERY_A);
+          /* Bộ lọc nay là MỘT `OR` gồm một mục cho mỗi công ty: `{ companyId }` nghĩa là cả
+           * công ty, `{ companyId, cemeteryId: { in } }` nghĩa là chỉ những nghĩa trang đó.
+           * Mock phải hiểu ĐÚNG hình dạng ấy — hiểu hình dạng cũ thì nó bỏ qua bộ lọc và
+           * phép bó phạm vi trông như đang chạy trong khi thực ra mock tự trả lời. */
+          const khop = (m: { companyId?: string; cemeteryId?: { in: string[] } }): boolean => {
+            if (m.companyId !== undefined && m.companyId !== plot.companyId) {
+              return false;
+            }
+            if (m.cemeteryId !== undefined && !m.cemeteryId.in.includes(plot.cemeteryId)) {
+              return false;
+            }
+            return true;
+          };
           const w = (args.where ?? {}) as {
-            cemeteryId?: { in: string[] };
+            OR?: { companyId?: string; cemeteryId?: { in: string[] } }[];
             companyId?: { in: string[] };
           };
-          const plot = plotRow(opts.cemeteryId ?? CEMETERY_A);
-          if (w.cemeteryId !== undefined && !w.cemeteryId.in.includes(plot.cemeteryId)) {
-            return Promise.resolve([]);
+          if (w.OR !== undefined) {
+            return Promise.resolve(w.OR.some(khop) ? [{ id: plot.id }] : []);
           }
           if (w.companyId !== undefined && !w.companyId.in.includes(plot.companyId)) {
             return Promise.resolve([]);
@@ -935,7 +966,10 @@ describe('phạm vi hồ sơ an táng — theo VAI ĐƯỢC GÁN, không theo ch
         }),
       },
     } as unknown as PrismaService;
-    const { scope, assertPlotFor } = scopeStub({ allowedSites: opts.allowedSites });
+    const { scope, assertPlotFor } = scopeStub({
+      allowedSites: opts.allowedSites,
+      ...(opts.allowedCompanies === undefined ? {} : { allowedCompanies: opts.allowedCompanies }),
+    });
     const svc = new BurialsService(prisma, { record: vi.fn() } as unknown as AuditService, scope);
     return { svc, update, findMany, assertPlotFor, plotFindMany: prisma.gravePlot.findMany };
   }
@@ -991,13 +1025,20 @@ describe('phạm vi hồ sơ an táng — theo VAI ĐƯỢC GÁN, không theo ch
   });
 
   it('danh sách KHÔNG kèm mộ thì bị BÓ vào các mộ với tới được, không trả cả hệ', async () => {
-    const { svc, findMany, plotFindMany } = buildScoped({ allowedSites: [CEMETERY_A] });
+    const { svc, findMany, plotFindMany } = buildScoped({
+      allowedSites: [CEMETERY_A],
+      allowedCompanies: [COMPANY],
+    });
 
     await svc.list(CALLER_VIEW);
 
+    /* Bộ lọc nay là MỘT `OR` gồm một mục cho mỗi công ty. Với người mức SITE ở đúng một công
+     * ty, mục đó mang CẢ công ty LẪN danh sách nghĩa trang — chứ không phải hai mệnh đề rời
+     * ghép bằng AND như bản cũ. Khác biệt chỉ lộ ra khi người dùng có mức khác nhau ở hai
+     * công ty, và đó đúng là ca mà bản cũ trả lời sai. */
     expect(plotFindMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: expect.objectContaining({ cemeteryId: { in: [CEMETERY_A] } }),
+        where: { OR: [{ companyId: COMPANY, cemeteryId: { in: [CEMETERY_A] } }] },
       }),
     );
     expect(findMany).toHaveBeenCalledWith(
@@ -1009,7 +1050,7 @@ describe('phạm vi hồ sơ an táng — theo VAI ĐƯỢC GÁN, không theo ch
     /* Mảng rỗng và `null` là hai điều khác nhau: rỗng = "không với tới mộ nào", `null` =
      * "không phải bó gì". Một `if (ids.length)` đặt nhầm chỗ biến cái thứ nhất thành cái
      * thứ hai, và phép bó thành phép mở toang — im lặng. */
-    const { svc, findMany } = buildScoped({ allowedSites: [] });
+    const { svc, findMany } = buildScoped({ allowedSites: [], allowedCompanies: [COMPANY] });
 
     await svc.list(CALLER_VIEW);
 

@@ -99,6 +99,41 @@ export class ScopeService {
     return level === 'GROUP' ? null : (subject.companyIds ?? []);
   }
 
+  /* Bộ lọc DANH SÁCH cho các bảng có CẢ công ty LẪN nghĩa trang (phần mộ và mọi thứ quy về
+   * phần mộ). `null` = không bó gì, và chỉ mức GROUP mới được nhận nó.
+   *
+   * VÌ SAO KHÔNG DÙNG ĐƯỢC `visibleCompanyIdsFor` + `listSiteFilterFor` (đo được, 17/09/2026):
+   * hai hàm đó trả hai danh sách PHẲNG dựng từ `level` toàn cục, và hai danh sách phẳng KHÔNG
+   * biểu diễn nổi câu trả lời đúng khi người dùng có mức khác nhau ở hai công ty. Với người
+   * mức COMPANY ở A và SITE ở B: `visibleCompanyIdsFor` trả `[A, B]`, `listSiteFilterFor` trả
+   * `null` (vì `level` là COMPANY) — ghép lại thành "cả A lẫn B, không bó nghĩa trang", tức
+   * TRỌN công ty B. Đúng cái lỗ mà `assertPlotFor` đã bịt ở đường một-bản-ghi, còn nguyên ở
+   * đường danh sách.
+   *
+   * Danh sách nguy hiểm hơn một bản ghi: nó phát ra id, mà id là tất cả những gì cần để gọi
+   * các đường khác.
+   *
+   * Trả về dạng THEO TỪNG CÔNG TY để nơi gọi dựng được `OR`. `cemeteryIds = null` nghĩa là cả
+   * công ty; một mảng nghĩa là chỉ những nghĩa trang đó, và mảng RỖNG giữ nguyên nghĩa "không
+   * với tới gì trong công ty này" — không được rơi về "không bó".
+   */
+  async plotScopeFilterFor(
+    userId: string | null,
+    code: string | null | undefined,
+  ): Promise<{ companyId: string; cemeteryIds: string[] | null }[] | null> {
+    const { subject, level, levelByCompany } = await this.loadFor(userId, code);
+    if (level === 'GROUP') {
+      return null;
+    }
+    const siteIds = subject.siteIds ?? [];
+    return Object.keys(levelByCompany)
+      .sort()
+      .map((companyId) => ({
+        companyId,
+        cemeteryIds: levelByCompany[companyId] === 'COMPANY' ? null : [...siteIds],
+      }));
+  }
+
   /** Cemeteries a list query must be narrowed to FOR ONE CODE, or `null` when none. */
   async listSiteFilterFor(
     userId: string | null,

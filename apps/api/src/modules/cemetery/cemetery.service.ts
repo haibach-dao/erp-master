@@ -4,6 +4,7 @@ import { ulid } from 'ulid';
 import { PrismaService } from '../../prisma/prisma.service';
 import type { Caller } from '../authorization/caller';
 import { ScopeService } from '../authorization/scope.service';
+import { plotScopeWhere } from '../authorization/plot-scope-where';
 import { AuditService } from '../audit/audit.service';
 import {
   activeBurial,
@@ -65,9 +66,15 @@ export class CemeteryService {
 
   async listCemeteries(companyId: string, caller: Caller) {
     await this.scope.assertCompanyFor(caller.userId, caller.permission, companyId);
-    const sites = await this.scope.listSiteFilterFor(caller.userId, caller.permission);
+    /* Bảng `Cemetery` CHÍNH NÓ là nghĩa trang, nên cột nghĩa trang ở đây là `id`.
+     *
+     * Bó theo TỪNG CÔNG TY chứ không theo một danh sách nghĩa trang phẳng: người mức COMPANY
+     * ở công ty A và SITE ở công ty B từng nhận `null` (không bó) vì `level` toàn cục là
+     * COMPANY, nên họ thấy trọn danh sách nghĩa trang của công ty B. */
+    const filter = await this.scope.plotScopeFilterFor(caller.userId, caller.permission);
+    const scoped = plotScopeWhere(filter, { company: 'companyId', cemetery: 'id' });
     return this.prisma.cemetery.findMany({
-      where: { companyId, ...(sites === null ? {} : { id: { in: sites } }) },
+      where: { companyId, ...(scoped ?? {}) },
       orderBy: { code: 'asc' },
     });
   }
@@ -139,9 +146,13 @@ export class CemeteryService {
     } else {
       // Asking for the whole company: narrow a site-bound caller to their own cemeteries
       // rather than answering with the company's entire inventory.
-      const sites = await this.scope.listSiteFilterFor(caller.userId, caller.permission);
-      if (sites !== null) {
-        where.cemeteryId = { in: sites };
+      /* Bó theo TỪNG CÔNG TY. `where.companyId` đã đặt ở trên, nên mệnh đề này giao với nó —
+       * và với người có mức khác nhau ở hai công ty, nó mới nói đúng được "công ty này cả
+       * công ty, công ty kia chỉ nghĩa trang được giao". */
+      const filter = await this.scope.plotScopeFilterFor(caller.userId, caller.permission);
+      const scoped = plotScopeWhere(filter);
+      if (scoped !== null) {
+        Object.assign(where, scoped);
       }
     }
     const plots = await this.prisma.gravePlot.findMany({

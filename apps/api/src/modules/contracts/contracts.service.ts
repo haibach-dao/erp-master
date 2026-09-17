@@ -9,6 +9,7 @@ import { ulid } from 'ulid';
 import { PrismaService } from '../../prisma/prisma.service';
 import type { Caller } from '../authorization/caller';
 import { ScopeService } from '../authorization/scope.service';
+import { plotScopeWhere } from '../authorization/plot-scope-where';
 import { AuditService } from '../audit/audit.service';
 import { activeBurial, activeUsageRight } from '../../common/lifecycle/active';
 import type { AddPartyDto, CreateContractDto, CancelContractDto } from './contracts.dto';
@@ -428,8 +429,9 @@ export class ContractsService {
       );
       where.gravePlotId = gravePlotId;
     } else {
-      const sites = await this.scope.listSiteFilterFor(caller.userId, caller.permission);
-      if (sites !== null) {
+      const filter = await this.scope.plotScopeFilterFor(caller.userId, caller.permission);
+      const scoped = plotScopeWhere(filter);
+      if (scoped !== null) {
         /* Không có quan hệ Prisma giữa hợp đồng và phần mộ (hai schema, không khoá ngoại
          * nối), nên không viết được `where: { gravePlot: { cemeteryId: ... } }` — phải quy
          * ra id phần mộ trước rồi lọc theo `in`.
@@ -437,7 +439,7 @@ export class ContractsService {
          * `sites` rỗng thì `in: []` và danh sách rỗng — ĐÚNG: được gán không nghĩa trang
          * nào nghĩa là với tới không cái nào, không phải với tới tất cả. */
         const plots = await this.prisma.gravePlot.findMany({
-          where: { companyId, cemeteryId: { in: sites } },
+          where: { companyId, ...scoped },
           select: { id: true },
         });
         where.gravePlotId = { in: plots.map((p) => p.id) };

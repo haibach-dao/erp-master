@@ -74,10 +74,18 @@ function build(row: unknown) {
   const assertCompanyFor = vi.fn().mockResolvedValue(undefined);
   const assertPlotFor = vi.fn().mockResolvedValue(undefined);
   const listSiteFilterFor = vi.fn().mockResolvedValue(null);
+  /* Bộ lọc danh sách nay hỏi THEO TỪNG CÔNG TY: `null` = không bó, còn một mảng thì mỗi mục
+   * là một công ty với `cemeteryIds` riêng (`null` = cả công ty). */
+  const plotScopeFilterFor = vi.fn().mockResolvedValue(null);
   const svc = new ContractsService(
     prisma,
     { record } as unknown as AuditService,
-    { assertCompanyFor, assertPlotFor, listSiteFilterFor } as unknown as ScopeService,
+    {
+      assertCompanyFor,
+      assertPlotFor,
+      listSiteFilterFor,
+      plotScopeFilterFor,
+    } as unknown as ScopeService,
   );
   return {
     svc,
@@ -88,6 +96,7 @@ function build(row: unknown) {
     assertCompanyFor,
     assertPlotFor,
     listSiteFilterFor,
+    plotScopeFilterFor,
     plotFindUnique,
     plotFindMany,
   };
@@ -467,14 +476,16 @@ describe('phạm vi — đường ĐỌC hợp đồng cũng bó, không chỉ �
   });
 
   it('list của người mức SITE bị BÓ theo id phần mộ trong nghĩa trang họ phụ trách', async () => {
-    const { svc, prisma, listSiteFilterFor, plotFindMany } = build(contract());
-    listSiteFilterFor.mockResolvedValue([SITE]);
+    const { svc, prisma, plotScopeFilterFor, plotFindMany } = build(contract());
+    plotScopeFilterFor.mockResolvedValue([{ companyId: CO, cemeteryIds: [SITE] }]);
     plotFindMany.mockResolvedValue([{ id: 'plot-1' }, { id: 'plot-2' }]);
 
     await svc.list('co-1', CALLER_VIEW);
 
     expect(plotFindMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { companyId: 'co-1', cemeteryId: { in: [SITE] } } }),
+      expect.objectContaining({
+        where: { companyId: 'co-1', OR: [{ companyId: CO, cemeteryId: { in: [SITE] } }] },
+      }),
     );
     expect(prisma.externalContract.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -486,8 +497,8 @@ describe('phạm vi — đường ĐỌC hợp đồng cũng bó, không chỉ �
   /* Được gán KHÔNG nghĩa trang nào nghĩa là với tới không cái nào, không phải với tới tất
    * cả. `in: []` là câu trả lời đúng ở đây — bỏ mệnh đề đi mới là sai. */
   it('người mức SITE chưa được gán nghĩa trang nào thì danh sách RỖNG, không phải tất cả', async () => {
-    const { svc, prisma, listSiteFilterFor, plotFindMany } = build(contract());
-    listSiteFilterFor.mockResolvedValue([]);
+    const { svc, prisma, plotScopeFilterFor, plotFindMany } = build(contract());
+    plotScopeFilterFor.mockResolvedValue([{ companyId: CO, cemeteryIds: [] }]);
     plotFindMany.mockResolvedValue([]);
 
     await svc.list('co-1', CALLER_VIEW);
@@ -498,8 +509,8 @@ describe('phạm vi — đường ĐỌC hợp đồng cũng bó, không chỉ �
   });
 
   it('người mức COMPANY/GROUP thì KHÔNG bị bó theo nghĩa trang', async () => {
-    const { svc, prisma, listSiteFilterFor, plotFindMany } = build(contract());
-    listSiteFilterFor.mockResolvedValue(null);
+    const { svc, prisma, plotScopeFilterFor, plotFindMany } = build(contract());
+    plotScopeFilterFor.mockResolvedValue(null);
 
     await svc.list('co-1', CALLER_VIEW);
 

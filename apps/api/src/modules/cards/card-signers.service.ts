@@ -10,6 +10,7 @@ import { grantInForce } from '../../common/lifecycle/active';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { ScopeService } from '../authorization/scope.service';
+import { plotScopeWhere } from '../authorization/plot-scope-where';
 import type { Caller } from '../authorization/caller';
 import type { CreateCardSignerDto, UpdateCardSignerDto } from './cards.dto';
 
@@ -265,24 +266,22 @@ export class CardSignersService {
 
   /* Tập nghĩa trang người gọi được thấy — GIAO của hai trục. `null` = không bó (chỉ GROUP).
    *
-   * Mức COMPANY: `listSiteFilterFor` trả `null` (nó chỉ bó khi mức là SITE), nên nếu chỉ hỏi
-   * nó thì người mức COMPANY không bị bó gì cả. Phải quy tập công ty ra tập nghĩa trang rồi
-   * mới giao. Mức SITE mà cũng có ràng buộc công ty thì giao cả hai — hẹp hơn, đúng luật
-   * "quyền hiệu dụng là GIAO của hai trục, không bao giờ là tổng". */
+   * Bản trước hỏi `listSiteFilterFor` + `visibleCompanyIdsFor` rồi giao hai tập PHẲNG. Hai
+   * tập phẳng không nói được "công ty A: cả công ty, công ty B: chỉ nghĩa trang được giao":
+   * với người mức COMPANY ở A và SITE ở B, `listSiteFilterFor` trả `null` (vì `level` toàn
+   * cục là COMPANY) nên nhánh `sites === null` trả TRỌN tập nghĩa trang của cả A lẫn B.
+   *
+   * `plotScopeWhere` dựng đúng mệnh đề đó ngay trên bảng `Cemetery` — bảng này có `companyId`
+   * và CHÍNH NÓ là nghĩa trang nên cột nghĩa trang là `id`. Giao hai trục xảy ra trong một
+   * truy vấn, không phải bằng hai tập rồi lọc tay. */
   private async visibleCemeteryIds(caller: Caller): Promise<string[] | null> {
-    const [sites, companies] = await Promise.all([
-      this.scope.listSiteFilterFor(caller.userId, caller.permission),
-      this.scope.visibleCompanyIdsFor(caller.userId, caller.permission),
-    ]);
-    if (companies === null) {
-      return sites;
+    const filter = await this.scope.plotScopeFilterFor(caller.userId, caller.permission);
+    const where = plotScopeWhere(filter, { company: 'companyId', cemetery: 'id' });
+    if (where === null) {
+      return null;
     }
-    const rows = await this.prisma.cemetery.findMany({
-      where: { companyId: { in: companies } },
-      select: { id: true },
-    });
-    const byCompany = rows.map((r) => r.id);
-    return sites === null ? byCompany : byCompany.filter((id) => sites.includes(id));
+    const rows = await this.prisma.cemetery.findMany({ where, select: { id: true } });
+    return rows.map((r) => r.id);
   }
 
   /* "Người này có đang quản lý nghĩa trang kia không?" — GIAO của hai trục, không phải tổng.

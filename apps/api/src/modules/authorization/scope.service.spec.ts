@@ -513,3 +513,40 @@ describe('mức gắn với CÔNG TY — mức ở công ty này không xoá ph�
     await expect(svc.assertPlotFor('u1', CODE_UPDATE, 'co-a', 'nt-a9')).resolves.toBeUndefined();
   });
 });
+
+/* ---- Đường DANH SÁCH cũng phải bó theo TỪNG công ty ----
+ *
+ * `assertPlotFor` đã chặn đường MỘT BẢN GHI, nhưng `visibleCompanyIdsFor` và
+ * `listSiteFilterFor` vẫn trả hai danh sách PHẲNG dựng từ `level` toàn cục. Với người có mức
+ * khác nhau ở hai công ty, hai danh sách phẳng KHÔNG biểu diễn nổi câu trả lời đúng: công ty
+ * A "cả công ty", công ty B "chỉ nghĩa trang được giao". Gộp phẳng thì thành "cả A lẫn B,
+ * không bó nghĩa trang" — tức trọn công ty B.
+ *
+ * Và danh sách là chỗ NGUY HIỂM hơn một bản ghi: nó phát ra id, mà id là tất cả những gì cần
+ * để gọi các đường khác.
+ */
+describe('bộ lọc DANH SÁCH theo phần mộ — bó theo từng công ty, không gộp phẳng', () => {
+  it('trả mệnh đề riêng cho từng công ty: A cả công ty, B chỉ nghĩa trang được giao', async () => {
+    const svc = buildTwoCompaniesTwoLevels(['nt-b1']);
+    await expect(svc.plotScopeFilterFor('u1', CODE_UPDATE)).resolves.toEqual([
+      { companyId: 'co-a', cemeteryIds: null },
+      { companyId: 'co-b', cemeteryIds: ['nt-b1'] },
+    ]);
+  });
+
+  /* `null` = không bó gì, và CHỈ mức GROUP mới được nhận nó. */
+  it('mức GROUP không bó gì', async () => {
+    const svc = build({ level: 'GROUP', companyIds: [] });
+    await expect(svc.plotScopeFilterFor('u1', CODE)).resolves.toBeNull();
+  });
+
+  /* Được giao không nghĩa trang nào thì với tới KHÔNG mộ nào trong công ty đó — mảng rỗng
+   * phải giữ nguyên nghĩa, không được rơi về "không bó". */
+  it('công ty mức SITE mà chưa được giao nghĩa trang nào thì với tới rỗng, không phải tất cả', async () => {
+    const svc = buildTwoCompaniesTwoLevels([]);
+    await expect(svc.plotScopeFilterFor('u1', CODE_UPDATE)).resolves.toEqual([
+      { companyId: 'co-a', cemeteryIds: null },
+      { companyId: 'co-b', cemeteryIds: [] },
+    ]);
+  });
+});

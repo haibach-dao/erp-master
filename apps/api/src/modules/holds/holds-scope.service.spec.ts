@@ -69,6 +69,13 @@ function build(
   const assertPlotFor = vi.fn().mockResolvedValue(undefined);
   const visibleCompanyIdsFor = vi.fn().mockResolvedValue(companies);
   const listSiteFilterFor = vi.fn().mockResolvedValue(sites);
+  /* Bộ lọc danh sách nay hỏi THEO TỪNG CÔNG TY. Suy từ hai fixture cũ để mọi ca giữ nguyên
+   * điều nó vẫn khẳng định — ở đây mọi công ty cùng một mức nên ánh xạ là một-một. */
+  const plotScopeFilterFor = vi
+    .fn()
+    .mockResolvedValue(
+      companies === null ? null : companies.map((companyId) => ({ companyId, cemeteryIds: sites })),
+    );
 
   const svc = new HoldsService(
     prisma,
@@ -78,6 +85,7 @@ function build(
       assertPlotFor,
       visibleCompanyIdsFor,
       listSiteFilterFor,
+      plotScopeFilterFor,
     } as unknown as ScopeService,
   );
   return {
@@ -169,7 +177,7 @@ describe('giữ chỗ — DANH SÁCH bó theo phạm vi', () => {
     await svc.listHolds(VIEWER);
 
     expect(holdFindMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { gravePlot: { companyId: { in: ['co-1'] } } } }),
+      expect.objectContaining({ where: { gravePlot: { OR: [{ companyId: 'co-1' }] } } }),
     );
   });
 
@@ -180,7 +188,7 @@ describe('giữ chỗ — DANH SÁCH bó theo phạm vi', () => {
 
     expect(holdFindMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { gravePlot: { companyId: { in: ['co-1'] }, cemeteryId: { in: [SITE] } } },
+        where: { gravePlot: { OR: [{ companyId: 'co-1', cemeteryId: { in: [SITE] } }] } },
       }),
     );
   });
@@ -194,7 +202,7 @@ describe('giữ chỗ — DANH SÁCH bó theo phạm vi', () => {
 
     expect(holdFindMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { gravePlot: { companyId: { in: ['co-1'] }, cemeteryId: { in: [] } } },
+        where: { gravePlot: { OR: [{ companyId: 'co-1', cemeteryId: { in: [] } }] } },
       }),
     );
   });
@@ -221,7 +229,7 @@ describe('giữ chỗ — DANH SÁCH bó theo phạm vi', () => {
 
     expect(holdFindMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { status: 'Active', gravePlot: { companyId: { in: ['co-1'] } } },
+        where: { status: 'Active', gravePlot: { OR: [{ companyId: 'co-1' }] } },
       }),
     );
   });
