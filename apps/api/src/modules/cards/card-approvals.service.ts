@@ -11,6 +11,7 @@ import { grantInForce } from '../../common/lifecycle/active';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { ScopeService } from '../authorization/scope.service';
+import { plotScopeWhere } from '../authorization/plot-scope-where';
 import type { Caller } from '../authorization/caller';
 import type { FeeQuote } from './card-fees.service';
 import type { CardFeeWaiveReason } from './cards.constants';
@@ -566,8 +567,9 @@ export class CardApprovalsService {
 
   /* HỘP PHÊ DUYỆT của người ký. Chỉ hồ sơ gửi ĐÍCH DANH người này.
    *
-   * VÌ SAO HAI ĐƯỜNG DANH SÁCH DƯỚI ĐÂY KHÔNG DÙNG `plotScopeFilterFor` (quyết định
-   * 17/09/2026, ghi lại để đừng ai "sửa cho đồng bộ" mà không đọc):
+   * VÌ SAO ĐƯỜNG NÀY KHÔNG DÙNG `plotScopeFilterFor` (quyết định 17/09/2026, ghi lại để
+   * đừng ai "sửa cho đồng bộ" mà không đọc). Chỉ NÓ — `listForCustomer` ngay dưới ĐÃ được bó
+   * thật, vì lý do miễn trừ ở đó không đứng vững; xem đính chính tại chỗ:
    *
    * `cardIssueApproval` lưu `companyId` của KHÁCH và `cemeteryId` của PHẦN MỘ — hai giá trị
    * đến từ hai bản ghi khác nhau, và không có gì ép chúng trùng (xem `assertInScope`). Mệnh
@@ -575,10 +577,9 @@ export class CardApprovalsService {
    * áp lên bảng này là ghép công ty của khách với nghĩa trang của mộ, tức đúng cặp lệch vừa
    * phải đi vá ở `assertInScope`.
    *
-   * Hai đường này đã bị giới hạn bằng một khoá hẹp hơn nhiều: `approverUserId` là chính người
-   * gọi, còn `listForCustomer` là một khách cụ thể. Nên vẫn hỏi hai trục RỜI ở đây là chấp
-   * nhận được, và đó là lựa chọn có chủ đích chứ không phải sót. Muốn bó đúng thì phải thêm
-   * cột công ty CỦA NGHĨA TRANG vào bảng — một quyết định riêng, cần migration.
+   * Đường này bị giới hạn bằng một khoá mà người gọi KHÔNG chọn được: `approverUserId` là
+   * chính họ, nên nó chỉ trả hồ sơ ai đó đã gửi đích danh cho họ. Nên hỏi hai trục RỜI ở đây
+   * là chấp nhận được, và đó là lựa chọn có chủ đích chứ không phải sót.
    */
   async listInbox(caller: Caller) {
     if (caller.userId === null) {
@@ -597,14 +598,30 @@ export class CardApprovalsService {
     return this.prisma.cardIssueApproval.findMany({ where, orderBy: { submittedAt: 'asc' } });
   }
 
-  /* Hồ sơ của MỘT khách — màn cấp thẻ đọc cái này để biết mình đang ở chặng nào. */
+  /* Hồ sơ của MỘT khách — màn cấp thẻ đọc cái này để biết mình đang ở chặng nào.
+   *
+   * ĐÍNH CHÍNH LỜI KHAI CỦA CHÍNH LÁT TRƯỚC: chú thích ở `listInbox` từng xếp đường này vào
+   * cùng nhóm "ngoại lệ có chủ đích" với lý do `customerId` là một khoá đủ hẹp, và nói thêm
+   * rằng bó đúng thì "cần migration". CẢ HAI ĐỀU SAI, một lượt soi độc lập bắt được:
+   *
+   *   - `customerId` là tham số truy vấn do CLIENT gửi, không phải khoá hẹp do hệ áp. Nó
+   *     không giành được gì cả: ai cầm mã quyền và biết một id khách là hỏi được.
+   *   - Không cần cột mới. Trục nghĩa trang quy được qua chính bảng `Cemetery` (`companyId`
+   *     + `id`), đúng lối `CardSignersService.visibleCemeteryIds` đã đi.
+   *
+   * Nên bó thật: lọc theo tập nghĩa trang người gọi với tới, tính THEO TỪNG CÔNG TY. `[]` giữ
+   * nguyên nghĩa "không với tới cái nào" — không được rơi về "không lọc".
+   */
   async listForCustomer(customerId: string, caller: Caller) {
-    const companies = await this.scope.visibleCompanyIdsFor(caller.userId, caller.permission);
-    const sites = await this.scope.listSiteFilterFor(caller.userId, caller.permission);
-
+    const filter = await this.scope.plotScopeFilterFor(caller.userId, caller.permission);
     const where: Prisma.CardIssueApprovalWhereInput = { customerId };
-    if (companies !== null) where.companyId = { in: companies };
-    if (sites !== null) where.cemeteryId = { in: sites };
+    if (filter !== null) {
+      const cemeteries = await this.prisma.cemetery.findMany({
+        where: plotScopeWhere(filter, { company: 'companyId', cemetery: 'id' }) ?? {},
+        select: { id: true },
+      });
+      where.cemeteryId = { in: cemeteries.map((c) => c.id) };
+    }
 
     /* `select` TƯỜNG MINH, và CỐ Ý bỏ `quoteSnapshot`.
      *

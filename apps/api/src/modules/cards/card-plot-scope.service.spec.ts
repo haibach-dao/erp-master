@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { CardFeesService } from './card-fees.service';
+import { CardApprovalsService } from './card-approvals.service';
 import type { PrismaService } from '../../prisma/prisma.service';
 import type { ScopeService } from '../authorization/scope.service';
 import type { PermissionsService } from '../authorization/permissions.service';
@@ -52,6 +53,36 @@ function build(
   return { svc, assertPlotFor, plotFindMany };
 }
 
+const VIEWER_APPROVAL: Caller = { userId: 'u1', permission: 'cemetery.card.submit' };
+
+/* Harness riêng cho `CardApprovalsService`: chỉ cần hai bảng nó đụng tới ở đường này. */
+function buildApprovals(
+  filter: { companyId: string; cemeteryIds: string[] | null }[] | null,
+  cemeteries: { id: string }[],
+) {
+  const approvalFindMany = vi.fn().mockResolvedValue([]);
+  const prisma = {
+    cardIssueApproval: { findMany: approvalFindMany },
+    cemetery: { findMany: vi.fn().mockResolvedValue(cemeteries) },
+  } as unknown as PrismaService;
+
+  const svc = new CardApprovalsService(
+    prisma,
+    { record: vi.fn().mockResolvedValue(undefined) } as unknown as AuditService,
+    {
+      assertCompanyFor: vi.fn().mockResolvedValue(undefined),
+      assertPlotFor: vi.fn().mockResolvedValue(undefined),
+      plotScopeFilterFor: vi.fn().mockResolvedValue(filter),
+    } as unknown as ScopeService,
+  );
+  return { svc, approvalFindMany };
+}
+
+function whereOfApproval(spy: ReturnType<typeof vi.fn>): Record<string, unknown> | undefined {
+  const call = spy.mock.calls[0]?.[0] as { where: Record<string, unknown> } | undefined;
+  return call?.where;
+}
+
 describe('bảng kê phí cấp thẻ — hỏi CẢ HAI TRỤC theo từng phần mộ', () => {
   it('hỏi phạm vi trên nghĩa trang của phần mộ, không chỉ trên công ty', async () => {
     const { svc, assertPlotFor } = build(
@@ -86,5 +117,46 @@ describe('bảng kê phí cấp thẻ — hỏi CẢ HAI TRỤC theo từng ph�
     await svc.listCharges(LOG, VIEWER);
     expect(plotFindMany).not.toHaveBeenCalled();
     expect(assertPlotFor).not.toHaveBeenCalled();
+  });
+});
+
+/* HỒ SƠ TRÌNH DUYỆT CỦA MỘT KHÁCH — `customerId` KHÔNG phải khoá hẹp.
+ *
+ * Nó là tham số truy vấn do client gửi: ai cầm mã quyền và biết một id khách là hỏi được. Lát
+ * 17/09 từng xếp đường này vào nhóm "ngoại lệ có chủ đích" cùng `listInbox` và ghi thêm rằng
+ * bó đúng thì cần migration — cả hai đều sai, một lượt soi độc lập bắt được. Trục nghĩa trang
+ * quy được qua chính bảng `Cemetery`, không cần cột mới.
+ */
+describe('hồ sơ trình duyệt của một khách — bó theo nghĩa trang với tới được', () => {
+  it('mức GROUP: không bó theo nghĩa trang', async () => {
+    const { svc, approvalFindMany } = buildApprovals(null, []);
+    await svc.listForCustomer('cus-1', VIEWER_APPROVAL);
+    expect(whereOfApproval(approvalFindMany)).toEqual({ customerId: 'cus-1' });
+  });
+
+  it('LỆCH MỨC: chỉ thấy hồ sơ ở nghĩa trang với tới được', async () => {
+    const { svc, approvalFindMany } = buildApprovals(
+      [
+        { companyId: CO_A, cemeteryIds: null },
+        { companyId: 'co-b', cemeteryIds: [SITE_A2] },
+      ],
+      [{ id: SITE_A1 }, { id: SITE_A2 }],
+    );
+    await svc.listForCustomer('cus-1', VIEWER_APPROVAL);
+    expect(whereOfApproval(approvalFindMany)).toEqual({
+      customerId: 'cus-1',
+      cemeteryId: { in: [SITE_A1, SITE_A2] },
+    });
+  });
+
+  /* Không với tới nghĩa trang nào thì thấy RỖNG — không được rơi về "không lọc". */
+  it('không với tới nghĩa trang nào thì danh sách rỗng, không phải tất cả', async () => {
+    const { svc, approvalFindMany } = buildApprovals([], []);
+    expect(whereOfApproval(approvalFindMany)).toBeUndefined();
+    await svc.listForCustomer('cus-1', VIEWER_APPROVAL);
+    expect(whereOfApproval(approvalFindMany)).toEqual({
+      customerId: 'cus-1',
+      cemeteryId: { in: [] },
+    });
   });
 });
