@@ -337,8 +337,29 @@ export class CardFeesService {
       where: { cardPrintLogId },
       orderBy: { chargedAt: 'asc' },
     });
-    for (const companyId of new Set(rows.map((r) => r.companyId))) {
-      await this.scope.assertCompanyFor(caller.userId, caller.permission, companyId);
+    /* CẢ HAI TRỤC, hỏi theo TỪNG PHẦN MỘ của bảng kê.
+     *
+     * Bảng `GraveCardFeeCharge` có CẢ `companyId` LẪN `gravePlotId`, nhưng bản trước chỉ lặp
+     * trên tập công ty — nên người mức SITE phụ trách nghĩa trang A1 đọc được bảng kê phí của
+     * một lượt in thẻ cho mộ ở nghĩa trang A2 cùng công ty. Cùng lớp lỗi với
+     * `usageRightHistory` và `plotOwnership`: đường ĐỌC hở đúng thứ đường GHI đã chặn.
+     *
+     * Quy nghĩa trang qua `GravePlot` — `companyId` trên chính dòng phí là ảnh chụp lúc tính
+     * tiền, còn câu hỏi ở đây là "mộ này nằm ở đâu", nên phải hỏi bản ghi mộ. */
+    const plots =
+      rows.length === 0
+        ? []
+        : await this.prisma.gravePlot.findMany({
+            where: { id: { in: [...new Set(rows.map((r) => r.gravePlotId))] } },
+            select: { companyId: true, cemeteryId: true },
+          });
+    for (const plot of plots) {
+      await this.scope.assertPlotFor(
+        caller.userId,
+        caller.permission,
+        plot.companyId,
+        plot.cemeteryId,
+      );
     }
     return rows;
   }

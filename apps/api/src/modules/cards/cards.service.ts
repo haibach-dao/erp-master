@@ -60,6 +60,19 @@ export class CardsService {
       where: { id: { in: rights.map((r) => r.gravePlotId) } },
       include: { cemetery: true, graveType: true },
     });
+    /* PHẠM VI TRÊN TỪNG PHẦN MỘ, không chỉ trên công ty của khách.
+     *
+     * Phép kiểm ở đầu hàm hỏi `customer.companyId` — "khách này có thuộc nhà mình không". Thứ
+     * hàm này TRẢ VỀ lại là dữ liệu PHẦN MỘ: mã mộ, khu, sức chứa, và danh sách người đang
+     * nằm trong đó. Một khách có thể đứng tên mộ ở nhiều nghĩa trang, nên trả lời câu thứ nhất
+     * mà không hỏi câu thứ hai là để người phụ trách nghĩa trang A1 xem trọn thẻ của một khách
+     * có mộ ở A2 — cùng lớp lỗi với `usageRightHistory`/`plotOwnership`, và ở đây nặng hơn vì
+     * thẻ mang cả TÊN NGƯỜI ĐÃ MẤT.
+     *
+     * Hỏi trên MỌI nghĩa trang của bộ mộ, không chỉ cái đầu: thẻ in ra mang tất cả. */
+    for (const p of plots) {
+      await this.scope.assertPlotFor(caller.userId, caller.permission, p.companyId, p.cemeteryId);
+    }
     const plotById = new Map(plots.map((p) => [p.id, p]));
 
     const burials = await this.prisma.burialRecord.findMany({

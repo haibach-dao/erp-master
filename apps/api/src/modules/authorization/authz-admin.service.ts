@@ -52,7 +52,17 @@ export class AuthzAdminService {
     if (cemetery === null) {
       throw new NotFoundException('Không tìm thấy nghĩa trang');
     }
-    await this.scope.assertCompanyFor(caller.userId, caller.permission, cemetery.companyId);
+    /* CẢ HAI TRỤC. Chỉ hỏi công ty là để hở đúng cái chú thích ngay trên hàm này cảnh báo:
+     * người mức COMPANY ở công ty A gán được nghĩa trang A2 — cái họ KHÔNG phụ trách — cho
+     * người khác, tức nới tầm với của người khác vượt quá tầm với của chính mình. Người mức
+     * COMPANY vẫn phủ trọn công ty nên họ không mất gì; người mức SITE chỉ còn gán được đúng
+     * nghĩa trang họ phụ trách. */
+    await this.scope.assertPlotFor(
+      caller.userId,
+      caller.permission,
+      cemetery.companyId,
+      cemeteryId,
+    );
 
     const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { id: true } });
     if (user === null) {
@@ -94,7 +104,14 @@ export class AuthzAdminService {
     if (cemetery === null) {
       throw new BadRequestException('Nghĩa trang không còn tồn tại');
     }
-    await this.scope.assertCompanyFor(caller.userId, caller.permission, cemetery.companyId);
+    /* CẢ HAI TRỤC, cùng lý do với `assign`: THU HỒI cũng là đổi tầm với của người khác, và
+     * người mức SITE chỉ được đụng vào nghĩa trang họ phụ trách. */
+    await this.scope.assertPlotFor(
+      caller.userId,
+      caller.permission,
+      cemetery.companyId,
+      cemeteryId,
+    );
 
     const updated = await this.prisma.scopeAssignment.update({
       where: { userId_cemeteryId: { userId, cemeteryId } },

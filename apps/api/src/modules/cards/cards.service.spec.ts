@@ -113,6 +113,11 @@ function build(
           mapX: 12.5,
           mapY: 30,
           capacityOverride,
+          /* Hai cột phạm vi: từ 17/09/2026 `buildCard` hỏi phạm vi trên TỪNG mộ của bộ, vì
+           * thẻ mang dữ liệu PHẦN MỘ chứ không chỉ dữ liệu khách. Fixture thiếu hai cột này
+           * thì phép kiểm nhận `undefined` và ca test không canh được gì. */
+          companyId: 'co-1',
+          cemeteryId: 'nt-1',
           cemetery: { name: 'An Lạc Viên' },
           graveType: { name: 'Mộ gia đình', defaultCapacity: capacity },
         },
@@ -135,6 +140,9 @@ function build(
   } as unknown as PrismaService;
 
   const assertCompanyFor = vi.fn().mockResolvedValue(undefined);
+  /* Thẻ mộ mang dữ liệu PHẦN MỘ, nên từ 17/09/2026 `buildCard` hỏi phạm vi trên TỪNG mộ của
+   * bộ — không chỉ trên công ty của khách. */
+  const assertPlotFor = vi.fn().mockResolvedValue(undefined);
   const decrypt = vi.fn().mockReturnValue('079123456789');
   const holdsForMasking = vi.fn().mockResolvedValue(holdsSensitive);
   /* Biểu phí mock ở đây, không mock ở tầng Prisma: nhóm test này kiểm LUỒNG CẤP THẺ
@@ -159,7 +167,7 @@ function build(
   const svc = new CardsService(
     prisma,
     { record } as unknown as AuditService,
-    { assertCompanyFor } as unknown as ScopeService,
+    { assertCompanyFor, assertPlotFor } as unknown as ScopeService,
     { decrypt } as unknown as PiiService,
     { holdsForMasking } as unknown as PermissionsService,
     { quote, resolveWaive, recordCharges } as unknown as CardFeesService,
@@ -173,6 +181,7 @@ function build(
     consume,
     createApproval,
     assertCompanyFor,
+    assertPlotFor,
     decrypt,
     holdsForMasking,
     quote,
@@ -351,6 +360,18 @@ describe('thẻ mộ — chặn trước khi cấp', () => {
     /* Ba tham số, và tham số GIỮA là thứ đáng kiểm nhất: mã quyền đang thi hành. Thiếu nó
      * thì phạm vi được tính ở mức rộng nhất của người gọi — đúng lớp lỗi vừa vá. */
     expect(assertCompanyFor).toHaveBeenCalledWith('u1', 'cemetery.card.view', 'co-1');
+  });
+
+  /* Thẻ mang dữ liệu PHẦN MỘ — mã mộ, khu, sức chứa, và TÊN NGƯỜI ĐÃ MẤT đang nằm trong đó.
+   * Hỏi mỗi công ty của khách là để người phụ trách nghĩa trang A1 xem trọn thẻ của một khách
+   * có mộ ở A2. Một khách đứng tên mộ ở nhiều nghĩa trang là chuyện thường, nên phép kiểm phải
+   * chạy trên TỪNG mộ. */
+  it('hỏi phạm vi trên PHẦN MỘ nữa, không chỉ trên công ty của khách', async () => {
+    const { svc, assertPlotFor } = build();
+
+    await svc.preview(CUSTOMER, { userId: 'u1', permission: 'cemetery.card.view' });
+
+    expect(assertPlotFor).toHaveBeenCalledWith('u1', 'cemetery.card.view', 'co-1', 'nt-1');
   });
 });
 
