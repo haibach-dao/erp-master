@@ -29,9 +29,22 @@ export type ScopeLevel = 'GROUP' | 'COMPANY' | 'SITE' | 'NONE';
  * ở `scopeForCode`.
  */
 export interface CodeScope {
+  /** Mức RỘNG NHẤT trên mã này, ở bất cứ công ty nào. Dùng cho bộ lọc danh sách. */
   level: ScopeLevel;
   companyIds: string[];
   siteIds: string[];
+  /* Mức TẠI TỪNG CÔNG TY — mức ở công ty này không nói gì về công ty kia.
+   *
+   * VÌ SAO KHÔNG ĐỦ NẾU CHỈ CÓ `level` (đo được, 17/09/2026): `level` là hợp trên mọi công
+   * ty, và `checkSite` thoát sớm khi mức là COMPANY. Ghép hai điều đó lại thì mức lấy từ
+   * công ty A XOÁ phép bó theo nghĩa trang ở công ty B. Người vừa là Thu ngân ở công ty A
+   * (COMPANY) vừa là Quản lý nghĩa trang B1 (SITE) chạm được MỌI nghĩa trang của công ty B,
+   * kể cả cái họ không phụ trách — và điều đó xảy ra KỂ CẢ khi nơi gọi đã gọi đủ cặp
+   * `assertCompanyFor` + `assertSiteFor`, nên không phải lỗi của nơi gọi.
+   *
+   * Chỉ có COMPANY và SITE ở đây. GROUP không nằm trong bảng này vì nó không gắn với công ty
+   * nào — nó là "không giới hạn bản ghi", và `level === 'GROUP'` trả lời câu đó. */
+  levelByCompany: Record<string, 'COMPANY' | 'SITE'>;
 }
 
 /* Outcome of the ordered rule chain for one code.
@@ -189,10 +202,14 @@ export class PermissionsService {
     userId: string,
     code: string,
     now: Date,
-  ): Promise<{ level: ScopeLevel; companyIds: string[] }> {
+  ): Promise<{
+    level: ScopeLevel;
+    companyIds: string[];
+    levelByCompany: Record<string, 'COMPANY' | 'SITE'>;
+  }> {
     const ruling = await this.evaluateRules(userId, code, now);
     if (ruling === 'DENY') {
-      return { level: 'NONE', companyIds: [] };
+      return { level: 'NONE', companyIds: [], levelByCompany: {} };
     }
     const [meta, assignments] = await Promise.all([
       this.getPermissionMeta(code),
@@ -200,8 +217,12 @@ export class PermissionsService {
     ]);
     let level: ScopeLevel = 'NONE';
     const companyIds = new Set<string>();
+    const levelByCompany: Record<string, 'COMPANY' | 'SITE'> = {};
     for (const a of assignments) {
       let covers = false;
+      /* Mức của RIÊNG dòng gán này, tách khỏi `level` chung: `level` là hợp trên mọi công ty
+       * và dùng cho bộ lọc danh sách, còn cái này là thứ đi vào `levelByCompany`. */
+      let assignmentLevel: ScopeLevel = 'NONE';
       for (const rp of a.role.rolePermissions) {
         const matches = permissionMatches(rp.permission.code, code, {
           ...(meta === null ? {} : { wildcardExempt: meta.wildcardExempt }),
@@ -230,12 +251,23 @@ export class PermissionsService {
         }
         covers = true;
         level = broader(level, granted);
+        assignmentLevel = broader(assignmentLevel, granted);
       }
       if (covers && a.companyId !== null) {
         companyIds.add(a.companyId);
+        /* Mức TẠI công ty này = mức rộng nhất trong các dòng gán của CHÍNH công ty này.
+         * `broader` đã gom `assignmentLevel` qua mọi grant phủ mã của dòng gán đó; ở đây chỉ
+         * còn so với mức đã ghi cho cùng công ty từ một dòng gán khác. GROUP không vào bảng
+         * này — nó không gắn công ty nào, và `level === 'GROUP'` đã trả lời câu đó. */
+        if (assignmentLevel === 'COMPANY' || assignmentLevel === 'SITE') {
+          const truoc = levelByCompany[a.companyId];
+          if (truoc === undefined || (truoc === 'SITE' && assignmentLevel === 'COMPANY')) {
+            levelByCompany[a.companyId] = assignmentLevel;
+          }
+        }
       }
     }
-    return { level, companyIds: [...companyIds].sort() };
+    return { level, companyIds: [...companyIds].sort(), levelByCompany };
   }
 
   /* Walk the ordered rule chain for one code — firewall semantics.

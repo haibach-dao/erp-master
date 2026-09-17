@@ -102,20 +102,27 @@ function build(opts: {
     }
     return Promise.resolve(undefined);
   });
-  const assertSiteFor = vi.fn((_u: string | null, _c: string | null, siteId: string) => {
-    if (allowedSites !== null && !allowedSites.includes(siteId)) {
-      return Promise.reject(new ForbiddenException('Ngoài phạm vi được gán: nghĩa trang'));
-    }
-    return Promise.resolve(undefined);
-  });
+  /* `assertPlotFor` hỏi CẢ HAI TRỤC một lần (từ 17/09/2026), nên stub kiểm cả hai: công ty
+   * trước rồi nghĩa trang, đúng thứ tự bản thật. */
+  const assertPlotFor = vi.fn(
+    (_u: string | null, _c: string | null, companyId: string, siteId: string) => {
+      if (allowedCompanies !== null && !allowedCompanies.includes(companyId)) {
+        return Promise.reject(new ForbiddenException('Ngoài phạm vi được gán: công ty'));
+      }
+      if (allowedSites !== null && !allowedSites.includes(siteId)) {
+        return Promise.reject(new ForbiddenException('Ngoài phạm vi được gán: nghĩa trang'));
+      }
+      return Promise.resolve(undefined);
+    },
+  );
 
   const svc = new CustomersService(
     prisma,
     { encrypt: vi.fn(), decrypt: vi.fn() } as unknown as PiiService,
     { record: vi.fn().mockResolvedValue(undefined) } as unknown as AuditService,
-    { assertCompanyFor, assertSiteFor } as unknown as ScopeService,
+    { assertCompanyFor, assertPlotFor } as unknown as ScopeService,
   );
-  return { svc, created, prisma, assertCompanyFor, assertSiteFor };
+  return { svc, created, prisma, assertCompanyFor, assertPlotFor };
 }
 
 const DTO = { type: 'INDIVIDUAL', companyId: CO_A, personId: PERSON } as never;

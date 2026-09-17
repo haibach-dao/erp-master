@@ -21,6 +21,12 @@ function build(scope: {
       level: scope.level,
       companyIds: scope.companyIds,
       siteIds: scope.siteIds ?? [],
+      /* Mức TẠI TỪNG công ty. Ở nhóm test này mọi công ty cùng một mức, nên bảng này suy
+       * thẳng từ `scope.level` — đúng cái nhóm test này muốn kiểm (ngữ nghĩa của từng mức),
+       * còn chuyện hai công ty LỆCH mức thì nhóm cuối file lo, trên `PermissionsService` thật. */
+      levelByCompany: Object.fromEntries(
+        scope.companyIds.map((c) => [c, scope.level === 'SITE' ? 'SITE' : 'COMPANY']),
+      ),
     }),
   } as unknown as PermissionsService;
   return new ScopeService(permissions, new PolicyEvaluator());
@@ -102,28 +108,34 @@ describe('ScopeService.assertSite — the hub axis', () => {
   const COVERS_ONE = { level: 'SITE' as const, companyIds: ['co-a'], siteIds: ['ct-1'] };
 
   it('allows a cemetery the caller covers', async () => {
-    await expect(build(COVERS_ONE).assertSiteFor('u1', CODE, 'ct-1')).resolves.toBeUndefined();
+    await expect(
+      build(COVERS_ONE).assertPlotFor('u1', CODE, 'co-a', 'ct-1'),
+    ).resolves.toBeUndefined();
   });
 
   it('refuses a cemetery the caller does not cover, even inside their own company', async () => {
-    await expect(build(COVERS_ONE).assertSiteFor('u1', CODE, 'ct-2')).rejects.toThrow(
+    await expect(build(COVERS_ONE).assertPlotFor('u1', CODE, 'co-a', 'ct-2')).rejects.toThrow(
       /không phụ trách/,
     );
   });
 
   it('covering several cemeteries at once is normal, not an exception', async () => {
     const svc = build({ level: 'SITE', companyIds: ['co-a'], siteIds: ['ct-1', 'ct-9'] });
-    await expect(svc.assertSiteFor('u1', CODE, 'ct-1')).resolves.toBeUndefined();
-    await expect(svc.assertSiteFor('u1', CODE, 'ct-9')).resolves.toBeUndefined();
+    await expect(svc.assertPlotFor('u1', CODE, 'co-a', 'ct-1')).resolves.toBeUndefined();
+    await expect(svc.assertPlotFor('u1', CODE, 'co-a', 'ct-9')).resolves.toBeUndefined();
   });
 
   it('assigned to no cemetery reaches none of them — not all of them', async () => {
     const svc = build({ level: 'SITE', companyIds: ['co-a'], siteIds: [] });
-    await expect(svc.assertSiteFor('u1', CODE, 'ct-1')).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(svc.assertPlotFor('u1', CODE, 'co-a', 'ct-1')).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
   });
 
   it('a GROUP caller is unrestricted here too', async () => {
-    await expect(build(UNRESTRICTED).assertSiteFor('u1', CODE, 'ct-1')).resolves.toBeUndefined();
+    await expect(
+      build(UNRESTRICTED).assertPlotFor('u1', CODE, 'co-a', 'ct-1'),
+    ).resolves.toBeUndefined();
   });
 });
 
@@ -173,13 +185,17 @@ function buildPerCode(opts: {
   siteIds: string[];
 }) {
   const permissions = {
-    scopeForCode: vi.fn().mockImplementation((_u: string, code: string) =>
-      Promise.resolve({
-        level: opts.perCode[code] ?? 'NONE',
+    scopeForCode: vi.fn().mockImplementation((_u: string, code: string) => {
+      const muc = opts.perCode[code] ?? 'NONE';
+      return Promise.resolve({
+        level: muc,
         companyIds: opts.companyIds,
         siteIds: opts.siteIds,
-      }),
-    ),
+        levelByCompany: Object.fromEntries(
+          opts.companyIds.map((c) => [c, muc === 'SITE' ? 'SITE' : 'COMPANY']),
+        ),
+      });
+    }),
   } as unknown as PermissionsService;
   return new ScopeService(permissions, new PolicyEvaluator());
 }
@@ -204,30 +220,36 @@ describe('phạm vi theo MÃ QUYỀN — hợp giữa các vai cộng dồn QUY�
 
   it('bản theo mã CHẶN nghĩa trang B trên `burial.record.cancel`', async () => {
     const svc = buildPerCode(KIEM_TOAN_KIEM_QUAN_LY);
-    await expect(svc.assertSiteFor('u1', 'burial.record.cancel', 'nt-B')).rejects.toThrow(
+    await expect(svc.assertPlotFor('u1', 'burial.record.cancel', 'co-a', 'nt-B')).rejects.toThrow(
       /không phụ trách nghĩa trang này/,
     );
   });
 
   it('vẫn cho qua nghĩa trang A — vai được gán tới đâu thì với tới đó', async () => {
     const svc = buildPerCode(KIEM_TOAN_KIEM_QUAN_LY);
-    await expect(svc.assertSiteFor('u1', 'burial.record.cancel', 'nt-A')).resolves.toBeUndefined();
+    await expect(
+      svc.assertPlotFor('u1', 'burial.record.cancel', 'co-a', 'nt-A'),
+    ).resolves.toBeUndefined();
   });
 
   it('được gán thêm vai phụ trách B thì chạm được B', async () => {
     const svc = buildPerCode({ ...KIEM_TOAN_KIEM_QUAN_LY, siteIds: ['nt-A', 'nt-B'] });
-    await expect(svc.assertSiteFor('u1', 'burial.record.cancel', 'nt-B')).resolves.toBeUndefined();
+    await expect(
+      svc.assertPlotFor('u1', 'burial.record.cancel', 'co-a', 'nt-B'),
+    ).resolves.toBeUndefined();
   });
 
   it('mã mà vai kiểm toán THẬT SỰ cấp ở mức GROUP thì vẫn với tới cả tập đoàn', async () => {
     // Không phải "chặn tất cho chắc": quyền đọc toàn tập đoàn là thứ vai đó có thật.
     const svc = buildPerCode(KIEM_TOAN_KIEM_QUAN_LY);
-    await expect(svc.assertSiteFor('u1', 'burial.record.export', 'nt-B')).resolves.toBeUndefined();
+    await expect(
+      svc.assertPlotFor('u1', 'burial.record.export', 'co-a', 'nt-B'),
+    ).resolves.toBeUndefined();
   });
 
   it('thiếu mã quyền thì TỪ CHỐI, không rơi về mức toàn-người-gọi', async () => {
     const svc = buildPerCode(KIEM_TOAN_KIEM_QUAN_LY);
-    await expect(svc.assertSiteFor('u1', null, 'nt-A')).rejects.toThrow(
+    await expect(svc.assertPlotFor('u1', null, 'co-a', 'nt-A')).rejects.toThrow(
       /Không xác định được mã quyền/,
     );
     await expect(svc.assertCompanyFor('u1', undefined, 'co-a')).rejects.toThrow(
@@ -283,11 +305,11 @@ describe('mức NONE — không được xử như COMPANY hay như SITE', () =>
     );
   });
 
-  it('assertSiteFor: từ chối CHÍNH nghĩa trang người đó phụ trách', async () => {
+  it('assertPlotFor: từ chối CHÍNH nghĩa trang người đó phụ trách', async () => {
     const svc = buildPerCode(BI_LUAT_CHAN_NHUNG_VAN_DUOC_GAN);
-    await expect(svc.assertSiteFor('u1', 'cemetery.plot.view', 'ct-1')).rejects.toBeInstanceOf(
-      ForbiddenException,
-    );
+    await expect(
+      svc.assertPlotFor('u1', 'cemetery.plot.view', 'co-a', 'ct-1'),
+    ).rejects.toBeInstanceOf(ForbiddenException);
   });
 
   it('visibleCompanyIdsFor: KHÔNG trả danh sách công ty cho một mã không có phạm vi', async () => {
@@ -423,5 +445,71 @@ describe('trục CÔNG TY bó theo MÃ QUYỀN — vai nào cấp mã thì với
       'co-a',
       'co-b',
     ]);
+  });
+});
+
+/* ---- MỨC phải gắn với CÔNG TY, không phải một con số toàn cục ----
+ *
+ * Lỗ còn lại sau lượt 16/09: `grantScopeForCode` trả MỘT `level` = mức rộng nhất trong các
+ * vai phủ mã, rồi `checkSite` thoát sớm khi mức là COMPANY. Hai điều đó cộng lại nghĩa là
+ * mức lấy từ công ty NÀY xoá phép bó theo nghĩa trang ở công ty KIA.
+ *
+ * Người trong test: mức COMPANY ở công ty A (ví dụ Thu ngân), mức SITE ở công ty B (Quản lý
+ * nghĩa trang B1). Trước 17/09 phải gọi ĐỦ CẶP `assertCompanyFor` + `assertSiteFor`, và VẪN thủng — nay một lời gọi
+ * — và vẫn thủng, vì `level` toàn cục là COMPANY.
+ */
+function buildTwoCompaniesTwoLevels(siteIds: string[] = ['nt-b1']) {
+  const assignments = [
+    {
+      scope: null,
+      companyId: 'co-a',
+      role: {
+        code: 'THU_NGAN',
+        rolePermissions: [{ scope: 'COMPANY', permission: { code: 'cemetery.plot.update' } }],
+      },
+    },
+    {
+      scope: null,
+      companyId: 'co-b',
+      role: {
+        code: 'QL_NGHIA_TRANG',
+        rolePermissions: [{ scope: 'SITE', permission: { code: 'cemetery.plot.update' } }],
+      },
+    },
+  ];
+  const permissions = new PermissionsService({
+    roleAssignment: { findMany: vi.fn().mockResolvedValue(assignments) },
+    scopeAssignment: {
+      findMany: vi.fn().mockResolvedValue(siteIds.map((cemeteryId) => ({ cemeteryId }))),
+    },
+    accessRule: { findMany: vi.fn().mockResolvedValue([]) },
+    permission: { findUnique: vi.fn().mockResolvedValue(null) },
+  } as unknown as PrismaService);
+  return new ScopeService(permissions, new PolicyEvaluator());
+}
+
+const CODE_UPDATE = 'cemetery.plot.update';
+
+describe('mức gắn với CÔNG TY — mức ở công ty này không xoá phép bó nghĩa trang ở công ty kia', () => {
+  it('CHẶN nghĩa trang không phụ trách trong công ty mà vai chỉ cho mức SITE', async () => {
+    const svc = buildTwoCompaniesTwoLevels();
+    // Gọi đủ cặp, đúng như mọi nơi gọi vẫn làm.
+    await expect(svc.assertCompanyFor('u1', CODE_UPDATE, 'co-b')).resolves.toBeUndefined();
+    await expect(svc.assertPlotFor('u1', CODE_UPDATE, 'co-b', 'nt-b2')).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+  });
+
+  it('vẫn cho qua nghĩa trang ĐƯỢC phụ trách trong công ty đó', async () => {
+    const svc = buildTwoCompaniesTwoLevels();
+    await expect(svc.assertPlotFor('u1', CODE_UPDATE, 'co-b', 'nt-b1')).resolves.toBeUndefined();
+  });
+
+  /* Không phải "chặn tất cho chắc": ở công ty A vai cho mức COMPANY, nên mọi nghĩa trang
+   * trong A đều với tới được — kể cả nghĩa trang không có dòng phụ trách nào. */
+  it('công ty mà vai cho mức COMPANY thì KHÔNG bị bó theo nghĩa trang', async () => {
+    const svc = buildTwoCompaniesTwoLevels();
+    await expect(svc.assertCompanyFor('u1', CODE_UPDATE, 'co-a')).resolves.toBeUndefined();
+    await expect(svc.assertPlotFor('u1', CODE_UPDATE, 'co-a', 'nt-a9')).resolves.toBeUndefined();
   });
 });

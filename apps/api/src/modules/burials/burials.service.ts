@@ -62,8 +62,12 @@ export class BurialsService {
      * đâu đó. Xem chú thích dài ở `ScopeService.assertCompanyFor`: người vừa giữ vai kiểm
      * toán toàn tập đoàn (CHỈ ĐỌC) vừa giữ vai quản lý nghĩa trang A sẽ được coi là GROUP
      * nếu hỏi theo mức toàn-người-gọi, và huỷ được hồ sơ ở nghĩa trang B. */
-    await this.scope.assertCompanyFor(caller.userId, caller.permission, plot.companyId);
-    await this.scope.assertSiteFor(caller.userId, caller.permission, plot.cemeteryId);
+    await this.scope.assertPlotFor(
+      caller.userId,
+      caller.permission,
+      plot.companyId,
+      plot.cemeteryId,
+    );
     return plot;
   }
 

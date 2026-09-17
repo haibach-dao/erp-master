@@ -19,7 +19,7 @@ import { join, relative, sep } from 'node:path';
  * Test này là cái lưới cho tầng 2: thêm một method nhận `Caller` mà quên hỏi phạm vi là
  * gãy build, chứ không lặng lẽ thành lỗ thứ 8.
  *
- * HAI LƯỢT, vì có method UỶ NHIỆM. `BurialsService.verify` không tự gọi `assertSiteFor`;
+ * HAI LƯỢT, vì có method UỶ NHIỆM. `BurialsService.verify` không tự gọi `assertPlotFor`;
  * nó gọi `assertRecordInScope`, và hàm đó mới hỏi. Quét một lượt sẽ báo nhầm mọi chỗ uỷ
  * nhiệm — và báo nhầm làm hỏng cái lưới: người ta ghi bừa lý do miễn trừ cho đỡ đỏ, rồi
  * lần sau miễn trừ thật lọt theo (đúng bài học của ratchet lọc trạng thái).
@@ -27,17 +27,23 @@ import { join, relative, sep } from 'node:path';
 
 /* Hỏi phạm vi = gọi một trong NĂM hàm này. Chỉ còn bản THEO MÃ QUYỀN tồn tại.
  *
+ * `assertSiteFor` ĐÃ BỊ XOÁ (17/09/2026), thay bằng `assertPlotFor` — hàm hỏi CẢ HAI TRỤC
+ * trong MỘT lời gọi. Hai lý do, cả hai là lỗi đã xảy ra thật: gọi lẻ vế nghĩa trang thì
+ * mức COMPANY thoát ngay (đã cắn hai lần), và `level` là hợp trên MỌI công ty nên mức ở
+ * công ty này xoá phép bó nghĩa trang ở công ty kia — thủng NGAY CẢ KHI gọi đủ cặp. Danh
+ * sách này phải theo: để tên cũ lại thì cái lưới đang đo một hàm không còn tồn tại.
+ *
  * `levelFor` thêm 27/08/2026: nó trả về MỨC phạm vi cấp cho một mã, và có chỗ cần đúng nó
  * chứ không phải `assertCompanyFor` — `authz-matrix` sửa nội dung VAI, mà vai là dữ liệu
  * toàn cục không thuộc công ty nào, nên câu phải hỏi là "người này có ở mức GROUP không".
  * Thiếu `levelFor` trong danh sách thì cái lưới báo nhầm ba method đã bó phạm vi ĐÚNG cách
  * — và báo nhầm làm hỏng lưới, vì người ta sẽ ghi bừa lý do miễn trừ cho đỡ đỏ. */
 const SCOPE_CALL =
-  /\b(assertCompanyFor|assertSiteFor|visibleCompanyIdsFor|listSiteFilterFor|levelFor)\s*\(/;
+  /\b(assertCompanyFor|assertPlotFor|visibleCompanyIdsFor|listSiteFilterFor|levelFor)\s*\(/;
 
 /** Bản CŨ, tính phạm vi ở mức rộng nhất của người gọi. Đã xoá — canh để không ai dựng lại. */
 const CALLER_WIDE_SCOPE_DECL =
-  /^\s*async (assertCompany|assertSite|visibleCompanyIds|listSiteFilter)\s*\(/;
+  /^\s*async (assertCompany|assertSite|assertSiteFor|visibleCompanyIds|listSiteFilter)\s*\(/;
 
 const TAKES_CALLER = /\bcaller\s*:\s*Caller\b/;
 const METHOD_HEAD = /^ {2}(?:private |public |protected )?(?:async )?([A-Za-z_][\w]*)\s*\(/;

@@ -44,28 +44,27 @@ function build(over: { plot?: { companyId: string; cemeteryId: string } | null }
   } as unknown as PrismaService;
 
   const assertCompanyFor = vi.fn().mockResolvedValue(undefined);
-  const assertSiteFor = vi.fn().mockResolvedValue(undefined);
+  const assertPlotFor = vi.fn().mockResolvedValue(undefined);
   const svc = new CemeteryService(
     prisma,
-    { assertCompanyFor, assertSiteFor } as unknown as ScopeService,
+    { assertCompanyFor, assertPlotFor } as unknown as ScopeService,
     { record: vi.fn().mockResolvedValue(undefined) } as unknown as AuditService,
   );
-  return { svc, historyFindMany, historyCreate, plotUpdate, assertCompanyFor, assertSiteFor };
+  return { svc, historyFindMany, historyCreate, plotUpdate, assertCompanyFor, assertPlotFor };
 }
 
 describe('lịch sử trạng thái phần mộ — bó theo phạm vi', () => {
   it('hỏi cả hai trục theo phần mộ, kèm mã quyền đang thi hành', async () => {
-    const { svc, assertCompanyFor, assertSiteFor } = build();
+    const { svc, assertPlotFor } = build();
 
     await svc.getStatusHistory(PLOT, VIEWER);
 
-    expect(assertCompanyFor).toHaveBeenCalledWith('u1', 'cemetery.plot.view_history', 'co-1');
-    expect(assertSiteFor).toHaveBeenCalledWith('u1', 'cemetery.plot.view_history', SITE);
+    expect(assertPlotFor).toHaveBeenCalledWith('u1', 'cemetery.plot.view_history', 'co-1', SITE);
   });
 
   it('ngoài phạm vi thì KHÔNG đọc lịch sử', async () => {
-    const { svc, historyFindMany, assertSiteFor } = build();
-    assertSiteFor.mockRejectedValue(new ForbiddenException('không phụ trách nghĩa trang này'));
+    const { svc, historyFindMany, assertPlotFor } = build();
+    assertPlotFor.mockRejectedValue(new ForbiddenException('không phụ trách nghĩa trang này'));
 
     await expect(svc.getStatusHistory(PLOT, VIEWER)).rejects.toBeInstanceOf(ForbiddenException);
     expect(historyFindMany).not.toHaveBeenCalled();
@@ -80,17 +79,16 @@ describe('lịch sử trạng thái phần mộ — bó theo phạm vi', () => {
 
 describe('đổi trạng thái phần mộ — bản gom vẫn nói đúng điều cũ', () => {
   it('vẫn hỏi cả hai trục sau khi gom về helper chung', async () => {
-    const { svc, assertCompanyFor, assertSiteFor } = build();
+    const { svc, assertPlotFor } = build();
 
     await svc.changeGravePlotStatus(PLOT, { toStatus: 'Held' }, SETTER);
 
-    expect(assertCompanyFor).toHaveBeenCalledWith('u1', 'cemetery.plot.set_status', 'co-1');
-    expect(assertSiteFor).toHaveBeenCalledWith('u1', 'cemetery.plot.set_status', SITE);
+    expect(assertPlotFor).toHaveBeenCalledWith('u1', 'cemetery.plot.set_status', 'co-1', SITE);
   });
 
   it('ngoài phạm vi thì KHÔNG đổi trạng thái và không ghi lịch sử', async () => {
-    const { svc, plotUpdate, historyCreate, assertSiteFor } = build();
-    assertSiteFor.mockRejectedValue(new ForbiddenException('không phụ trách nghĩa trang này'));
+    const { svc, plotUpdate, historyCreate, assertPlotFor } = build();
+    assertPlotFor.mockRejectedValue(new ForbiddenException('không phụ trách nghĩa trang này'));
 
     await expect(
       svc.changeGravePlotStatus(PLOT, { toStatus: 'Held' }, SETTER),

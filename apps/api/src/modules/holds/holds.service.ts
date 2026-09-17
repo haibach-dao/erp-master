@@ -37,8 +37,12 @@ export class HoldsService {
     if (plot === null) {
       throw new NotFoundException('Không tìm thấy vị trí mộ');
     }
-    await this.scope.assertCompanyFor(caller.userId, caller.permission, plot.companyId);
-    await this.scope.assertSiteFor(caller.userId, caller.permission, plot.cemeteryId);
+    await this.scope.assertPlotFor(
+      caller.userId,
+      caller.permission,
+      plot.companyId,
+      plot.cemeteryId,
+    );
   }
 
   // Create a hold and move the plot Available -> Held atomically. Double-hold is blocked by

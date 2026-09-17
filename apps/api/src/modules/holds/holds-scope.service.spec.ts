@@ -66,7 +66,7 @@ function build(
   } as unknown as PrismaService;
 
   const assertCompanyFor = vi.fn().mockResolvedValue(undefined);
-  const assertSiteFor = vi.fn().mockResolvedValue(undefined);
+  const assertPlotFor = vi.fn().mockResolvedValue(undefined);
   const visibleCompanyIdsFor = vi.fn().mockResolvedValue(companies);
   const listSiteFilterFor = vi.fn().mockResolvedValue(sites);
 
@@ -75,7 +75,7 @@ function build(
     { record: vi.fn().mockResolvedValue(undefined) } as unknown as AuditService,
     {
       assertCompanyFor,
-      assertSiteFor,
+      assertPlotFor,
       visibleCompanyIdsFor,
       listSiteFilterFor,
     } as unknown as ScopeService,
@@ -88,28 +88,27 @@ function build(
     holdFindMany,
     plotFindUnique,
     assertCompanyFor,
-    assertSiteFor,
+    assertPlotFor,
   };
 }
 
 describe('giữ chỗ — GIỮ bó theo phần mộ', () => {
   it('hỏi cả hai trục theo phần mộ được giữ, kèm mã quyền', async () => {
-    const { svc, assertCompanyFor, assertSiteFor } = build({
+    const { svc, assertPlotFor } = build({
       plot: { companyId: 'co-1', cemeteryId: SITE },
     });
     // Mộ phải `Available` mới giữ được; dựng lại tx cho đúng luồng là việc của test khác.
     await svc.createHold({ gravePlotId: PLOT, customerId: 'cus-1' }, HOLDER).catch(() => undefined);
 
-    expect(assertCompanyFor).toHaveBeenCalledWith('u1', 'cemetery.hold.hold', 'co-1');
-    expect(assertSiteFor).toHaveBeenCalledWith('u1', 'cemetery.hold.hold', SITE);
+    expect(assertPlotFor).toHaveBeenCalledWith('u1', 'cemetery.hold.hold', 'co-1', SITE);
   });
 
   /* Phép kiểm đặt TRƯỚC giao dịch. Nếu nó nằm trong giao dịch thì một 403 vẫn phải kéo cả
    * giao dịch quay lui — làm được, nhưng là giữ khoá hàng trong lúc chờ một lời gọi ngoài
    * Prisma. Test này neo rằng không có dòng nào được ghi khi phạm vi từ chối. */
   it('ngoài phạm vi thì KHÔNG mở giao dịch, không tạo phiếu nào', async () => {
-    const { svc, holdCreate, assertSiteFor } = build();
-    assertSiteFor.mockRejectedValue(new ForbiddenException('không phụ trách nghĩa trang này'));
+    const { svc, holdCreate, assertPlotFor } = build();
+    assertPlotFor.mockRejectedValue(new ForbiddenException('không phụ trách nghĩa trang này'));
 
     await expect(
       svc.createHold({ gravePlotId: PLOT, customerId: 'cus-1' }, HOLDER),
@@ -128,18 +127,18 @@ describe('giữ chỗ — GIỮ bó theo phần mộ', () => {
 
 describe('giữ chỗ — NHẢ cũng bó, không chỉ giữ', () => {
   it('quy phiếu giữ về phần mộ rồi mới hỏi phạm vi', async () => {
-    const { svc, assertSiteFor } = build();
+    const { svc, assertPlotFor } = build();
 
     await svc.releaseHold('gh-1', RELEASER);
 
-    expect(assertSiteFor).toHaveBeenCalledWith('u1', 'cemetery.hold.release', SITE);
+    expect(assertPlotFor).toHaveBeenCalledWith('u1', 'cemetery.hold.release', 'co-1', SITE);
   });
 
   /* Bỏ sót chiều này là người ngoài phạm vi nhả được chỗ người khác đang giữ — mộ về
    * `Available`, tức mở đường cho người khác giữ hoặc mua. Phá hoại chỉ cần một chiều. */
   it('ngoài phạm vi thì KHÔNG nhả, phần mộ không bị kéo về Available', async () => {
-    const { svc, holdUpdate, plotUpdate, assertCompanyFor } = build();
-    assertCompanyFor.mockRejectedValue(new ForbiddenException('Ngoài phạm vi được gán'));
+    const { svc, holdUpdate, plotUpdate, assertPlotFor } = build();
+    assertPlotFor.mockRejectedValue(new ForbiddenException('Ngoài phạm vi được gán'));
 
     await expect(svc.releaseHold('gh-1', RELEASER)).rejects.toBeInstanceOf(ForbiddenException);
     expect(holdUpdate).not.toHaveBeenCalled();
@@ -201,16 +200,16 @@ describe('giữ chỗ — DANH SÁCH bó theo phạm vi', () => {
   });
 
   it('lọc theo MỘT phần mộ thì phần mộ đó phải trong phạm vi', async () => {
-    const { svc, assertSiteFor } = build();
+    const { svc, assertPlotFor } = build();
 
     await svc.listHolds(VIEWER, PLOT);
 
-    expect(assertSiteFor).toHaveBeenCalledWith('u1', 'cemetery.hold.view', SITE);
+    expect(assertPlotFor).toHaveBeenCalledWith('u1', 'cemetery.hold.view', 'co-1', SITE);
   });
 
   it('lọc theo phần mộ ngoài phạm vi thì 403, không lặng lẽ trả cả công ty', async () => {
-    const { svc, assertSiteFor } = build();
-    assertSiteFor.mockRejectedValue(new ForbiddenException('không phụ trách nghĩa trang này'));
+    const { svc, assertPlotFor } = build();
+    assertPlotFor.mockRejectedValue(new ForbiddenException('không phụ trách nghĩa trang này'));
 
     await expect(svc.listHolds(VIEWER, PLOT)).rejects.toBeInstanceOf(ForbiddenException);
   });

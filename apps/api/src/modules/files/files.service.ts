@@ -190,8 +190,12 @@ export class FilesService {
     if (plot === null) {
       throw new ForbiddenException(SCOPE_UNRESOLVED);
     }
-    await this.scope.assertCompanyFor(caller.userId, caller.permission, plot.companyId);
-    await this.scope.assertSiteFor(caller.userId, caller.permission, plot.cemeteryId);
+    await this.scope.assertPlotFor(
+      caller.userId,
+      caller.permission,
+      plot.companyId,
+      plot.cemeteryId,
+    );
   }
 
   async getDownloadUrl(id: string, caller: Caller) {

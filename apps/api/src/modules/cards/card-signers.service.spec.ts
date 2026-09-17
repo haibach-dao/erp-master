@@ -119,7 +119,7 @@ function build(opts: BuildOpts = {}) {
     $transaction: ReturnType<typeof vi.fn>;
   };
 
-  const assertSiteFor = vi.fn().mockResolvedValue(undefined);
+  const assertPlotFor = vi.fn().mockResolvedValue(undefined);
   const assertCompanyFor = vi.fn().mockResolvedValue(undefined);
   const listSiteFilterFor = vi
     .fn()
@@ -128,7 +128,7 @@ function build(opts: BuildOpts = {}) {
     .fn()
     .mockResolvedValue(opts.companyFilter === undefined ? null : opts.companyFilter);
   const scope = {
-    assertSiteFor,
+    assertPlotFor,
     assertCompanyFor,
     listSiteFilterFor,
     visibleCompanyIdsFor,
@@ -141,7 +141,7 @@ function build(opts: BuildOpts = {}) {
     prisma,
     tx,
     record,
-    assertSiteFor,
+    assertPlotFor,
     assertCompanyFor,
     listSiteFilterFor,
     visibleCompanyIdsFor,
@@ -248,31 +248,30 @@ describe('danh mục người ký thẻ mộ', () => {
   /* ---------- Phạm vi ---------- */
 
   it('bó phạm vi theo nghĩa trang lúc TẠO, dùng đúng mã quyền của người gọi', async () => {
-    const { svc, assertSiteFor } = build();
+    const { svc, assertPlotFor } = build();
     await svc.create(NEW_SIGNER, CALLER);
-    expect(assertSiteFor).toHaveBeenCalledWith(CALLER.userId, CALLER.permission, CEM);
+    expect(assertPlotFor).toHaveBeenCalledWith(CALLER.userId, CALLER.permission, 'cty-A', CEM);
   });
 
   /* CA BẮT LỖI SỐ 1 — đường mà bản đầu của lát này để hở.
    *
-   * `ScopeService.checkSite` THOÁT NGAY khi mức là GROUP *hoặc COMPANY*, kèm chú thích nói
-   * thẳng "that company check is a separate call the caller already makes". Chỉ gọi
-   * `assertSiteFor` thì một tài khoản mức COMPANY của công ty A đọc/ghi được danh mục người
-   * ký của công ty B — `assertSiteFor` không chặn một câu nào. Ca này canh CHÍNH lời gọi
-   * còn thiếu đó, ở cả ba đường. */
-  it('bó CẢ TRỤC CÔNG TY, không chỉ nghĩa trang — assertSiteFor một mình KHÔNG chặn mức COMPANY', async () => {
-    const { svc, assertCompanyFor } = build();
+   * Bản cũ có HAI hàm và phải gọi đủ cặp; quên vế công ty thì một tài khoản mức COMPANY của
+   * công ty A đọc/ghi được danh mục người ký của công ty B. Từ 17/09/2026 chỉ còn MỘT hàm
+   * mang cả hai trục, nên không quên được nữa — ca này canh việc công ty truyền vào là công
+   * ty CỦA NGHĨA TRANG, ở cả ba đường. */
+  it('bó CẢ TRỤC CÔNG TY, không chỉ nghĩa trang — cả ba đường đều mang công ty của nghĩa trang', async () => {
+    const { svc, assertPlotFor } = build();
 
     await svc.create(NEW_SIGNER, CALLER);
-    expect(assertCompanyFor).toHaveBeenCalledWith(CALLER.userId, CALLER.permission, 'cty-A');
+    expect(assertPlotFor).toHaveBeenCalledWith(CALLER.userId, CALLER.permission, 'cty-A', CEM);
 
-    assertCompanyFor.mockClear();
+    assertPlotFor.mockClear();
     await svc.list(CALLER, CEM);
-    expect(assertCompanyFor).toHaveBeenCalledWith(CALLER.userId, CALLER.permission, 'cty-A');
+    expect(assertPlotFor).toHaveBeenCalledWith(CALLER.userId, CALLER.permission, 'cty-A', CEM);
 
-    assertCompanyFor.mockClear();
+    assertPlotFor.mockClear();
     await svc.update('s1', { isDefault: true }, CALLER);
-    expect(assertCompanyFor).toHaveBeenCalledWith(CALLER.userId, CALLER.permission, 'cty-A');
+    expect(assertPlotFor).toHaveBeenCalledWith(CALLER.userId, CALLER.permission, 'cty-A', CEM);
   });
 
   /* CA BẮT LỖI SỐ 2 — fail-open khi danh sách RỖNG.
@@ -304,8 +303,8 @@ describe('danh mục người ký thẻ mộ', () => {
    * thứ tự đã dựng cho `contracts.verify` 27/08/2026. Kiểm trạng thái trước thì câu lỗi 400
    * đã kể cho người ngoài phạm vi biết dòng này tồn tại và đang ở trạng thái nào. */
   it('lúc SỬA thì bó phạm vi TRƯỚC khi kiểm trạng thái, không rò trạng thái ra ngoài phạm vi', async () => {
-    const { svc, assertSiteFor } = build({ existing: { ...SIGNER, status: 'Retired' } });
-    assertSiteFor.mockRejectedValue(new Error('Ngoài phạm vi được gán'));
+    const { svc, assertPlotFor } = build({ existing: { ...SIGNER, status: 'Retired' } });
+    assertPlotFor.mockRejectedValue(new Error('Ngoài phạm vi được gán'));
 
     /* Dòng này VỐN sẽ ném BadRequest ("đã ngừng dùng thì không đặt mặc định được"). Nếu phép
      * kiểm phạm vi bị đặt xuống sau, người ngoài phạm vi sẽ nhận đúng câu đó — tức là biết

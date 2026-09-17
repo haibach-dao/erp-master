@@ -689,15 +689,16 @@ export class CardApprovalsService {
     return `Khách này đã có một hồ sơ đang chờ duyệt do ${who} gửi lúc ${when}. Bạn không huỷ được hồ sơ của người khác — chờ người ký quyết, hoặc nhờ ${who} huỷ rồi gửi lại.`;
   }
 
-  /* Bó CẢ HAI TRỤC — công ty TRƯỚC, rồi nghĩa trang.
+  /* Bó CẢ HAI TRỤC, bằng MỘT lời gọi.
    *
-   * `assertSiteFor` MỘT MÌNH KHÔNG ĐỦ: `ScopeService.checkSite` thoát ngay khi mức là GROUP
-   * *hoặc COMPANY*, kèm chú thích "that company check is a separate call the caller already
-   * makes". Đây đúng lỗ đã để hở ở lát 0 và bị một lượt soi độc lập bắt — không tái diễn.
+   * Trước 17/09/2026 đây là cặp `assertCompanyFor` + `assertSiteFor`, và quên vế công ty là
+   * lỗ đã để hở ở lát 0 rồi bị một lượt soi độc lập bắt. `ScopeService.assertPlotFor` nay
+   * nhận cả hai trục nên không quên được nữa — và nó còn bịt một lỗ thứ hai mà cặp cũ không
+   * bịt được: mức trong `level` là hợp trên MỌI công ty, nên mức ở công ty này xoá phép bó
+   * nghĩa trang ở công ty kia.
    */
   private async assertInScope(caller: Caller, companyId: string, cemeteryId: string) {
-    await this.scope.assertCompanyFor(caller.userId, caller.permission, companyId);
-    await this.scope.assertSiteFor(caller.userId, caller.permission, cemeteryId);
+    await this.scope.assertPlotFor(caller.userId, caller.permission, companyId, cemeteryId);
   }
 
   /* Dịch lỗi trùng của CSDL thành câu người đọc hiểu — và PHẢI ĐÚNG INDEX NÀO.

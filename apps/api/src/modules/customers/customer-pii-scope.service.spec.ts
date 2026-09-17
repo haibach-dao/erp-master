@@ -52,14 +52,14 @@ function build(
   } as unknown as PrismaService;
 
   const assertCompanyFor = vi.fn().mockResolvedValue(undefined);
-  const assertSiteFor = vi.fn().mockResolvedValue(undefined);
+  const assertPlotFor = vi.fn().mockResolvedValue(undefined);
   const svc = new CustomersService(
     prisma,
     { decrypt } as unknown as PiiService,
     { record } as unknown as AuditService,
-    { assertCompanyFor, assertSiteFor } as unknown as ScopeService,
+    { assertCompanyFor, assertPlotFor } as unknown as ScopeService,
   );
-  return { svc, decrypt, record, assertCompanyFor, assertSiteFor };
+  return { svc, decrypt, record, assertCompanyFor, assertPlotFor };
 }
 
 describe('đọc CCCD đầy đủ — phạm vi quy qua bản ghi có neo', () => {
@@ -74,27 +74,25 @@ describe('đọc CCCD đầy đủ — phạm vi quy qua bản ghi có neo', () 
   /* `Customer.companyId` CHO PHÉP NULL. "Chỉ kiểm khi khác null" ở đây chính là fail-open:
    * mọi khách chưa gán công ty thành cửa mở. Null phải RƠI SANG neo sau, không phải cho qua. */
   it('khách chưa gán công ty thì RƠI SANG hồ sơ an táng, không phải cho qua', async () => {
-    const { svc, assertCompanyFor, assertSiteFor } = build({
+    const { svc, assertPlotFor } = build({
       customer: { companyId: null },
       burial: { gravePlotId: 'plot-1' },
     });
 
     await svc.revealNationalId(PERSON, CALLER);
 
-    expect(assertCompanyFor).toHaveBeenCalledWith('u1', 'crm.person.view_sensitive', 'co-1');
-    expect(assertSiteFor).toHaveBeenCalledWith('u1', 'crm.person.view_sensitive', 'nt-1');
+    expect(assertPlotFor).toHaveBeenCalledWith('u1', 'crm.person.view_sensitive', 'co-1', 'nt-1');
   });
 
   it('không phải khách nhưng CÓ hồ sơ an táng thì quy qua phần mộ — cả hai trục', async () => {
-    const { svc, assertCompanyFor, assertSiteFor } = build({
+    const { svc, assertPlotFor } = build({
       customer: null,
       burial: { gravePlotId: 'plot-1' },
     });
 
     await svc.revealNationalId(PERSON, CALLER);
 
-    expect(assertCompanyFor).toHaveBeenCalledWith('u1', 'crm.person.view_sensitive', 'co-1');
-    expect(assertSiteFor).toHaveBeenCalledWith('u1', 'crm.person.view_sensitive', 'nt-1');
+    expect(assertPlotFor).toHaveBeenCalledWith('u1', 'crm.person.view_sensitive', 'co-1', 'nt-1');
   });
 
   it('không quy được về đâu thì TỪ CHỐI — mặc định của đường đọc CCCD phải là chặn', async () => {

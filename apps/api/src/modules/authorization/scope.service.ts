@@ -60,13 +60,34 @@ export class ScopeService {
     this.checkCompany(subject, level, companyId);
   }
 
-  async assertSiteFor(
+  /* MỘT phần mộ / MỘT nghĩa trang, hỏi CẢ HAI TRỤC trong CÙNG một câu.
+   *
+   * Thay cho cặp `assertCompanyFor` + `assertSiteFor` từng phải gọi liền nhau. Gộp lại vì
+   * HAI lý do, cả hai đều là lỗi đã xảy ra thật:
+   *
+   * 1. QUÊN GỌI VẾ CÔNG TY — đã cắn hai lần (xem chú thích ở `CardSignersService` và
+   *    `CardApprovalsService`). Gọi mỗi vế nghĩa trang thì mức COMPANY thoát ngay, và người
+   *    ở công ty A đọc được dữ liệu công ty B. Nay không còn hàm nào để gọi lẻ.
+   *
+   * 2. MỨC KHÔNG GẮN VỚI CÔNG TY — lỗ tìm ra 17/09/2026, và nó thủng NGAY CẢ KHI nơi gọi đã
+   *    gọi đủ cặp. `level` là hợp trên MỌI công ty, nên mức COMPANY lấy từ công ty A làm
+   *    `checkSite` thoát sớm ở công ty B, xoá luôn phép bó theo nghĩa trang tại B. Người vừa
+   *    là Thu ngân công ty A vừa là Quản lý nghĩa trang B1 chạm được mọi nghĩa trang của
+   *    công ty B. Chỉ hỏi được đúng câu này khi biết CẢ hai vế cùng lúc — đó là lý do hai
+   *    tham số đi chung một hàm chứ không phải hai lời gọi.
+   *
+   * `companyId` lấy từ CHÍNH bản ghi (`plot.companyId`, `cemetery.companyId`), không phải từ
+   * client — cùng nếp với `assertCompanyFor`.
+   */
+  async assertPlotFor(
     userId: string | null,
     code: string | null | undefined,
+    companyId: string | null | undefined,
     cemeteryId: string | null | undefined,
   ): Promise<void> {
-    const { subject, level } = await this.loadFor(userId, code);
-    this.checkSite(subject, level, cemeteryId);
+    const { subject, level, levelByCompany } = await this.loadFor(userId, code);
+    this.checkCompany(subject, level, companyId);
+    this.checkSite(level, levelByCompany, subject, companyId, cemeteryId);
   }
 
   /** Companies visible FOR ONE CODE, or `null` meaning "no restriction". */
@@ -107,10 +128,33 @@ export class ScopeService {
     }
   }
 
-  private checkSite(subject: Subject, level: ScopeLevel, cemeteryId: string | null | undefined) {
-    // GROUP reaches everything; COMPANY covers every cemetery inside the companies the
-    // caller holds, and that company check is a separate call the caller already makes.
-    if (level === 'GROUP' || level === 'COMPANY') {
+  /* Trục nghĩa trang, hỏi bằng mức TẠI CÔNG TY của chính nghĩa trang đó.
+   *
+   * Bản trước hỏi bằng `level` — mức rộng nhất trên MỌI công ty — và thoát sớm khi nó là
+   * COMPANY. Câu chú thích cũ ("COMPANY covers every cemetery inside the companies the caller
+   * holds") đúng cho MỘT công ty, nhưng `level` không nói nó đến từ công ty nào. Với người
+   * giữ vai ở hai công ty hai mức khác nhau, mức của công ty rộng hơn đè lên công ty kia.
+   *
+   * GROUP vẫn thoát ngay: nó là "không giới hạn bản ghi", không gắn công ty nào.
+   */
+  private checkSite(
+    level: ScopeLevel,
+    levelByCompany: Record<string, 'COMPANY' | 'SITE'>,
+    subject: Subject,
+    companyId: string | null | undefined,
+    cemeteryId: string | null | undefined,
+  ) {
+    if (level === 'GROUP') {
+      return;
+    }
+    /* `checkCompany` đã chạy trước và đã từ chối công ty ngoài phạm vi, nên tới đây khoá này
+     * phải có. Không có nghĩa là hai phép kiểm đã lệch nhau — từ chối, đừng đoán. */
+    const tai =
+      companyId === null || companyId === undefined ? undefined : levelByCompany[companyId];
+    if (tai === undefined) {
+      throw new ForbiddenException('Ngoài phạm vi được gán: công ty này không thuộc quyền của bạn');
+    }
+    if (tai === 'COMPANY') {
       return;
     }
     if (isBlank(cemeteryId)) {
@@ -136,7 +180,11 @@ export class ScopeService {
   private async loadFor(
     userId: string | null,
     code: string | null | undefined,
-  ): Promise<{ subject: Subject; level: ScopeLevel }> {
+  ): Promise<{
+    subject: Subject;
+    level: ScopeLevel;
+    levelByCompany: Record<string, 'COMPANY' | 'SITE'>;
+  }> {
     if (userId === null) {
       throw new ForbiddenException('Chưa xác thực');
     }
@@ -145,7 +193,7 @@ export class ScopeService {
         'Không xác định được mã quyền đang thi hành — không kiểm được phạm vi',
       );
     }
-    const { level, companyIds, siteIds } = await this.permissions.scopeForCode(
+    const { level, companyIds, siteIds, levelByCompany } = await this.permissions.scopeForCode(
       userId,
       code as string,
     );
@@ -194,7 +242,7 @@ export class ScopeService {
         'Không có phạm vi cho mã quyền đang thi hành: không vai nào cấp nó ở một mức hệ thực thi được',
       );
     }
-    return { subject: { userId, companyIds, siteIds }, level };
+    return { subject: { userId, companyIds, siteIds }, level, levelByCompany };
   }
 
   /* Scope level for one permission code, unioned across the grants that cover it.

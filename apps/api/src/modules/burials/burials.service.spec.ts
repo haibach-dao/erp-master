@@ -33,16 +33,23 @@ function scopeStub(
 ) {
   const { allowedSites = null, allowedCompanies = null } = opts;
   const seen: { code: string | null; siteId?: string | null; companyId?: string | null }[] = [];
-  const assertSiteFor = vi.fn((_u: string | null, code: string | null, siteId: string | null) => {
-    seen.push({ code, siteId });
-    if (code === null || code === undefined) {
-      return Promise.reject(new ForbiddenException('Không xác định được mã quyền đang thi hành'));
-    }
-    if (allowedSites !== null && !allowedSites.includes(siteId ?? '')) {
-      return Promise.reject(new ForbiddenException('Ngoài phạm vi được gán'));
-    }
-    return Promise.resolve();
-  });
+  /* `assertPlotFor` hỏi CẢ HAI TRỤC một lần (từ 17/09/2026), nên stub cũng phải kiểm cả hai
+   * — kiểm mỗi nghĩa trang là dựng lại đúng cái lỗ mà hàm đó sinh ra để bịt. */
+  const assertPlotFor = vi.fn(
+    (_u: string | null, code: string | null, companyId: string | null, siteId: string | null) => {
+      seen.push({ code, siteId, companyId });
+      if (code === null || code === undefined) {
+        return Promise.reject(new ForbiddenException('Không xác định được mã quyền đang thi hành'));
+      }
+      if (allowedCompanies !== null && !allowedCompanies.includes(companyId ?? '')) {
+        return Promise.reject(new ForbiddenException('Ngoài phạm vi được gán'));
+      }
+      if (allowedSites !== null && !allowedSites.includes(siteId ?? '')) {
+        return Promise.reject(new ForbiddenException('Ngoài phạm vi được gán'));
+      }
+      return Promise.resolve();
+    },
+  );
   const assertCompanyFor = vi.fn(
     (_u: string | null, code: string | null, companyId: string | null) => {
       seen.push({ code, companyId });
@@ -56,12 +63,12 @@ function scopeStub(
     },
   );
   const scope = {
-    assertSiteFor,
+    assertPlotFor,
     assertCompanyFor,
     visibleCompanyIdsFor: vi.fn().mockResolvedValue(allowedCompanies),
     listSiteFilterFor: vi.fn().mockResolvedValue(allowedSites),
   } as unknown as ScopeService;
-  return { scope, seen, assertSiteFor, assertCompanyFor };
+  return { scope, seen, assertPlotFor, assertCompanyFor };
 }
 
 /** Mộ dùng cho mọi test — nằm ở nghĩa trang A. */
@@ -208,9 +215,9 @@ function build(
     },
   } as unknown as PrismaService;
 
-  const { scope, assertSiteFor } = scopeStub({ allowedSites });
+  const { scope, assertPlotFor } = scopeStub({ allowedSites });
   const svc = new BurialsService(prisma, { record } as unknown as AuditService, scope);
-  return { svc, record, create, assertSiteFor };
+  return { svc, record, create, assertPlotFor };
 }
 
 const dto = { gravePlotId: PLOT, deceasedPersonId: DECEASED };
@@ -803,11 +810,11 @@ describe('huỷ hồ sơ an táng', () => {
         findUnique: vi.fn().mockResolvedValue(plotRow(scopeOpts.cemeteryId ?? CEMETERY_A)),
       },
     } as unknown as PrismaService;
-    const { scope, assertSiteFor } = scopeStub({
+    const { scope, assertPlotFor } = scopeStub({
       allowedSites: scopeOpts.allowedSites ?? null,
     });
     const svc = new BurialsService(prisma, { record } as unknown as AuditService, scope);
-    return { svc, update, record, assertSiteFor };
+    return { svc, update, record, assertPlotFor };
   }
 
   const dtoCancel = { reason: 'nhập nhầm người' };
@@ -928,9 +935,9 @@ describe('phạm vi hồ sơ an táng — theo VAI ĐƯỢC GÁN, không theo ch
         }),
       },
     } as unknown as PrismaService;
-    const { scope, assertSiteFor } = scopeStub({ allowedSites: opts.allowedSites });
+    const { scope, assertPlotFor } = scopeStub({ allowedSites: opts.allowedSites });
     const svc = new BurialsService(prisma, { record: vi.fn() } as unknown as AuditService, scope);
-    return { svc, update, findMany, assertSiteFor, plotFindMany: prisma.gravePlot.findMany };
+    return { svc, update, findMany, assertPlotFor, plotFindMany: prisma.gravePlot.findMany };
   }
 
   it('CHIỀU ĐỎ: phụ trách nghĩa trang A thì KHÔNG huỷ được hồ sơ ở nghĩa trang B', async () => {
@@ -963,11 +970,11 @@ describe('phạm vi hồ sơ an táng — theo VAI ĐƯỢC GÁN, không theo ch
     /* Đây là mấu chốt, và là chỗ bản cũ để lọt: người vừa giữ vai kiểm toán toàn tập đoàn
      * (CHỈ ĐỌC) vừa giữ vai quản lý nghĩa trang A có mức toàn-người-gọi là GROUP. Hỏi phạm
      * vi theo mức đó thì `assertSite` thoát ngay dòng đầu và họ huỷ được hồ sơ ở B. */
-    const { svc, assertSiteFor } = buildScoped({ allowedSites: [CEMETERY_A] });
+    const { svc, assertPlotFor } = buildScoped({ allowedSites: [CEMETERY_A] });
 
     await svc.cancel('br-1', { reason: 'thử' }, CALLER_CANCEL);
 
-    expect(assertSiteFor).toHaveBeenCalledWith('u1', 'burial.record.cancel', CEMETERY_A);
+    expect(assertPlotFor).toHaveBeenCalledWith('u1', 'burial.record.cancel', COMPANY, CEMETERY_A);
   });
 
   it.each([

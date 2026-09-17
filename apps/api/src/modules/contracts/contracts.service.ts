@@ -105,14 +105,22 @@ export class ContractsService {
     await this.scope.assertCompanyFor(caller.userId, caller.permission, contract.companyId);
     const plot = await this.prisma.gravePlot.findUnique({
       where: { id: contract.gravePlotId },
-      select: { cemeteryId: true },
+      select: { companyId: true, cemeteryId: true },
     });
     if (plot === null) {
       throw new ForbiddenException(
         'Không quy được phần mộ của hợp đồng về nghĩa trang nào — không kiểm được phạm vi',
       );
     }
-    await this.scope.assertSiteFor(caller.userId, caller.permission, plot.cemeteryId);
+    /* Hỏi theo công ty của PHẦN MỘ, không theo công ty của hợp đồng: hai giá trị lẽ ra trùng
+     * nhau nhưng không có ràng buộc nào ép thế, và bản ghi đang bị chạm tới là phần mộ. Vế
+     * công ty của hợp đồng đã hỏi ở trên, nên cả hai đều phải nằm trong phạm vi. */
+    await this.scope.assertPlotFor(
+      caller.userId,
+      caller.permission,
+      plot.companyId,
+      plot.cemeteryId,
+    );
   }
 
   async verify(id: string, caller: Caller) {
@@ -407,12 +415,17 @@ export class ContractsService {
       // Hỏi đúng MỘT phần mộ: phần mộ đó phải nằm trong nghĩa trang người gọi phụ trách.
       const plot = await this.prisma.gravePlot.findUnique({
         where: { id: gravePlotId },
-        select: { cemeteryId: true },
+        select: { companyId: true, cemeteryId: true },
       });
       if (plot === null) {
         throw new NotFoundException('Không tìm thấy phần mộ');
       }
-      await this.scope.assertSiteFor(caller.userId, caller.permission, plot.cemeteryId);
+      await this.scope.assertPlotFor(
+        caller.userId,
+        caller.permission,
+        plot.companyId,
+        plot.cemeteryId,
+      );
       where.gravePlotId = gravePlotId;
     } else {
       const sites = await this.scope.listSiteFilterFor(caller.userId, caller.permission);

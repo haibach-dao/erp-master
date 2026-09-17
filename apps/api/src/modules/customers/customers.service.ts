@@ -1221,7 +1221,31 @@ export class CustomersService {
       return null;
     }
     if (cemeteryId !== null) {
-      await this.scope.assertSiteFor(caller.userId, caller.permission, cemeteryId);
+      /* HAI TRỤC, hỏi một lần — và trục CÔNG TY trước đây thiếu hẳn ở đây.
+       *
+       * Bản trước chỉ gọi vế nghĩa trang, mà phép kiểm đó thoát ngay khi mức là
+       * COMPANY. Nên người mức COMPANY của công ty A lọc được khách theo một nghĩa trang bất
+       * kỳ của công ty B — cùng lớp lỗ đã cắn hai lần ở `CardSignersService` và
+       * `CardApprovalsService`.
+       *
+       * Công ty lấy từ CHÍNH nghĩa trang, không lấy từ `filters.companyId`: bộ lọc công ty là
+       * tuỳ chọn và do client gửi, còn "nghĩa trang này thuộc công ty nào" là dữ liệu. Không
+       * tra ra nghĩa trang thì TỪ CHỐI — không quy được về đâu thì không kiểm được gì. */
+      const cemetery = await this.prisma.cemetery.findUnique({
+        where: { id: cemeteryId },
+        select: { companyId: true },
+      });
+      if (cemetery === null) {
+        throw new ForbiddenException(
+          'Không quy được nghĩa trang này về công ty nào — không kiểm được phạm vi',
+        );
+      }
+      await this.scope.assertPlotFor(
+        caller.userId,
+        caller.permission,
+        cemetery.companyId,
+        cemeteryId,
+      );
     }
 
     /* "Chưa đứng tên mộ" + một nghĩa trang cụ thể là câu hỏi VÔ NGHĨA: "không đứng tên mộ
@@ -1465,8 +1489,12 @@ export class CustomersService {
         select: { companyId: true, cemeteryId: true },
       });
       if (plot !== null) {
-        await this.scope.assertCompanyFor(caller.userId, caller.permission, plot.companyId);
-        await this.scope.assertSiteFor(caller.userId, caller.permission, plot.cemeteryId);
+        await this.scope.assertPlotFor(
+          caller.userId,
+          caller.permission,
+          plot.companyId,
+          plot.cemeteryId,
+        );
         return true;
       }
     }

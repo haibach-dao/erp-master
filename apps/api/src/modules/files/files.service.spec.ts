@@ -86,7 +86,7 @@ function build(opts: {
     );
 
   const assertCompanyFor = vi.fn().mockResolvedValue(undefined);
-  const assertSiteFor = vi.fn().mockResolvedValue(undefined);
+  const assertPlotFor = vi.fn().mockResolvedValue(undefined);
 
   const svc = new FilesService(
     {
@@ -99,7 +99,7 @@ function build(opts: {
     { get: (key: string) => env[key] } as never,
     { record } as unknown as AuditService,
     { getGrants, getPermissionMeta } as unknown as PermissionsService,
-    { assertCompanyFor, assertSiteFor } as unknown as ScopeService,
+    { assertCompanyFor, assertPlotFor } as unknown as ScopeService,
   );
   return {
     svc,
@@ -108,7 +108,7 @@ function build(opts: {
     record,
     getGrants,
     assertCompanyFor,
-    assertSiteFor,
+    assertPlotFor,
     plotFindUnique,
   };
 }
@@ -240,19 +240,18 @@ describe('FilesService — an env flag must not be what decides security', () =>
  */
 describe('FilesService — phạm vi quy ngược từ bản ghi đang trỏ tới file', () => {
   it('file của HỢP ĐỒNG: quy về công ty của hợp đồng và nghĩa trang của phần mộ', async () => {
-    const { svc, assertCompanyFor, assertSiteFor } = build({
+    const { svc, assertPlotFor } = build({
       file: fileRow({ sensitivity: 'normal' }),
       contract: { companyId: 'co-1', gravePlotId: 'plot-1' },
     });
 
     await svc.getMeta('file-1', view(OTHER));
 
-    expect(assertCompanyFor).toHaveBeenCalledWith(OTHER, 'file.object.view', 'co-1');
-    expect(assertSiteFor).toHaveBeenCalledWith(OTHER, 'file.object.view', SITE);
+    expect(assertPlotFor).toHaveBeenCalledWith(OTHER, 'file.object.view', 'co-1', SITE);
   });
 
   it('file GIẤY TỜ PHÁP LÝ của hồ sơ an táng: quy về nghĩa trang của phần mộ', async () => {
-    const { svc, assertSiteFor } = build({
+    const { svc, assertPlotFor } = build({
       file: fileRow({ sensitivity: 'normal' }),
       contract: null,
       burial: { gravePlotId: 'plot-1' },
@@ -260,11 +259,11 @@ describe('FilesService — phạm vi quy ngược từ bản ghi đang trỏ t�
 
     await svc.getMeta('file-1', view(OTHER));
 
-    expect(assertSiteFor).toHaveBeenCalledWith(OTHER, 'file.object.view', SITE);
+    expect(assertPlotFor).toHaveBeenCalledWith(OTHER, 'file.object.view', 'co-1', SITE);
   });
 
   it('GIẤY CHỨNG TỬ: quy qua hồ sơ an táng của người đã mất', async () => {
-    const { svc, assertSiteFor } = build({
+    const { svc, assertPlotFor } = build({
       file: fileRow({ sensitivity: 'normal' }),
       contract: null,
       burial: null,
@@ -274,7 +273,7 @@ describe('FilesService — phạm vi quy ngược từ bản ghi đang trỏ t�
 
     await svc.getMeta('file-1', view(OTHER));
 
-    expect(assertSiteFor).toHaveBeenCalledWith(OTHER, 'file.object.view', SITE);
+    expect(assertPlotFor).toHaveBeenCalledWith(OTHER, 'file.object.view', 'co-1', SITE);
   });
 
   it('giấy chứng tử của người CHƯA có hồ sơ an táng thì TỪ CHỐI, không cho qua', async () => {
@@ -332,10 +331,10 @@ describe('FilesService — phạm vi quy ngược từ bản ghi đang trỏ t�
   });
 
   it('ngoài phạm vi thì KHÔNG phát URL tải, dù file đã scan sạch', async () => {
-    const { svc, assertSiteFor } = build({
+    const { svc, assertPlotFor } = build({
       file: fileRow({ sensitivity: 'normal', scanStatus: 'clean' }),
     });
-    assertSiteFor.mockRejectedValue(new ForbiddenException('không phụ trách nghĩa trang này'));
+    assertPlotFor.mockRejectedValue(new ForbiddenException('không phụ trách nghĩa trang này'));
 
     await expect(svc.getDownloadUrl('file-1', download(OTHER))).rejects.toBeInstanceOf(
       ForbiddenException,

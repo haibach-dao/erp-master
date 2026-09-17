@@ -221,28 +221,36 @@ export class CardSignersService {
     return updated;
   }
 
-  /* BÓ CẢ HAI TRỤC — công ty TRƯỚC, rồi nghĩa trang. Trả luôn bản ghi nghĩa trang để chỗ gọi
+  /* BÓ CẢ HAI TRỤC bằng MỘT lời gọi. Trả luôn bản ghi nghĩa trang để chỗ gọi
    * khỏi tra lại.
    *
-   * `assertSiteFor` MỘT MÌNH KHÔNG ĐỦ, và đây là chỗ tôi đã làm sai ở bản đầu của lát này:
-   * `ScopeService.checkSite` THOÁT NGAY khi mức là GROUP *hoặc COMPANY*, kèm chú thích nói
-   * thẳng "that company check is a separate call the caller already makes" — mà tôi không hề
-   * gọi cái call đó. Hệ quả đo được: một tài khoản mức COMPANY của công ty A cầm
-   * `cemetery.card_signer.view` (CSKH_TIEP_DON, KD_KINH_DOANH đều có qua gói đọc) đọc được
-   * danh mục người ký của công ty B, và bỏ hẳn tham số `cemeteryId` thì đọc được TOÀN HỆ.
+   * Tới 17/09/2026 đây là CẶP `assertCompanyFor` + `assertSiteFor`, và bản đầu của lát người
+   * ký chỉ gọi vế nghĩa trang: phép kiểm đó THOÁT NGAY khi mức là GROUP *hoặc COMPANY*, nên
+   * một tài khoản mức COMPANY của công ty A cầm `cemetery.card_signer.view` (CSKH_TIEP_DON,
+   * KD_KINH_DOANH đều có qua gói đọc) đọc được danh mục người ký của công ty B, và bỏ hẳn
+   * tham số `cemeteryId` thì đọc được TOÀN HỆ.
+   *
+   * Nay `ScopeService.assertPlotFor` nhận cả hai trục trong một lời gọi nên không quên được
+   * nữa — và nó bịt thêm một lỗ mà cặp cũ không bịt: `level` là hợp trên MỌI công ty, nên mức
+   * ở công ty này xoá phép bó nghĩa trang ở công ty kia.
    *
    * Bảng `card_signers` không có cột công ty, nên trục công ty QUY qua `Cemetery.companyId` —
    * cùng lối `BurialsService` quy phạm vi qua `GravePlot`.
    *
-   * Thứ tự CÔNG TY trước NGHĨA TRANG là cố ý: câu từ chối ở mức công ty ("công ty này không
-   * thuộc quyền của bạn") không tiết lộ nghĩa trang đó có tồn tại hay không. */
+   * Thứ tự CÔNG TY trước NGHĨA TRANG vẫn giữ bên trong `assertPlotFor`: câu từ chối ở mức
+   * công ty ("công ty này không thuộc quyền của bạn") không tiết lộ nghĩa trang đó có tồn tại
+   * hay không. */
   private async assertSiteInScope(caller: Caller, cemeteryId: string) {
     const cemetery = await this.prisma.cemetery.findUnique({ where: { id: cemeteryId } });
     if (cemetery === null) {
       throw new NotFoundException('Không tìm thấy nghĩa trang này');
     }
-    await this.scope.assertCompanyFor(caller.userId, caller.permission, cemetery.companyId);
-    await this.scope.assertSiteFor(caller.userId, caller.permission, cemeteryId);
+    await this.scope.assertPlotFor(
+      caller.userId,
+      caller.permission,
+      cemetery.companyId,
+      cemeteryId,
+    );
     return cemetery;
   }
 

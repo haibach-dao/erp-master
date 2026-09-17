@@ -96,8 +96,7 @@ export class CemeteryService {
   }
 
   async createGravePlot(dto: CreateGravePlotDto, caller: Caller) {
-    await this.scope.assertCompanyFor(caller.userId, caller.permission, dto.companyId);
-    await this.scope.assertSiteFor(caller.userId, caller.permission, dto.cemeteryId);
+    await this.scope.assertPlotFor(caller.userId, caller.permission, dto.companyId, dto.cemeteryId);
     return this.wrapUnique(
       () =>
         this.prisma.gravePlot.create({
@@ -133,8 +132,9 @@ export class CemeteryService {
       where.tags = { some: { tagTypeId, ...activeTag } };
     }
     if (cemeteryId !== undefined) {
-      // Asking for one cemetery: it has to be one the caller covers.
-      await this.scope.assertSiteFor(caller.userId, caller.permission, cemeteryId);
+      /* Hỏi đúng MỘT nghĩa trang: nó phải là nghĩa trang người gọi với tới ĐƯỢC TRONG CÔNG TY
+       * ĐANG LỌC. Hỏi cả hai vế một lần, vì mức ở công ty này không nói gì về công ty kia. */
+      await this.scope.assertPlotFor(caller.userId, caller.permission, companyId, cemeteryId);
       where.cemeteryId = cemeteryId;
     } else {
       // Asking for the whole company: narrow a site-bound caller to their own cemeteries
@@ -158,7 +158,7 @@ export class CemeteryService {
 
   /* PHẠM VI CỦA MỘT PHẦN MỘ, khai đúng MỘT lần.
    *
-   * Cặp `assertCompanyFor` + `assertSiteFor` trên `plot.companyId`/`plot.cemeteryId` trước
+   * Một lời gọi `assertPlotFor` trên `plot.companyId`/`plot.cemeteryId` trước
    * đây được gõ lại ở từng chỗ. Hai bản của cùng một luật là hai thứ sẽ lệch nhau — không
    * phải nếu mà là khi nào — và đó đúng lớp lỗi mà `common/lifecycle/active.ts` sinh ra để
    * dẹp. Nên: một hàm, mọi chỗ gọi.
@@ -171,8 +171,12 @@ export class CemeteryService {
     plot: { companyId: string; cemeteryId: string },
     caller: Caller,
   ): Promise<void> {
-    await this.scope.assertCompanyFor(caller.userId, caller.permission, plot.companyId);
-    await this.scope.assertSiteFor(caller.userId, caller.permission, plot.cemeteryId);
+    await this.scope.assertPlotFor(
+      caller.userId,
+      caller.permission,
+      plot.companyId,
+      plot.cemeteryId,
+    );
   }
 
   private async assertPlotInScope(gravePlotId: string, caller: Caller): Promise<void> {
@@ -361,7 +365,7 @@ export class CemeteryService {
    * và vì vậy nó phải đếm trước xem có mộ nào sẽ tụt xuống dưới số người đang nằm.
    *
    * `GraveType` chỉ có `companyId`, KHÔNG có `cemeteryId` — nên hỏi phạm vi bằng đúng một
-   * `assertCompanyFor`. Bịa ra một `cemeteryId` để gọi thêm `assertSiteFor` là hỏi một câu
+   * `assertCompanyFor`. Bịa ra một `cemeteryId` để gọi thêm `assertPlotFor` là hỏi một câu
    * mà dữ liệu không trả lời được.
    */
   async setGraveTypeCapacity(id: string, dto: SetGraveTypeCapacityDto, caller: Caller) {
@@ -422,8 +426,12 @@ export class CemeteryService {
     if (cemetery === null) {
       throw new NotFoundException('Không tìm thấy nghĩa trang');
     }
-    await this.scope.assertCompanyFor(caller.userId, caller.permission, cemetery.companyId);
-    await this.scope.assertSiteFor(caller.userId, caller.permission, cemeteryId);
+    await this.scope.assertPlotFor(
+      caller.userId,
+      caller.permission,
+      cemetery.companyId,
+      cemeteryId,
+    );
 
     const plots = await this.prisma.gravePlot.findMany({
       where: { cemeteryId, mapX: { not: null }, mapY: { not: null } },
@@ -470,8 +478,12 @@ export class CemeteryService {
     if (plot === null) {
       throw new NotFoundException('Không tìm thấy lô mộ');
     }
-    await this.scope.assertCompanyFor(caller.userId, caller.permission, plot.companyId);
-    await this.scope.assertSiteFor(caller.userId, caller.permission, plot.cemeteryId);
+    await this.scope.assertPlotFor(
+      caller.userId,
+      caller.permission,
+      plot.companyId,
+      plot.cemeteryId,
+    );
 
     const customer = await this.prisma.customer.findUnique({
       where: { id: dto.holderCustomerId },
@@ -584,8 +596,12 @@ export class CemeteryService {
     if (plot === null) {
       throw new NotFoundException('Không tìm thấy lô mộ');
     }
-    await this.scope.assertCompanyFor(caller.userId, caller.permission, plot.companyId);
-    await this.scope.assertSiteFor(caller.userId, caller.permission, plot.cemeteryId);
+    await this.scope.assertPlotFor(
+      caller.userId,
+      caller.permission,
+      plot.companyId,
+      plot.cemeteryId,
+    );
     return { right, plot };
   }
 
