@@ -588,3 +588,78 @@ describe('phạm vi — thêm bên ký cũng bó, cùng neo với năm đường
     ).rejects.toBeInstanceOf(ForbiddenException);
   });
 });
+
+/* TẠO HỢP ĐỒNG — tới 18/09/2026 đường này KHÔNG hỏi một dòng phạm vi nào.
+ *
+ * `companyId` và `gravePlotId` là hai id RỜI do client chọn. Từ quyết định 17/09 (khách công
+ * ty A được đứng tên mộ công ty B) thì "chúng chắc trùng nhau" không còn dùng được nữa.
+ *
+ * Hậu quả không chỉ là rò: hợp đồng mang công ty A trỏ mộ của B thì `list` (lọc theo
+ * `companyId`) không hiện nó cho quản lý nghĩa trang B, còn `assertContractInScope` lại đòi
+ * phạm vi ở CẢ HAI — nên không ai `verify`/`activate`/`cancel` được. Hợp đồng kẹt cứng.
+ */
+describe('tạo hợp đồng — hỏi phạm vi trên CẢ HAI VẾ', () => {
+  function buildCreate(plot: { companyId: string; cemeteryId: string } | null) {
+    const created: Record<string, unknown>[] = [];
+    const prisma = {
+      externalContract: {
+        create: vi.fn().mockImplementation((args: { data: Record<string, unknown> }) => {
+          created.push(args.data);
+          return Promise.resolve({ id: 'ct-new', ...args.data });
+        }),
+      },
+      gravePlot: { findUnique: vi.fn().mockResolvedValue(plot) },
+    } as unknown as PrismaService;
+
+    const assertCompanyFor = vi.fn().mockResolvedValue(undefined);
+    const assertPlotFor = vi.fn().mockResolvedValue(undefined);
+    const svc = new ContractsService(
+      prisma,
+      { record: vi.fn().mockResolvedValue(undefined) } as unknown as AuditService,
+      { assertCompanyFor, assertPlotFor } as unknown as ScopeService,
+    );
+    return { svc, created, assertCompanyFor, assertPlotFor };
+  }
+
+  const DTO_CREATE = {
+    companyId: 'co-1',
+    contractNo: 'HD-001',
+    gravePlotId: 'plot-1',
+  } as never;
+
+  const CALLER_CREATE = { userId: 'u1', permission: 'contract.record.create' };
+
+  it('hỏi công ty của hợp đồng', async () => {
+    const { svc, assertCompanyFor } = buildCreate({ companyId: 'co-KHAC', cemeteryId: SITE });
+    await svc.create(DTO_CREATE, CALLER_CREATE);
+    expect(assertCompanyFor).toHaveBeenCalledWith('u1', 'contract.record.create', 'co-1');
+  });
+
+  /* Phần mộ có thể thuộc công ty KHÁC — hợp lệ từ 17/09. Hỏi bằng công ty CỦA CHÍNH phần mộ,
+   * không mượn công ty của hợp đồng. */
+  it('hỏi phần mộ bằng công ty của CHÍNH phần mộ', async () => {
+    const { svc, assertPlotFor } = buildCreate({ companyId: 'co-KHAC', cemeteryId: SITE });
+    await svc.create(DTO_CREATE, CALLER_CREATE);
+    expect(assertPlotFor).toHaveBeenCalledWith('u1', 'contract.record.create', 'co-KHAC', SITE);
+  });
+
+  it('ngoài phạm vi phần mộ thì KHÔNG ghi hợp đồng nào', async () => {
+    const { svc, created, assertPlotFor } = buildCreate({ companyId: 'co-KHAC', cemeteryId: SITE });
+    assertPlotFor.mockRejectedValue(new ForbiddenException('Ngoài phạm vi được gán'));
+    await expect(svc.create(DTO_CREATE, CALLER_CREATE)).rejects.toBeInstanceOf(ForbiddenException);
+    expect(created).toEqual([]);
+  });
+
+  it('phần mộ không tồn tại thì 404, không ghi gì', async () => {
+    const { svc, created } = buildCreate(null);
+    await expect(svc.create(DTO_CREATE, CALLER_CREATE)).rejects.toBeInstanceOf(NotFoundException);
+    expect(created).toEqual([]);
+  });
+
+  // Không phải "chặn tất cho chắc": hợp lệ thì vẫn tạo được.
+  it('hợp lệ thì vẫn ghi hợp đồng', async () => {
+    const { svc, created } = buildCreate({ companyId: 'co-1', cemeteryId: SITE });
+    await svc.create(DTO_CREATE, CALLER_CREATE);
+    expect(created).toHaveLength(1);
+  });
+});

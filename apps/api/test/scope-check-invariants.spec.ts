@@ -22,11 +22,13 @@ const SCOPE_SERVICE = join(SRC, 'modules', 'authorization', 'scope.service.ts');
  * Thêm một dòng vào đây phải viết ra vì sao KHÔNG bó được. "Vì tiện" không phải lý do, và
  * "sẽ làm sau" cũng không — đã có chỗ ghi nợ rồi.
  */
+/* HAI DÒNG ĐÃ TRẢ (18/09/2026): `contracts.service.ts:create` và `services.service.ts:
+ * subscribe`. Lý do hoãn của cả hai là CÙNG MỘT câu hỏi nghiệp vụ — "hợp đồng / thuê bao có
+ * thể thuộc công ty khác với phần mộ không" — và anh Bách đã chốt 17/09: CÓ, khách công ty A
+ * được đứng tên mộ công ty B. Chốt xong thì lý do hoãn hết hiệu lực, và cả hai nay hỏi phạm
+ * vi trên CẢ HAI VẾ (công ty của chính bản ghi, và phần mộ nơi công việc diễn ra) mà KHÔNG
+ * đổi ngữ nghĩa cột `companyId`. */
 const MEASURED_UNGUARDED: Readonly<Record<string, string>> = {
-  'modules/contracts/contracts.service.ts:create':
-    'Neo vào `dto.companyId` do client gửi thì phải kiểm TRƯỚC khi tạo; chưa quyết vì hợp đồng có thể tạo cho công ty khác trong cùng tập đoàn (nghiệp vụ chưa chốt).',
-  'modules/services/services.service.ts:subscribe':
-    'Không có neo nào chắc: dịch vụ gắn vào thuê bao, `companyId` phải quy qua danh mục dịch vụ hoặc phần mộ — chưa quyết quy đường nào.',
   'modules/services/services.service.ts:renew':
     'Cùng nợ với `subscribe` — gia hạn quy phạm vi qua chính thuê bao đó.',
   'modules/services/services.service.ts:cancel':

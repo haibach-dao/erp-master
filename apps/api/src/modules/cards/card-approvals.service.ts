@@ -758,7 +758,19 @@ export class CardApprovalsService {
         'Không quy được nghĩa trang này về công ty nào — không kiểm được phạm vi',
       );
     }
-    await this.scope.assertCompanyFor(caller.userId, caller.permission, companyId);
+    /* HỎI THEO NGHĨA TRANG, KHÔNG theo công ty của khách — đính chính bản vá 17/09/2026.
+     *
+     * Bản đó gọi thêm `assertCompanyFor(companyId)` với `companyId` là công ty của KHÁCH, lý
+     * do ghi khi ấy là "hồ sơ này cũng là hồ sơ của khách đó". Nghe hợp lý, nhưng SAI với luật
+     * nghiệp vụ: người ký gắn theo NGHĨA TRANG — "ai quản lý nghĩa trang nào thì người đó ký"
+     * (anh Bách chốt, điều 9). Cộng với quyết định 17/09 cho phép khách công ty A đứng tên mộ
+     * ở công ty B, vế thừa đó chặn đúng NGƯỜI MÀ HỆ VỪA GỬI HỒ SƠ TỚI: quản lý nghĩa trang B
+     * không có phạm vi ở công ty A, nên không thấy và không quyết được. Hồ sơ nằm lại vĩnh
+     * viễn — không ai duyệt được, và người gửi thì đã bị chặn không gửi lại.
+     *
+     * Không phải nới lỏng: người quản lý nghĩa trang B đang quản chính phần mộ đó, nên họ là
+     * người ĐÚNG để đọc và quyết hồ sơ về nó. Công ty của khách không nói gì về việc ai làm
+     * việc trên phần mộ. */
     await this.scope.assertPlotFor(
       caller.userId,
       caller.permission,

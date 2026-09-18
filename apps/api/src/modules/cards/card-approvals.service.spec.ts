@@ -429,19 +429,20 @@ describe('cửa phê duyệt in thẻ mộ', () => {
     await expect(svc.create(SUBJECT, 'khong-co', CALLER)).rejects.toThrow(NotFoundException);
   });
 
-  /* HAI CÔNG TY KHÁC NHAU, và phải hỏi cả hai.
+  /* HỎI THEO NGHĨA TRANG, KHÔNG theo công ty của khách.
    *
    * Công ty của KHÁCH ('cty-A') và công ty của NGHĨA TRANG ('cty-B') là hai bản ghi khác nhau,
-   * không có gì ép trùng. Bản trước đưa cặp lệch đó thẳng vào `assertPlotFor`, nên nó tra mức
-   * tại công ty của KHÁCH rồi lấy mức ấy phán về nghĩa trang của công ty KHÁC — người mức
-   * COMPANY ở 'cty-A' thoát ngay, nghĩa trang của 'cty-B' không bị kiểm dòng nào. */
-  it('bó CẢ HAI TRỤC lúc gửi — công ty của khách VÀ công ty thật của nghĩa trang', async () => {
+   * và từ quyết định 17/09 thì lệch nhau là HỢP LỆ. Hồ sơ trình duyệt là việc CỦA NGHĨA TRANG
+   * — "ai quản lý nghĩa trang nào thì người đó ký" — nên phép kiểm phải hỏi đúng trục đó.
+   *
+   * Bản 17/09 hỏi THÊM công ty của khách, và vế thừa ấy chặn đúng NGƯỜI MÀ HỆ VỪA GỬI HỒ SƠ
+   * TỚI: quản lý nghĩa trang B không có phạm vi ở công ty A. Hồ sơ nằm lại vĩnh viễn. Ca này
+   * canh cả hai điều: hỏi ĐÚNG công ty của nghĩa trang, và KHÔNG hỏi công ty của khách. */
+  it('bó theo NGHĨA TRANG — dùng công ty của nghĩa trang, KHÔNG dùng công ty của khách', async () => {
     const { svc, assertPlotFor, assertCompanyFor } = build();
     await svc.create(SUBJECT, 'signer-1', CALLER);
-    // Vế khách: hỏi bằng công ty của hồ sơ.
-    expect(assertCompanyFor).toHaveBeenCalledWith(CALLER.userId, CALLER.permission, 'cty-A');
-    // Vế phần mộ: hỏi bằng công ty CỦA NGHĨA TRANG, không phải của khách.
     expect(assertPlotFor).toHaveBeenCalledWith(CALLER.userId, CALLER.permission, 'cty-B', 'cem-1');
+    expect(assertCompanyFor).not.toHaveBeenCalledWith(CALLER.userId, CALLER.permission, 'cty-A');
   });
 
   /* Tư cách người ký là GIAO của hai trục có `validTo` và TỰ HẾT HẠN. Hỏi CSDL mà quên cửa sổ

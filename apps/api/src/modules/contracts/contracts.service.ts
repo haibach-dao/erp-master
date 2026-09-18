@@ -34,7 +34,37 @@ export class ContractsService {
     private readonly scope: ScopeService,
   ) {}
 
+  /* PHẠM VI TRÊN CẢ HAI BÊN — tới 18/09/2026 đường này không hỏi một dòng nào.
+   *
+   * `companyId` và `gravePlotId` là HAI id RỜI do client chọn, và từ quyết định 17/09 (khách
+   * công ty A được đứng tên mộ công ty B) thì chúng KHÔNG bảo đảm trùng nhau. Không hỏi gì
+   * nghĩa là ai cầm `contract.record.create` cũng ghi được một hợp đồng mang công ty bất kỳ,
+   * trỏ vào phần mộ bất kỳ.
+   *
+   * Hậu quả không chỉ là rò: hợp đồng mang công ty A trỏ mộ của B thì `list` (lọc theo
+   * `companyId`) KHÔNG hiện nó cho quản lý nghĩa trang B, còn `assertContractInScope` lại đòi
+   * phạm vi ở CẢ HAI — nên không ai `verify`/`activate`/`cancel` được. Hợp đồng kẹt cứng.
+   *
+   * Hỏi CẢ HAI VẾ chứ không đổi ngữ nghĩa cột: `companyId` của hợp đồng vẫn là bên ký với
+   * khách (`@@unique([companyId, contractNo])` là không gian tên số hợp đồng của bên đó), còn
+   * phần mộ là chỗ công việc diễn ra. Người tạo phải với tới cả hai — chặt hơn, và không tự
+   * quyết thay nghiệp vụ xem cột kia "lẽ ra" phải mang giá trị nào.
+   */
   async create(dto: CreateContractDto, caller: Caller) {
+    await this.scope.assertCompanyFor(caller.userId, caller.permission, dto.companyId);
+    const plot = await this.prisma.gravePlot.findUnique({
+      where: { id: dto.gravePlotId },
+      select: { companyId: true, cemeteryId: true },
+    });
+    if (plot === null) {
+      throw new NotFoundException('Không tìm thấy phần mộ');
+    }
+    await this.scope.assertPlotFor(
+      caller.userId,
+      caller.permission,
+      plot.companyId,
+      plot.cemeteryId,
+    );
     try {
       const contract = await this.prisma.externalContract.create({
         data: {
