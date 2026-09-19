@@ -41,6 +41,8 @@ function build(
     capacityOverride?: number | null;
     lastPrintNumber?: number | null;
     companyId?: string | null;
+    /** Công ty của PHẦN MỘ. Mặc định trùng công ty khách; đặt khác để dựng CẶP LỆCH. */
+    plotCompanyId?: string;
     customerMissing?: boolean;
     log?: unknown;
     /** Người gọi có cầm `crm.person.view_sensitive` không — quyết CCCD trên thẻ. */
@@ -58,6 +60,7 @@ function build(
     capacityOverride = null,
     lastPrintNumber = null,
     companyId = 'co-1',
+    plotCompanyId = 'co-1',
     customerMissing = false,
     log = null,
     holdsSensitive = false,
@@ -116,7 +119,7 @@ function build(
           /* Hai cột phạm vi: từ 17/09/2026 `buildCard` hỏi phạm vi trên TỪNG mộ của bộ, vì
            * thẻ mang dữ liệu PHẦN MỘ chứ không chỉ dữ liệu khách. Fixture thiếu hai cột này
            * thì phép kiểm nhận `undefined` và ca test không canh được gì. */
-          companyId: 'co-1',
+          companyId: plotCompanyId,
           cemeteryId: 'nt-1',
           cemetery: { name: 'An Lạc Viên' },
           graveType: { name: 'Mộ gia đình', defaultCapacity: capacity },
@@ -478,5 +481,35 @@ describe('xem trước: lý do chưa tính được phí', () => {
     const { svc } = build();
     const card = (await svc.preview(CUSTOMER, CALLER_VIEW)) as Record<string, unknown>;
     expect(card.feeBlocked).toBeNull();
+  });
+});
+
+/* TRỤC CÔNG TY CỦA TẦNG TIỀN — `CardsService` TRUYỀN công ty nào xuống bảng giá?
+ *
+ * Đây là NEO cho một quyết định đang chờ, không phải cho một lỗi. Từ 17/09/2026 khách của
+ * công ty A được đứng tên mộ ở nghĩa trang của công ty B, nên "công ty của khách" và "công ty
+ * của mộ" là hai giá trị khác nhau — và hiện cả ba nhánh tiền (bảng giá, dòng phí, cửa phê
+ * duyệt) đều lấy công ty của KHÁCH, qua đúng một biến: `card.companyId`.
+ *
+ * Câu hỏi "phí thu về công ty nào" là câu hỏi kế toán, đang chờ anh Bách. Ca dưới đây neo
+ * HÀNH VI HIỆN TẠI để khi quyết định có, việc đổi là CÓ CHỦ ĐÍCH: sửa mã thì ca này đỏ, người
+ * sửa phải đọc chú thích này và đổi nó cùng lúc — chứ không phải đổi âm thầm rồi nhận ra lúc
+ * đối soát.
+ *
+ * Nếu quyết định là "theo công ty quản lý nghĩa trang" thì chỗ phải sửa là `buildCard`
+ * (`cards.service.ts`), nơi `companyId` được lấy từ `customer.companyId`.
+ */
+describe('tầng tiền lấy công ty từ đâu — NEO hành vi hiện tại, chờ quyết định', () => {
+  it('bảng giá tra theo công ty của KHÁCH (`customer.companyId`), không theo công ty của mộ', async () => {
+    /* Hai công ty phải KHÁC nhau, nếu không ca này không phân biệt được hai nguồn — đo bằng
+     * đột biến: đổi `buildCard` sang lấy `plots[0].companyId` mà ca vẫn xanh. */
+    const { svc, quote } = build({ companyId: 'co-KHACH', plotCompanyId: 'co-MO' });
+
+    await svc.preview(CUSTOMER, { userId: 'u1', permission: 'cemetery.card.view' });
+
+    expect(quote).toHaveBeenCalledWith(
+      expect.objectContaining({ companyId: 'co-KHACH' }),
+      expect.anything(),
+    );
   });
 });
