@@ -38,7 +38,19 @@ export class CardsService {
    * thẻ ra `079***123` với MỌI người, kể cả người cầm S3, trong khi chú thích ngay trên
    * đầu lại tả ngược lại. Không có bản rõ nào đi qua thì không có gì để mở khoá.
    */
-  private async buildCard(customerId: string, caller: Caller) {
+  /* MỘT THẺ = MỘT CÔNG TY, và công ty đó là công ty của PHẦN MỘ (anh Bách chốt 19/09/2026).
+   *
+   * `companyId` lọc bộ mộ xuống đúng một công ty. Khách có mộ ở hai công ty thì `preview` và
+   * `issue` gọi hàm này HAI LẦN — mỗi công ty một thẻ, một sổ tiền, một biên lai — chứ không
+   * gộp một tờ mang tiền của hai pháp nhân, và cũng không bắt quầy mở thêm hồ sơ khách ở công
+   * ty kia (vế "khách dùng CHUNG một CSDL" của chính quyết định đó).
+   *
+   * KHÔNG hỏi phạm vi trên công ty của KHÁCH nữa. Câu đúng là "người này có với tới PHẦN MỘ
+   * không", và nó được hỏi trên TỪNG mộ ngay dưới. Hỏi thêm công ty của khách là chặn đúng
+   * người quản lý nghĩa trang B khi họ cấp thẻ cho mộ của B — cùng lỗi đã phải sửa ở
+   * `CardApprovalsService.assertInScope`, và từ 17/09 khách của A đứng tên mộ ở B là hợp lệ.
+   */
+  private async buildCard(customerId: string, caller: Caller, companyId?: string) {
     const customer = await this.prisma.customer.findUnique({
       where: { id: customerId },
       include: { person: true },
@@ -46,20 +58,36 @@ export class CardsService {
     if (customer === null) {
       throw new NotFoundException('Không tìm thấy khách hàng');
     }
-    await this.scope.assertCompanyFor(caller.userId, caller.permission, customer.companyId);
 
-    const rights = await this.prisma.graveUsageRight.findMany({
+    const allRights = await this.prisma.graveUsageRight.findMany({
       where: { holderCustomerId: customerId, ...activeUsageRight },
       orderBy: { createdAt: 'asc' },
     });
-    if (rights.length === 0) {
+    if (allRights.length === 0) {
       throw new ConflictException('Khách hàng chưa đứng tên phần mộ nào — chưa cấp thẻ được');
     }
 
-    const plots = await this.prisma.gravePlot.findMany({
-      where: { id: { in: rights.map((r) => r.gravePlotId) } },
+    const allPlots = await this.prisma.gravePlot.findMany({
+      where: { id: { in: allRights.map((r) => r.gravePlotId) } },
       include: { cemetery: true, graveType: true },
     });
+    /* Lọc xuống MỘT công ty. Thiếu `companyId` mà khách chỉ có mộ ở một công ty thì lấy chính
+     * công ty đó — mọi đường gọi cũ không phải đổi gì. Thiếu mà khách có mộ ở nhiều công ty là
+     * lỗi LẬP TRÌNH, không phải lỗi người dùng: `preview`/`issue` có trách nhiệm lặp qua từng
+     * công ty, nên rơi vào nhánh này nghĩa là ai đó thêm một đường gọi mới mà quên. */
+    const ofCompany = [...new Set(allPlots.map((p) => p.companyId))].sort();
+    const target = companyId ?? (ofCompany.length === 1 ? ofCompany[0] : undefined);
+    if (target === undefined) {
+      throw new ConflictException(
+        `Khách này có mộ ở ${String(ofCompany.length)} công ty — mỗi công ty là một thẻ riêng, phải chỉ rõ công ty.`,
+      );
+    }
+    const plots = allPlots.filter((p) => p.companyId === target);
+    if (plots.length === 0) {
+      throw new ConflictException('Khách hàng không đứng tên phần mộ nào của công ty này');
+    }
+    const keep = new Set(plots.map((p) => p.id));
+    const rights = allRights.filter((r) => keep.has(r.gravePlotId));
     /* PHẠM VI TRÊN TỪNG PHẦN MỘ, không chỉ trên công ty của khách.
      *
      * Phép kiểm ở đầu hàm hỏi `customer.companyId` — "khách này có thuộc nhà mình không". Thứ
@@ -147,7 +175,14 @@ export class CardsService {
     return {
       customerId: customer.id,
       customerCode: customer.customerCode,
-      companyId: customer.companyId,
+      /* Công ty của THẺ = công ty của PHẦN MỘ, không phải của khách (19/09/2026).
+       *
+       * Đây là một biến duy nhất nhưng nó chảy vào CẢ BA nhánh tiền: bảng giá
+       * (`effectiveSchedule`), dòng phí (`recordCharges`), và cửa phê duyệt (`isRequired`).
+       * Trước quyết định, cả ba lấy công ty của KHÁCH — nên công ty B bật cửa duyệt cho nghĩa
+       * trang của mình vẫn bị đi vòng, doanh thu ghi sai pháp nhân, và nếu công ty của khách
+       * chưa ban hành biểu phí thì chặn thẳng việc cấp thẻ cho mộ của B. */
+      companyId: target,
       owner: {
         fullName: customer.person?.fullName ?? customer.orgName ?? null,
         gender: customer.person?.gender ?? null,
@@ -241,16 +276,9 @@ export class CardsService {
    */
   private async quoteOrBlocked(card: {
     customerId: string;
-    companyId: string | null;
+    companyId: string;
     plots: readonly { gravePlotId: string; plotCode: string; capacity: number }[];
   }): Promise<{ quote: FeeQuote | null; blocked: string | null }> {
-    if (card.companyId === null) {
-      return {
-        quote: null,
-        blocked:
-          'Khách hàng chưa gắn công ty quản lý, nên chưa tra được biểu phí. Cấp thẻ sẽ bị từ chối cho tới khi hồ sơ khách có công ty.',
-      };
-    }
     try {
       return {
         quote: await this.fees.quote(
@@ -284,9 +312,6 @@ export class CardsService {
    */
   async issue(customerId: string, dto: IssueCardDto, caller: Caller) {
     const card = await this.buildCard(customerId, caller);
-    if (card.companyId === null) {
-      throw new ConflictException('Khách hàng chưa gắn công ty quản lý — chưa cấp thẻ được');
-    }
     const companyId = card.companyId;
 
     /* Hai việc phải xong TRƯỚC khi mở giao dịch, và cả hai đều gọi ra ngoài Prisma:
@@ -451,9 +476,6 @@ export class CardsService {
     caller: Caller,
   ): Promise<{ id: string; state: string }> {
     const card = await this.buildCard(customerId, caller);
-    if (card.companyId === null) {
-      throw new ConflictException('Khách hàng chưa gắn công ty quản lý — chưa gửi duyệt được');
-    }
     const companyId = card.companyId;
 
     /* Bộ mộ phải nằm TRỌN trong MỘT nghĩa trang. Người duyệt định tuyến theo nghĩa trang (anh
@@ -509,7 +531,13 @@ export class CardsService {
       throw new NotFoundException('Không tìm thấy lần cấp thẻ này');
     }
     await this.scope.assertCompanyFor(caller.userId, caller.permission, log.companyId);
-    const card = await this.buildCard(log.customerId, caller);
+    /* Dựng lại ĐÚNG bộ mộ của thẻ cũ — tức chỉ mộ của công ty đã cấp thẻ đó.
+     *
+     * Từ 19/09/2026 một thẻ chỉ gồm mộ của MỘT công ty, và `log.companyId` chính là công ty
+     * ấy. Không truyền nó thì `buildCard` gom mọi mộ của khách: với khách có mộ ở hai công ty,
+     * `assertReprintUnchanged` ngay dưới sẽ thấy "bộ mộ đã đổi" và từ chối in lại một tờ thẻ
+     * hoàn toàn hợp lệ. */
+    const card = await this.buildCard(log.customerId, caller, log.companyId);
     await this.assertReprintUnchanged(log.id, card.plots);
     await this.audit.record({
       actorType: 'USER',

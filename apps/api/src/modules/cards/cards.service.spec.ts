@@ -342,11 +342,18 @@ describe('thẻ mộ — chặn trước khi cấp', () => {
     expect(createLog).not.toHaveBeenCalled();
   });
 
-  it('khách chưa gắn công ty quản lý thì không cấp thẻ', async () => {
-    const { svc, createLog } = build({ companyId: null });
+  /* ĐỔI CÓ CHỦ ĐÍCH (19/09/2026): trước đây khách chưa gắn công ty thì KHÔNG cấp được thẻ, vì
+   * công ty của thẻ lấy từ khách. Nay nó lấy từ PHẦN MỘ, nên ô công ty của khách không còn
+   * chặn gì — và đó là hệ quả đúng: tiền về công ty quản lý mộ, không liên quan hồ sơ khách
+   * thuộc nhà nào. */
+  it('khách chưa gắn công ty VẪN cấp được thẻ — công ty lấy từ phần mộ', async () => {
+    const { svc, createLog } = build({ companyId: null, plotCompanyId: 'co-MO' });
 
-    await expect(svc.issue(CUSTOMER, {}, CALLER_PRINT)).rejects.toThrow(ConflictException);
-    expect(createLog).not.toHaveBeenCalled();
+    await svc.issue(CUSTOMER, {}, CALLER_PRINT);
+
+    expect(createLog).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ companyId: 'co-MO' }) }),
+    );
   });
 
   it('không tìm thấy khách thì 404', async () => {
@@ -355,14 +362,24 @@ describe('thẻ mộ — chặn trước khi cấp', () => {
     await expect(svc.preview(CUSTOMER, CALLER_VIEW)).rejects.toThrow(NotFoundException);
   });
 
-  it('kiểm phạm vi công ty TRƯỚC khi dựng thẻ', async () => {
-    const { svc, assertCompanyFor } = build();
+  /* ĐỔI CÓ CHỦ ĐÍCH (19/09/2026): `buildCard` KHÔNG còn hỏi phạm vi trên công ty của KHÁCH.
+   *
+   * Câu đúng là "người này có với tới PHẦN MỘ không", và nó được hỏi trên TỪNG mộ. Hỏi thêm
+   * công ty của khách chặn đúng người quản lý nghĩa trang B khi họ cấp thẻ cho mộ của B —
+   * cùng lỗi đã phải sửa ở `CardApprovalsService.assertInScope`.
+   *
+   * Tham số GIỮA vẫn là thứ đáng kiểm nhất: mã quyền đang thi hành. Thiếu nó thì phạm vi
+   * được tính ở mức rộng nhất của người gọi. */
+  it('hỏi phạm vi trên PHẦN MỘ, KHÔNG hỏi công ty của khách', async () => {
+    const { svc, assertCompanyFor, assertPlotFor } = build({
+      companyId: 'co-KHACH',
+      plotCompanyId: 'co-MO',
+    });
 
     await svc.preview(CUSTOMER, CALLER_VIEW);
 
-    /* Ba tham số, và tham số GIỮA là thứ đáng kiểm nhất: mã quyền đang thi hành. Thiếu nó
-     * thì phạm vi được tính ở mức rộng nhất của người gọi — đúng lớp lỗi vừa vá. */
-    expect(assertCompanyFor).toHaveBeenCalledWith('u1', 'cemetery.card.view', 'co-1');
+    expect(assertPlotFor).toHaveBeenCalledWith('u1', 'cemetery.card.view', 'co-MO', 'nt-1');
+    expect(assertCompanyFor).not.toHaveBeenCalledWith('u1', 'cemetery.card.view', 'co-KHACH');
   });
 
   /* Thẻ mang dữ liệu PHẦN MỘ — mã mộ, khu, sức chứa, và TÊN NGƯỜI ĐÃ MẤT đang nằm trong đó.
@@ -500,7 +517,7 @@ describe('xem trước: lý do chưa tính được phí', () => {
  * (`cards.service.ts`), nơi `companyId` được lấy từ `customer.companyId`.
  */
 describe('tầng tiền lấy công ty từ đâu — NEO hành vi hiện tại, chờ quyết định', () => {
-  it('bảng giá tra theo công ty của KHÁCH (`customer.companyId`), không theo công ty của mộ', async () => {
+  it('bảng giá tra theo công ty của PHẦN MỘ, không theo công ty của khách', async () => {
     /* Hai công ty phải KHÁC nhau, nếu không ca này không phân biệt được hai nguồn — đo bằng
      * đột biến: đổi `buildCard` sang lấy `plots[0].companyId` mà ca vẫn xanh. */
     const { svc, quote } = build({ companyId: 'co-KHACH', plotCompanyId: 'co-MO' });
@@ -508,7 +525,7 @@ describe('tầng tiền lấy công ty từ đâu — NEO hành vi hiện tại,
     await svc.preview(CUSTOMER, { userId: 'u1', permission: 'cemetery.card.view' });
 
     expect(quote).toHaveBeenCalledWith(
-      expect.objectContaining({ companyId: 'co-KHACH' }),
+      expect.objectContaining({ companyId: 'co-MO' }),
       expect.anything(),
     );
   });
