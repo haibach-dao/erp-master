@@ -762,6 +762,12 @@ export interface CardPlot {
 export interface GraveCard {
   customerId: string;
   customerCode: string;
+  /* CÔNG TY CỦA TỜ THẺ — là công ty của PHẦN MỘ, không phải của khách (anh Bách chốt
+   * 19/09/2026). Khách của công ty A được đứng tên mộ ở công ty B từ 17/09, nên hai giá trị
+   * đó khác nhau, và tiền đi theo cái này. */
+  companyId: string;
+  /** `null` khi hồ sơ công ty đã bị xoá — màn hình lùi về mã công ty, không dựng tên giả. */
+  companyName: string | null;
   owner: {
     fullName: string | null;
     gender: string | null;
@@ -846,19 +852,28 @@ export interface CardIssuance {
   issuedAt: string;
 }
 
-export const previewGraveCard = (customerId: string): Promise<GraveCard> =>
+/* MỘT thẻ cho MỖI công ty khách có mộ (anh Bách chốt 19/09/2026): mộ thuộc công ty nào thì
+ * công ty đó thu tiền, nên thẻ cũng theo công ty. Khách chỉ có mộ ở một công ty thì mảng có
+ * đúng một phần tử — màn hình không phải xử hai hình dạng khác nhau. */
+export const previewGraveCard = (customerId: string): Promise<{ cards: GraveCard[] }> =>
   apiFetch(`/api/v1/cemetery/cards/${encodeURIComponent(customerId)}/preview`);
 
 export const issueGraveCard = (
   customerId: string,
   input: {
+    /* CÔNG TY CỦA TỜ ĐANG CẤP. Xem trước ra đủ các thẻ, nhưng CẤP thì cấp từng tờ: `approvedBy`
+     * dưới đây là chữ ký của MỘT người, mà người ký gắn theo nghĩa trang (luật 05/09) — gửi
+     * một lần cho cả hai công ty là đóng tên họ lên cả tờ họ không có quyền ký. */
+    companyId?: string;
     printReason?: string;
     approvedBy?: string;
     approvedTitle?: string;
     waive?: boolean;
     waiveReason?: string;
   },
-): Promise<GraveCard> =>
+  /* Vẫn trả MẢNG dù chỉ một tờ — giữ nguyên hình dạng với `previewGraveCard` để màn hình
+   * ghép tờ vừa cấp vào bộ thẻ đang xem mà không phải xử hai kiểu dữ liệu. */
+): Promise<{ issued: GraveCard[] }> =>
   apiFetch(`/api/v1/cemetery/cards/${encodeURIComponent(customerId)}/issue`, {
     method: 'POST',
     body: JSON.stringify(input),

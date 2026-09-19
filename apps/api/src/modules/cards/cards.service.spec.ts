@@ -127,6 +127,7 @@ function build(
       ]),
     },
     burialRecord: { findMany: vi.fn().mockResolvedValue(burials) },
+    company: { findUnique: vi.fn().mockResolvedValue({ name: 'Công ty CP Hoa Viên' }) },
     cardPrintLog: {
       findFirst: findFirstLog,
       findUnique: vi.fn().mockResolvedValue(log),
@@ -201,7 +202,7 @@ describe('thẻ mộ — xem trước KHÔNG phải là cấp thẻ', () => {
   it('xem trước không ghi dòng nhật ký nào', async () => {
     const { svc, createLog, record } = build();
 
-    const card = (await svc.preview(CUSTOMER, CALLER_VIEW)) as Record<string, unknown>;
+    const card = ((await svc.preview(CUSTOMER, CALLER_VIEW)).cards[0] ?? {}) as Record<string, unknown>;
 
     expect(createLog).not.toHaveBeenCalled();
     expect(record).not.toHaveBeenCalled();
@@ -211,7 +212,7 @@ describe('thẻ mộ — xem trước KHÔNG phải là cấp thẻ', () => {
   it('xem trước báo số DỰ KIẾN, không phải số đã cấp', async () => {
     const { svc } = build({ lastPrintNumber: 2 });
 
-    const card = (await svc.preview(CUSTOMER, CALLER_VIEW)) as Record<string, unknown>;
+    const card = ((await svc.preview(CUSTOMER, CALLER_VIEW)).cards[0] ?? {}) as Record<string, unknown>;
 
     expect(card.nextPrintNumber).toBe(3);
     expect(card.printNumber).toBeUndefined();
@@ -220,11 +221,11 @@ describe('thẻ mộ — xem trước KHÔNG phải là cấp thẻ', () => {
   it('cấp thẻ mới ghi nhật ký và phát audit', async () => {
     const { svc, createLog, record } = build({ lastPrintNumber: 1 });
 
-    const card = (await svc.issue(
+    const card = ((await svc.issue(
       CUSTOMER,
       { printReason: 'Đổi thông tin' },
       CALLER_PRINT,
-    )) as Record<string, unknown>;
+    )).issued[0] ?? {}) as Record<string, unknown>;
 
     expect(card.printNumber).toBe(2);
     expect(card.issued).toBe(true);
@@ -235,7 +236,7 @@ describe('thẻ mộ — xem trước KHÔNG phải là cấp thẻ', () => {
   it('lần cấp đầu tiên là 1', async () => {
     const { svc } = build({ lastPrintNumber: null });
 
-    const card = (await svc.issue(CUSTOMER, {}, CALLER_PRINT)) as Record<string, unknown>;
+    const card = ((await svc.issue(CUSTOMER, {}, CALLER_PRINT)).issued[0] ?? {}) as Record<string, unknown>;
 
     expect(card.printNumber).toBe(1);
   });
@@ -272,7 +273,7 @@ describe('thẻ mộ — nội dung in ra', () => {
     // Sức chứa 4, đã an táng 1 => thẻ phải chừa 3 dòng trống.
     const { svc } = build({ capacity: 4, burials: [burial()] });
 
-    const card = (await svc.preview(CUSTOMER, CALLER_VIEW)) as { plots: Record<string, unknown>[] };
+    const card = ((await svc.preview(CUSTOMER, CALLER_VIEW)).cards[0] ?? {}) as { plots: Record<string, unknown>[] };
 
     expect(card.plots[0].capacity).toBe(4);
     expect(card.plots[0].emptySlots).toBe(3);
@@ -281,7 +282,7 @@ describe('thẻ mộ — nội dung in ra', () => {
   it('sức chứa ghi đè trên phần mộ thắng mặc định của loại mộ', async () => {
     const { svc } = build({ capacity: 4, capacityOverride: 2, burials: [burial()] });
 
-    const card = (await svc.preview(CUSTOMER, CALLER_VIEW)) as { plots: Record<string, unknown>[] };
+    const card = ((await svc.preview(CUSTOMER, CALLER_VIEW)).cards[0] ?? {}) as { plots: Record<string, unknown>[] };
 
     expect(card.plots[0].capacity).toBe(2);
     expect(card.plots[0].emptySlots).toBe(1);
@@ -293,7 +294,7 @@ describe('thẻ mộ — nội dung in ra', () => {
       burials: [burial(), burial({ id: 'br-2' })],
     });
 
-    const card = (await svc.preview(CUSTOMER, CALLER_VIEW)) as { plots: Record<string, unknown>[] };
+    const card = ((await svc.preview(CUSTOMER, CALLER_VIEW)).cards[0] ?? {}) as { plots: Record<string, unknown>[] };
 
     expect(card.plots[0].emptySlots).toBe(0);
   });
@@ -301,7 +302,7 @@ describe('thẻ mộ — nội dung in ra', () => {
   it('in quan hệ đã CHỤP LẠI lúc an táng, không tra lại quan hệ hiện tại', async () => {
     const { svc } = build({ burials: [burial({ relationshipToOwner: 'SPOUSE' })] });
 
-    const card = (await svc.preview(CUSTOMER, CALLER_VIEW)) as {
+    const card = ((await svc.preview(CUSTOMER, CALLER_VIEW)).cards[0] ?? {}) as {
       plots: { occupants: Record<string, unknown>[] }[];
     };
 
@@ -317,7 +318,7 @@ describe('thẻ mộ — nội dung in ra', () => {
   it('trả CCCD BẢN RÕ và để lớp che quyết — service không tự che', async () => {
     const { svc, decrypt } = build();
 
-    const card = (await svc.preview(CUSTOMER, CALLER_VIEW)) as { owner: Record<string, unknown> };
+    const card = ((await svc.preview(CUSTOMER, CALLER_VIEW)).cards[0] ?? {}) as { owner: Record<string, unknown> };
 
     expect(card.owner.nationalId).toBe('079123456789');
     expect(decrypt).toHaveBeenCalledWith('iv:tag:enc');
@@ -327,7 +328,7 @@ describe('thẻ mộ — nội dung in ra', () => {
   it('người chưa có CCCD trong hồ sơ thì không gọi giải mã', async () => {
     const { svc, decrypt } = build({ noNationalId: true });
 
-    const card = (await svc.preview(CUSTOMER, CALLER_VIEW)) as { owner: Record<string, unknown> };
+    const card = ((await svc.preview(CUSTOMER, CALLER_VIEW)).cards[0] ?? {}) as { owner: Record<string, unknown> };
 
     expect(card.owner.nationalId).toBeNull();
     expect(decrypt).not.toHaveBeenCalled();
@@ -483,7 +484,7 @@ describe('xem trước: lý do chưa tính được phí', () => {
   it('chưa có biểu phí thì vẫn XEM ĐƯỢC thẻ, và nêu đúng câu của API', async () => {
     const { svc, quote } = build();
     quote.mockRejectedValueOnce(new ConflictException('Công ty An Lạc Viên S (S1787) chưa có...'));
-    const card = (await svc.preview(CUSTOMER, CALLER_VIEW)) as Record<string, unknown>;
+    const card = ((await svc.preview(CUSTOMER, CALLER_VIEW)).cards[0] ?? {}) as Record<string, unknown>;
     expect(card.fee).toBeNull();
     expect(card.feeBlocked).toMatch(/An Lạc Viên S/);
   });
@@ -496,7 +497,7 @@ describe('xem trước: lý do chưa tính được phí', () => {
 
   it('tính được tiền thì feeBlocked là null — không để câu cũ dính lại', async () => {
     const { svc } = build();
-    const card = (await svc.preview(CUSTOMER, CALLER_VIEW)) as Record<string, unknown>;
+    const card = ((await svc.preview(CUSTOMER, CALLER_VIEW)).cards[0] ?? {}) as Record<string, unknown>;
     expect(card.feeBlocked).toBeNull();
   });
 });

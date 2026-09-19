@@ -81,12 +81,29 @@ function build(plots: { id: string; companyId: string; cemeteryId: string }[]) {
         .mockResolvedValue(plots.map((p) => plotRow(p.id, p.companyId, p.cemeteryId))),
     },
     burialRecord: { findMany: vi.fn().mockResolvedValue([]) },
+    company: { findUnique: vi.fn().mockResolvedValue({ name: 'Cty ' + CO_A }) },
     cardPrintLog: { findFirst: vi.fn().mockResolvedValue(null) },
     graveCardFeeCharge: { findMany: vi.fn().mockResolvedValue([]) },
+    $transaction: vi.fn().mockImplementation((fn: (t: unknown) => unknown) =>
+      fn({
+        cardPrintLog: {
+          findFirst: vi.fn().mockResolvedValue(null),
+          create: vi.fn().mockImplementation((args: { data: Record<string, unknown> }) =>
+            Promise.resolve({ ...args.data }),
+          ),
+        },
+      }),
+    ),
   } as unknown as PrismaService;
 
   const assertPlotFor = vi.fn().mockResolvedValue(undefined);
   const assertCompanyFor = vi.fn().mockResolvedValue(undefined);
+
+  /* Hai cửa của đường CẤP. Ca chặn phải nổ TRƯỚC khi chạm tới chúng, nên chúng đứng đây
+   * vừa để `issue` chạy được vừa để làm CHỨNG: được gọi tức là đã đi quá cửa chặn. */
+  const resolveWaive = vi.fn().mockResolvedValue({ waived: false, waiveReason: null });
+  const isRequired = vi.fn().mockResolvedValue(false);
+  const recordCharges = vi.fn().mockResolvedValue([]);
 
   const svc = new CardsService(
     prisma,
@@ -94,17 +111,24 @@ function build(plots: { id: string; companyId: string; cemeteryId: string }[]) {
     { assertCompanyFor, assertPlotFor } as unknown as ScopeService,
     { decrypt: vi.fn() } as unknown as PiiService,
     { holdsForMasking: vi.fn().mockResolvedValue(false) } as unknown as PermissionsService,
-    { quote } as unknown as CardFeesService,
-    {} as unknown as CardApprovalsService,
+    { quote, resolveWaive, recordCharges } as unknown as CardFeesService,
+    { isRequired, assertApproved: vi.fn().mockResolvedValue(null) } as unknown as CardApprovalsService,
   );
-  return { svc, quote, assertPlotFor, assertCompanyFor };
+  return { svc, quote, assertPlotFor, assertCompanyFor, resolveWaive };
 }
+
+/* Chữ ký của MỘT người — chính thứ không được phép đi kèm hai tờ thẻ của hai công ty. */
+const ISSUE_DTO = {
+  printReason: 'Cấp lần đầu',
+  approvedBy: 'Nguyễn Văn A',
+  approvedTitle: 'PHÓ GIÁM ĐỐC',
+} as never;
 
 describe('thẻ mộ theo CÔNG TY CỦA PHẦN MỘ, không theo công ty của khách', () => {
   it('khách chỉ có mộ ở MỘT công ty: thẻ mang công ty của mộ, không phải của khách', async () => {
     const { svc, quote } = build([{ id: 'p1', companyId: CO_A, cemeteryId: 'nt-a1' }]);
 
-    const card = await svc.preview(CUSTOMER, VIEWER);
+    const card = (await svc.preview(CUSTOMER, VIEWER)).cards[0]!;
 
     expect(card.companyId).toBe(CO_A);
     expect(card.companyId).not.toBe(CO_KHACH);
@@ -115,17 +139,37 @@ describe('thẻ mộ theo CÔNG TY CỦA PHẦN MỘ, không theo công ty của
     );
   });
 
-  /* Khách có mộ ở HAI công ty: một tờ thẻ không mang tiền của hai pháp nhân được. Hệ phải nói
-   * rõ và nêu SỐ công ty, chứ không lặng lẽ gộp — gộp chính là thứ làm doanh thu về nhầm nhà
-   * suốt từ 02/09 tới 19/09. */
-  it('khách có mộ ở HAI công ty thì KHÔNG gộp một thẻ — nói rõ phải tách theo công ty', async () => {
+  /* Khách có mộ ở HAI công ty: hệ TỰ CẮT thành hai thẻ, mỗi thẻ một công ty — khách vẫn MỘT
+   * hồ sơ. Một tờ thẻ không mang tiền của hai pháp nhân được, còn bắt quầy bấm hai lần thì
+   * cách nhanh nhất ở quầy là mở thêm hồ sơ khách ở công ty kia — đúng thứ vế "dùng chung
+   * CSDL, hạn chế nhập lại" cấm. */
+  it('khách có mộ ở HAI công ty: TỰ CẮT thành hai thẻ, mỗi thẻ một công ty', async () => {
     const { svc } = build([
       { id: 'p1', companyId: CO_A, cemeteryId: 'nt-a1' },
       { id: 'p2', companyId: CO_B, cemeteryId: 'nt-b1' },
     ]);
 
-    await expect(svc.preview(CUSTOMER, VIEWER)).rejects.toBeInstanceOf(ConflictException);
-    await expect(svc.preview(CUSTOMER, VIEWER)).rejects.toThrow(/2 công ty/);
+    const { cards } = await svc.preview(CUSTOMER, VIEWER);
+
+    expect(cards).toHaveLength(2);
+    expect(cards.map((c) => c.companyId)).toEqual([CO_A, CO_B]);
+    // Mỗi thẻ chỉ gồm mộ của CHÍNH công ty đó — không tờ nào mang mộ của nhà kia.
+    expect(cards[0]?.plots.map((p) => p.gravePlotId)).toEqual(['p1']);
+    expect(cards[1]?.plots.map((p) => p.gravePlotId)).toEqual(['p2']);
+  });
+
+  /* Số lần cấp đánh theo KHÁCH, không theo công ty — cố ý: đổi sang đánh theo công ty là đổi
+   * nghĩa con số ĐÃ IN trên tờ giấy khách đang cầm. Hai thẻ cấp cùng lúc vì thế mang hai số
+   * LIỀN NHAU, và đó là câu trả lời đúng: chúng là hai lần cấp chứng từ khác nhau. */
+  it('hai thẻ nhận số lần cấp NỐI TIẾP, không phải cùng một số', async () => {
+    const { svc } = build([
+      { id: 'p1', companyId: CO_A, cemeteryId: 'nt-a1' },
+      { id: 'p2', companyId: CO_B, cemeteryId: 'nt-b1' },
+    ]);
+
+    const { cards } = await svc.preview(CUSTOMER, VIEWER);
+
+    expect(cards.map((c) => c.nextPrintNumber)).toEqual([1, 2]);
   });
 
   /* Phạm vi vẫn hỏi trên TỪNG mộ, và hỏi bằng công ty CỦA MỘ. Ca này canh rằng việc lọc theo
@@ -146,5 +190,67 @@ describe('thẻ mộ theo CÔNG TY CỦA PHẦN MỘ, không theo công ty của
     await svc.preview(CUSTOMER, VIEWER);
 
     expect(assertCompanyFor).not.toHaveBeenCalledWith('u1', 'cemetery.card.view', CO_KHACH);
+  });
+});
+
+/* CẤP THẺ — một lần bấm cấp ĐÚNG MỘT tờ.
+ *
+ * Bản đầu của lát này lặp qua từng công ty với CÙNG một `dto`, và lưới kiểm lúc đó xanh
+ * hết: không ca nào hỏi xem chữ ký đi đâu. Mà `dto` mang `approvedBy`/`approvedTitle` của
+ * MỘT người, còn người ký gắn theo nghĩa trang (luật 05/09) — nên vòng lặp ấy đóng tên một
+ * người lên cả tờ của công ty họ không quản lý nghĩa trang, và tờ giấy ra khỏi quầy rồi thì
+ * không ai đọc ngược lại được.
+ */
+describe('cấp thẻ: một lần cấp = một tờ = một công ty', () => {
+  it('khách hai công ty mà KHÔNG khai công ty: CHẶN, và chặn TRƯỚC khi chạm tới tiền', async () => {
+    const { svc, resolveWaive } = build([
+      { id: 'p1', companyId: CO_A, cemeteryId: 'nt-a1' },
+      { id: 'p2', companyId: CO_B, cemeteryId: 'nt-b1' },
+    ]);
+
+    await expect(svc.issue(CUSTOMER, ISSUE_DTO, VIEWER)).rejects.toBeInstanceOf(ConflictException);
+    expect(resolveWaive).not.toHaveBeenCalled();
+  });
+
+  /* Công ty do client KHAI phải là công ty khách THẬT có mộ. Thiếu vế này, một lời gọi API
+   * thẳng cấp được tờ thẻ mang tên công ty bất kỳ — `buildCard` lọc mộ theo công ty ấy nên
+   * tờ thẻ KHÔNG CÓ MỘ NÀO, tức một chứng từ rỗng đã ăn số và có thể đã ăn phí. */
+  it('khai một công ty khách không có mộ: CHẶN, không cấp tờ rỗng', async () => {
+    const { svc, resolveWaive } = build([{ id: 'p1', companyId: CO_A, cemeteryId: 'nt-a1' }]);
+
+    await expect(
+      svc.issue(CUSTOMER, { ...(ISSUE_DTO as object), companyId: 'co-LA' } as never, VIEWER),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(resolveWaive).not.toHaveBeenCalled();
+  });
+
+  /* Không phải "chặn tất cho chắc": khai đúng thì cấp được, và cấp ĐÚNG MỘT tờ của ĐÚNG
+   * công ty đã khai — tờ của công ty kia không bị cấp kèm. */
+  it('khai đúng công ty: cấp một tờ, của đúng công ty đó', async () => {
+    const { svc, resolveWaive } = build([
+      { id: 'p1', companyId: CO_A, cemeteryId: 'nt-a1' },
+      { id: 'p2', companyId: CO_B, cemeteryId: 'nt-b1' },
+    ]);
+
+    const { issued } = await svc.issue(
+      CUSTOMER,
+      { ...(ISSUE_DTO as object), companyId: CO_B } as never,
+      VIEWER,
+    );
+
+    expect(issued).toHaveLength(1);
+    expect(issued[0]?.companyId).toBe(CO_B);
+    expect(issued[0]?.plots.map((p) => p.gravePlotId)).toEqual(['p2']);
+    // Và tiền tra theo công ty của tờ vừa cấp, không phải công ty kia.
+    expect(resolveWaive).toHaveBeenCalledTimes(1);
+  });
+
+  // Khách một công ty: không phải khai gì cả, màn hình cũ không đổi một nhịp nào.
+  it('khách một công ty: không khai cũng cấp được', async () => {
+    const { svc } = build([{ id: 'p1', companyId: CO_A, cemeteryId: 'nt-a1' }]);
+
+    const { issued } = await svc.issue(CUSTOMER, ISSUE_DTO, VIEWER);
+
+    expect(issued.map((c) => c.companyId)).toEqual([CO_A]);
   });
 });
