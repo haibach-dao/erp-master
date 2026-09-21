@@ -88,9 +88,11 @@ function build(plots: { id: string; companyId: string; cemeteryId: string }[]) {
       fn({
         cardPrintLog: {
           findFirst: vi.fn().mockResolvedValue(null),
-          create: vi.fn().mockImplementation((args: { data: Record<string, unknown> }) =>
-            Promise.resolve({ ...args.data }),
-          ),
+          create: vi
+            .fn()
+            .mockImplementation((args: { data: Record<string, unknown> }) =>
+              Promise.resolve({ ...args.data }),
+            ),
         },
       }),
     ),
@@ -112,7 +114,10 @@ function build(plots: { id: string; companyId: string; cemeteryId: string }[]) {
     { decrypt: vi.fn() } as unknown as PiiService,
     { holdsForMasking: vi.fn().mockResolvedValue(false) } as unknown as PermissionsService,
     { quote, resolveWaive, recordCharges } as unknown as CardFeesService,
-    { isRequired, assertApproved: vi.fn().mockResolvedValue(null) } as unknown as CardApprovalsService,
+    {
+      isRequired,
+      assertApproved: vi.fn().mockResolvedValue(null),
+    } as unknown as CardApprovalsService,
   );
   return { svc, quote, assertPlotFor, assertCompanyFor, resolveWaive };
 }

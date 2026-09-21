@@ -78,7 +78,9 @@ export class IssueCardDto extends WaiveFields {
    * Bỏ trống thì service tự lấy công ty duy nhất của khách; khách có từ hai công ty mà bỏ
    * trống thì service từ chối, không tự chọn hộ.
    */
-  @ApiPropertyOptional({ description: 'Công ty của tờ thẻ đang cấp — bắt buộc khi khách có mộ ở nhiều công ty' })
+  @ApiPropertyOptional({
+    description: 'Công ty của tờ thẻ đang cấp — bắt buộc khi khách có mộ ở nhiều công ty',
+  })
   @IsOptional()
   @IsString()
   companyId?: string;

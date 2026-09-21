@@ -393,12 +393,7 @@ export class CardsService {
     return { issued: [await this.issueOne(customerId, dto, caller, target)] };
   }
 
-  private async issueOne(
-    customerId: string,
-    dto: IssueCardDto,
-    caller: Caller,
-    companyId: string,
-  ) {
+  private async issueOne(customerId: string, dto: IssueCardDto, caller: Caller, companyId: string) {
     const card = await this.buildCard(customerId, caller, companyId);
 
     /* Hai việc phải xong TRƯỚC khi mở giao dịch, và cả hai đều gọi ra ngoài Prisma:

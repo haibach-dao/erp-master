@@ -520,8 +520,8 @@ export default function GraveCardsPage() {
                 return (
                   <Alert variant="warning" title="Chưa xong — còn thẻ của công ty khác">
                     Khách này còn {left.length} tờ chưa cấp:{' '}
-                    {left.map((c) => c.companyName ?? c.companyId).join(', ')}. Chọn tờ đó ở ô
-                    “Tờ thẻ đang xem”, kiểm người ký rồi bấm Cấp thẻ.
+                    {left.map((c) => c.companyName ?? c.companyId).join(', ')}. Chọn tờ đó ở ô “Tờ
+                    thẻ đang xem”, kiểm người ký rồi bấm Cấp thẻ.
                   </Alert>
                 );
               })()}
