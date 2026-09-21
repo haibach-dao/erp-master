@@ -2,12 +2,14 @@
 // permission applies to. CUSTOM defers to a named ScopePolicy / resolver.
 //
 // SITE (một nghĩa trang) is the narrowest scope the cemetery business actually needs,
-// and the role matrix seeds it. PolicyEvaluator does NOT implement `case 'SITE'` yet —
-// that lands with the rest of the scope wiring, together with `siteId` on Subject and
-// ResourceTarget (blueprint doc 16 §D.10, PR-10). Until then the evaluator's `default`
-// branch denies it, which is fail-CLOSED and harmless because nothing calls the
-// evaluator on the request path yet. Seeding the real intent beats seeding COMPANY and
-// letting a reviewer believe a site-bound role is site-bound when it is not.
+// and the role matrix seeds it. It is now fully wired: PolicyEvaluator implements
+// `case 'SITE'` against `subject.siteIds` / `target.siteId`, and ScopeService runs every
+// scope decision through that same evaluator (`allows()`), so this is on the request path.
+//
+// This comment used to say the opposite — that `case 'SITE'` was unimplemented and that
+// nothing called the evaluator on the request path. Both stopped being true and the
+// comment did not follow. Left as a marker: a comment that claims a guard is ABSENT is
+// read as permission to skip it, so it is worse than no comment at all.
 export const SCOPES = [
   'SELF',
   'ASSIGNED',
