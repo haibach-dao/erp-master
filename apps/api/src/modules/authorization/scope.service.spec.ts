@@ -144,25 +144,13 @@ describe('ScopeService.assertSite — the hub axis', () => {
  * list is indistinguishable from "this role is not site-bound", and the fail-safe and
  * fail-open readings swap places.
  */
-describe('ScopeService.listSiteFilter — narrowing list queries', () => {
-  it('narrows a site-bound caller to their own cemeteries', async () => {
-    const svc = build({ level: 'SITE', companyIds: ['co-a'], siteIds: ['ct-1'] });
-    await expect(svc.listSiteFilterFor('u1', CODE)).resolves.toEqual(['ct-1']);
-  });
-
-  it('narrows a site-bound caller with no cemeteries to NOTHING, not to everything', async () => {
-    const svc = build({ level: 'SITE', companyIds: ['co-a'], siteIds: [] });
-    await expect(svc.listSiteFilterFor('u1', CODE)).resolves.toEqual([]);
-  });
-
-  it('does not narrow a company-bound caller — they cover their whole company', async () => {
-    await expect(build(BOUND_TO_A).listSiteFilterFor('u1', CODE)).resolves.toBeNull();
-  });
-
-  it('does not narrow a GROUP caller', async () => {
-    await expect(build(UNRESTRICTED).listSiteFilterFor('u1', CODE)).resolves.toBeNull();
-  });
-});
+/* `listSiteFilterFor` ĐÃ BỊ XOÁ 22/09/2026 — nơi gọi sản xuất cuối cùng (`listInbox`) đã chuyển
+ * sang `plotScopeFilterFor`. Hàm đó dựng trên `level` TOÀN CỤC, nên với người mức COMPANY ở
+ * công ty A và SITE ở công ty B nó trả `null` = "không bó nghĩa trang nào" — trọn công ty B lọt.
+ * Các ca kiểm của nó gỡ theo. Luật nó từng canh nay được canh ở khối `plotScopeFilterFor` bên
+ * dưới, bằng hình dạng THEO TỪNG CÔNG TY biểu diễn nổi câu trả lời đúng.
+ *
+ * `scope-check-scan.ts` canh việc dựng lại hàm này (`CALLER_WIDE_SCOPE_DECL`). */
 
 /* ---- Phạm vi THEO MÃ QUYỀN ----
  *
@@ -259,9 +247,11 @@ describe('phạm vi theo MÃ QUYỀN — hợp giữa các vai cộng dồn QUY�
 
   it('bó danh sách theo mã: SITE trên mã này thì chỉ thấy nghĩa trang được gán', async () => {
     const svc = buildPerCode(KIEM_TOAN_KIEM_QUAN_LY);
-    await expect(svc.listSiteFilterFor('u1', 'burial.record.cancel')).resolves.toEqual(['nt-A']);
+    await expect(svc.plotScopeFilterFor('u1', 'burial.record.cancel')).resolves.toEqual([
+      { companyId: 'co-a', cemeteryIds: ['nt-A'] },
+    ]);
     // Cùng người, mã khác, mức khác — không bó.
-    await expect(svc.listSiteFilterFor('u1', 'burial.record.export')).resolves.toBeNull();
+    await expect(svc.plotScopeFilterFor('u1', 'burial.record.export')).resolves.toBeNull();
   });
 
   it('công ty cũng theo mã: GROUP trên mã đó mới là không giới hạn', async () => {
@@ -319,12 +309,12 @@ describe('mức NONE — không được xử như COMPANY hay như SITE', () =>
     );
   });
 
-  /* Chỗ rò RỘNG NHẤT trong bốn hàm: `null` ở đây nghĩa là "không bó theo nghĩa trang nào".
-   * Một mã bị luật DENY chặn mà vẫn nhận `null` thì truy vấn danh sách chạy không một mệnh
-   * đề lọc nào — người bị chặn đọc được NHIỀU HƠN người chỉ bị bó theo nghĩa trang. */
-  it('listSiteFilterFor: KHÔNG trả null (tức không-bó) cho một mã không có phạm vi', async () => {
+  /* Chỗ rò RỘNG NHẤT của đường DANH SÁCH: `null` nghĩa là "không bó gì". Một mã bị luật DENY
+   * chặn mà vẫn nhận `null` thì truy vấn danh sách chạy không một mệnh đề lọc nào — người bị
+   * chặn đọc được NHIỀU HƠN người chỉ bị bó theo nghĩa trang. */
+  it('plotScopeFilterFor: KHÔNG trả null (tức không-bó) cho một mã không có phạm vi', async () => {
     const svc = buildPerCode(BI_LUAT_CHAN_NHUNG_VAN_DUOC_GAN);
-    await expect(svc.listSiteFilterFor('u1', 'cemetery.plot.view')).rejects.toBeInstanceOf(
+    await expect(svc.plotScopeFilterFor('u1', 'cemetery.plot.view')).rejects.toBeInstanceOf(
       ForbiddenException,
     );
   });

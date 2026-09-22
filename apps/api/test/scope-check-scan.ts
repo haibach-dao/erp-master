@@ -39,11 +39,11 @@ import { join, relative, sep } from 'node:path';
  * Thiếu `levelFor` trong danh sách thì cái lưới báo nhầm ba method đã bó phạm vi ĐÚNG cách
  * — và báo nhầm làm hỏng lưới, vì người ta sẽ ghi bừa lý do miễn trừ cho đỡ đỏ. */
 const SCOPE_CALL =
-  /\b(assertCompanyFor|assertPlotFor|plotScopeFilterFor|visibleCompanyIdsFor|listSiteFilterFor|levelFor)\s*\(/;
+  /\b(assertCompanyFor|assertPlotFor|plotScopeFilterFor|visibleCompanyIdsFor|levelFor)\s*\(/;
 
 /** Bản CŨ, tính phạm vi ở mức rộng nhất của người gọi. Đã xoá — canh để không ai dựng lại. */
 const CALLER_WIDE_SCOPE_DECL =
-  /^\s*async (assertCompany|assertSite|assertSiteFor|visibleCompanyIds|listSiteFilter)\s*\(/;
+  /^\s*async (assertCompany|assertSite|assertSiteFor|visibleCompanyIds|listSiteFilter|listSiteFilterFor)\s*\(/;
 
 const TAKES_CALLER = /\bcaller\s*:\s*Caller\b/;
 const METHOD_HEAD = /^ {2}(?:private |public |protected )?(?:async )?([A-Za-z_][\w]*)\s*\(/;

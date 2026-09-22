@@ -567,35 +567,65 @@ export class CardApprovalsService {
 
   /* HỘP PHÊ DUYỆT của người ký. Chỉ hồ sơ gửi ĐÍCH DANH người này.
    *
-   * VÌ SAO ĐƯỜNG NÀY KHÔNG DÙNG `plotScopeFilterFor` (quyết định 17/09/2026, ghi lại để
-   * đừng ai "sửa cho đồng bộ" mà không đọc). Chỉ NÓ — `listForCustomer` ngay dưới ĐÃ được bó
-   * thật, vì lý do miễn trừ ở đó không đứng vững; xem đính chính tại chỗ:
+   * ĐƯỜNG NÀY TỪNG ĐƯỢC MIỄN bó theo từng công ty (quyết định 17/09/2026), với lý do:
+   * "`cardIssueApproval` lưu `companyId` của KHÁCH và `cemeteryId` của PHẦN MỘ — hai giá trị
+   * đến từ hai bản ghi khác nhau". **Lý do đó nay SAI**, và thứ làm nó sai là chính thay đổi
+   * 19/09/2026 ở nhánh này: `submitForApproval` lấy `companyId` từ `buildCard(...).companyId`,
+   * mà từ `4147c5e` giá trị ấy là công ty của PHẦN MỘ, không còn của khách. Hai cột nay cùng
+   * quy về một phần mộ, nên mệnh đề theo-từng-công-ty áp được — và phải áp.
    *
-   * `cardIssueApproval` lưu `companyId` của KHÁCH và `cemeteryId` của PHẦN MỘ — hai giá trị
-   * đến từ hai bản ghi khác nhau, và không có gì ép chúng trùng (xem `assertInScope`). Mệnh
-   * đề "theo từng công ty" mà `plotScopeWhere` dựng giả định hai cột nói về CÙNG một bản ghi;
-   * áp lên bảng này là ghép công ty của khách với nghĩa trang của mộ, tức đúng cặp lệch vừa
-   * phải đi vá ở `assertInScope`.
+   * VÌ SAO PHẢI ÁP, không chỉ vì "cho đồng bộ": hai trục RỜI không bó được người giữ mức khác
+   * nhau ở hai công ty. Ai cầm COMPANY ở công ty A và SITE ở công ty B thì `listSiteFilterFor`
+   * trả `null` — vì nó dựng trên mức RỘNG NHẤT người đó giữ ở BẤT KỲ đâu — nên trục nghĩa trang
+   * không bao giờ được đặt, và một hồ sơ ở nghĩa trang B2 vẫn nằm trong hộp thư của họ sau khi
+   * phân công B2 đã hết hạn. `assertInScope` vẫn chặn được thao tác DUYỆT, nên đó là rò ĐỌC —
+   * nhưng `findMany` không có `select` thì rò cả `plotIdsSnapshot`, `quoteSnapshot`, `quoteTotal`.
    *
-   * Đường này bị giới hạn bằng một khoá mà người gọi KHÔNG chọn được: `approverUserId` là
-   * chính họ, nên nó chỉ trả hồ sơ ai đó đã gửi đích danh cho họ. Nên hỏi hai trục RỜI ở đây
-   * là chấp nhận được, và đó là lựa chọn có chủ đích chứ không phải sót.
+   * `approverUserId` là khoá người gọi KHÔNG chọn được, nên bề mặt vốn đã hẹp. Nó thu hẹp, nó
+   * không bó phạm vi — và ca "phân công hết hạn" ở trên đi lọt qua đúng khe đó.
    */
   async listInbox(caller: Caller) {
     if (caller.userId === null) {
       return [];
     }
-    const sites = await this.scope.listSiteFilterFor(caller.userId, caller.permission);
-    const companies = await this.scope.visibleCompanyIdsFor(caller.userId, caller.permission);
+    const filter = await this.scope.plotScopeFilterFor(caller.userId, caller.permission);
 
     const where: Prisma.CardIssueApprovalWhereInput = {
       approverUserId: caller.userId,
       state: APPROVAL_STATES.SUBMITTED,
     };
-    if (sites !== null) where.cemeteryId = { in: sites };
-    if (companies !== null) where.companyId = { in: companies };
+    if (filter !== null) {
+      /* Quy nghĩa trang qua bảng `Cemetery`, y như `listForCustomer` — `cardIssueApproval`
+       * không mang cột công ty của nghĩa trang, nên phải hỏi nơi giữ nó. Không cần cột mới,
+       * không cần migration. */
+      const cemeteries = await this.prisma.cemetery.findMany({
+        where: plotScopeWhere(filter, { company: 'companyId', cemetery: 'id' }) ?? {},
+        select: { id: true },
+      });
+      where.cemeteryId = { in: cemeteries.map((c) => c.id) };
+    }
 
-    return this.prisma.cardIssueApproval.findMany({ where, orderBy: { submittedAt: 'asc' } });
+    /* `select` TƯỜNG MINH, cùng lý do đã ghi ở `listForCustomer`: hộp thư chỉ cần biết có gì
+     * đang chờ và của ai, không cần bảng kê từng dòng tiền. Bản cũ trả TOÀN BỘ cột, tức phát
+     * cả `plotIdsSnapshot` và `quoteSnapshot` cho người chỉ cần thấy một dòng chờ duyệt. */
+    return this.prisma.cardIssueApproval.findMany({
+      where,
+      select: {
+        id: true,
+        state: true,
+        companyId: true,
+        cemeteryId: true,
+        customerId: true,
+        approverSignerId: true,
+        approverUserId: true,
+        submittedBy: true,
+        submittedAt: true,
+        expiresAt: true,
+        quoteTotal: true,
+        waiveRequested: true,
+      },
+      orderBy: { submittedAt: 'asc' },
+    });
   }
 
   /* Hồ sơ của MỘT khách — màn cấp thẻ đọc cái này để biết mình đang ở chặng nào.

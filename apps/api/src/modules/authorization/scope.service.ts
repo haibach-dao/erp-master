@@ -134,15 +134,6 @@ export class ScopeService {
       }));
   }
 
-  /** Cemeteries a list query must be narrowed to FOR ONE CODE, or `null` when none. */
-  async listSiteFilterFor(
-    userId: string | null,
-    code: string | null | undefined,
-  ): Promise<string[] | null> {
-    const { subject, level } = await this.loadFor(userId, code);
-    return level === 'SITE' ? (subject.siteIds ?? []) : null;
-  }
-
   /* ---- Luật phạm vi, khai đúng MỘT lần ---- */
 
   private checkCompany(
