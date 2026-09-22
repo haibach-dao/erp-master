@@ -118,6 +118,7 @@ function build(plots: { id: string; companyId: string; cemeteryId: string }[]) {
     { isRequired, assertApproved } as unknown as CardApprovalsService,
   );
   return {
+    prisma,
     svc,
     quote,
     assertPlotFor,
@@ -332,5 +333,57 @@ describe('cấp thẻ: một lần cấp = một tờ = một công ty', () => {
     const { issued } = await svc.issue(CUSTOMER, ISSUE_DTO, VIEWER);
 
     expect(issued.map((c) => c.companyId)).toEqual([CO_A]);
+  });
+});
+
+/* SỐ LƯỢT ĐỌC — neo lại, vì hồi quy hiệu năng không tự báo.
+ *
+ * Hai hồi quy một lượt soi độc lập đo được, cả hai đều lặng lẽ: phép hỏi phạm vi chạy TRONG
+ * vòng lặp theo từng mộ, và `preview` đọc lại cùng ba bảng cho MỖI công ty. Không test nào đỏ,
+ * không log nào kêu — chỉ là quầy chờ lâu hơn, và chỉ lâu hơn khi khách có nhiều mộ.
+ *
+ * Nhóm này đếm LƯỢT GỌI, không đo mili giây: số mili giây phụ thuộc máy chạy test và sẽ chập
+ * chờn, còn số lượt gọi là một con số xác định và nói đúng thứ cần nói.
+ */
+describe('số lượt đọc không tăng theo số mộ và số công ty', () => {
+  /* Hai mộ CÙNG nghĩa trang: `assertPlotFor` là hàm thuần theo bốn đối số, nên hỏi lần thứ hai
+   * là hỏi lại câu đã có câu trả lời — mà mỗi câu tốn vài vòng CSDL. */
+  it('hai mộ cùng một nghĩa trang: hỏi phạm vi MỘT lần, không hai', async () => {
+    const { svc, assertPlotFor } = build([
+      { id: 'p1', companyId: CO_A, cemeteryId: 'nt-a1' },
+      { id: 'p2', companyId: CO_A, cemeteryId: 'nt-a1' },
+    ]);
+
+    await svc.preview(CUSTOMER, VIEWER);
+
+    expect(assertPlotFor).toHaveBeenCalledTimes(1);
+  });
+
+  // Và gộp KHÔNG được làm mất câu hỏi nào: khác nghĩa trang thì vẫn phải hỏi đủ.
+  it('hai mộ khác nghĩa trang: vẫn hỏi đủ HAI lần', async () => {
+    const { svc, assertPlotFor } = build([
+      { id: 'p1', companyId: CO_A, cemeteryId: 'nt-a1' },
+      { id: 'p2', companyId: CO_A, cemeteryId: 'nt-a2' },
+    ]);
+
+    await svc.preview(CUSTOMER, VIEWER);
+
+    expect(assertPlotFor).toHaveBeenCalledTimes(2);
+  });
+
+  /* `preview` dựng HAI tờ, nhưng hồ sơ khách / quyền sử dụng / phần mộ không phụ thuộc công
+   * ty. Mỗi thứ phải đọc ĐÚNG MỘT lần, dù có bao nhiêu tờ. */
+  it('khách hai công ty: ba bảng dùng chung vẫn chỉ đọc MỘT lần mỗi bảng', async () => {
+    const { svc, prisma } = build([
+      { id: 'p1', companyId: CO_A, cemeteryId: 'nt-a1' },
+      { id: 'p2', companyId: CO_B, cemeteryId: 'nt-b1' },
+    ]);
+
+    const { cards } = await svc.preview(CUSTOMER, VIEWER);
+
+    expect(cards).toHaveLength(2);
+    expect(prisma.customer.findUnique).toHaveBeenCalledTimes(1);
+    expect(prisma.graveUsageRight.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.gravePlot.findMany).toHaveBeenCalledTimes(1);
   });
 });

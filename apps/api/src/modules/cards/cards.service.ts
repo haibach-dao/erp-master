@@ -15,6 +15,42 @@ import { effectiveCapacity } from '../../common/cemetery/capacity';
 
 const CARD_TYPE = 'GRAVE';
 
+/* BỘ ĐỌC DÙNG CHUNG của một khách: hồ sơ khách · quyền sử dụng · phần mộ.
+ *
+ * Tách ra vì `preview` gọi `buildCard` MỘT LẦN CHO MỖI CÔNG TY, và ba truy vấn này không phụ
+ * thuộc công ty — mỗi vòng đọc lại y nguyên cùng ba kết quả. Khách có mộ ở hai công ty trước
+ * lát này tốn 6 lượt đọc cho 3 thứ; nay `preview` đọc một lần rồi truyền xuống.
+ *
+ * Để ở cấp module, KHÔNG trong class, chỉ để kiểu `CardHolding` suy được từ chính câu truy
+ * vấn (`Awaited<ReturnType<typeof ...>>`). Viết tay lại hình dạng `include` là dựng một bản
+ * sao sẽ lệch ngay lần đầu ai đó thêm một quan hệ — và lệch kiểu ở đây thì `tsc` im, vì bản
+ * viết tay vẫn tự nó hợp lệ. */
+async function loadHolding(prisma: PrismaService, customerId: string) {
+  const customer = await prisma.customer.findUnique({
+    where: { id: customerId },
+    include: { person: true },
+  });
+  if (customer === null) {
+    throw new NotFoundException('Không tìm thấy khách hàng');
+  }
+
+  const allRights = await prisma.graveUsageRight.findMany({
+    where: { holderCustomerId: customerId, ...activeUsageRight },
+    orderBy: { createdAt: 'asc' },
+  });
+  if (allRights.length === 0) {
+    throw new ConflictException('Khách hàng chưa đứng tên phần mộ nào — chưa cấp thẻ được');
+  }
+
+  const allPlots = await prisma.gravePlot.findMany({
+    where: { id: { in: allRights.map((r) => r.gravePlotId) } },
+    include: { cemetery: true, graveType: true },
+  });
+  return { customer, allRights, allPlots };
+}
+
+type CardHolding = Awaited<ReturnType<typeof loadHolding>>;
+
 @Injectable()
 export class CardsService {
   constructor(
@@ -50,27 +86,16 @@ export class CardsService {
    * người quản lý nghĩa trang B khi họ cấp thẻ cho mộ của B — cùng lỗi đã phải sửa ở
    * `CardApprovalsService.assertInScope`, và từ 17/09 khách của A đứng tên mộ ở B là hợp lệ.
    */
-  private async buildCard(customerId: string, caller: Caller, companyId?: string) {
-    const customer = await this.prisma.customer.findUnique({
-      where: { id: customerId },
-      include: { person: true },
-    });
-    if (customer === null) {
-      throw new NotFoundException('Không tìm thấy khách hàng');
-    }
-
-    const allRights = await this.prisma.graveUsageRight.findMany({
-      where: { holderCustomerId: customerId, ...activeUsageRight },
-      orderBy: { createdAt: 'asc' },
-    });
-    if (allRights.length === 0) {
-      throw new ConflictException('Khách hàng chưa đứng tên phần mộ nào — chưa cấp thẻ được');
-    }
-
-    const allPlots = await this.prisma.gravePlot.findMany({
-      where: { id: { in: allRights.map((r) => r.gravePlotId) } },
-      include: { cemetery: true, graveType: true },
-    });
+  /* `issue` KHÔNG truyền `holding`, vì nó chỉ dựng đúng MỘT tờ — để nó tự đọc là đúng, và
+   * giữ đường cấp không đổi một nhịp nào. */
+  private async buildCard(
+    customerId: string,
+    caller: Caller,
+    companyId?: string,
+    holding?: CardHolding,
+  ) {
+    const { customer, allRights, allPlots } =
+      holding ?? (await loadHolding(this.prisma, customerId));
     /* Lọc xuống MỘT công ty. Thiếu `companyId` mà khách chỉ có mộ ở một công ty thì lấy chính
      * công ty đó — mọi đường gọi cũ không phải đổi gì. Thiếu mà khách có mộ ở nhiều công ty là
      * lỗi LẬP TRÌNH, không phải lỗi người dùng: `preview`/`issue` có trách nhiệm lặp qua từng
@@ -105,9 +130,30 @@ export class CardsService {
      * có mộ ở A2 — cùng lớp lỗi với `usageRightHistory`/`plotOwnership`, và ở đây nặng hơn vì
      * thẻ mang cả TÊN NGƯỜI ĐÃ MẤT.
      *
-     * Hỏi trên MỌI nghĩa trang của bộ mộ, không chỉ cái đầu: thẻ in ra mang tất cả. */
+     * Hỏi trên MỌI nghĩa trang của bộ mộ, không chỉ cái đầu: thẻ in ra mang tất cả.
+     *
+     * GỘP CẶP TRÙNG trước khi hỏi. `assertPlotFor` là hàm thuần theo bốn đối số của nó, nên
+     * hỏi lại cùng một cặp (công ty, nghĩa trang) cho mộ thứ hai là hỏi lại một câu đã có câu
+     * trả lời — mà mỗi câu ấy tốn vài vòng CSDL (`loadFor` đọc vai + phân công nghĩa trang).
+     * Khách đứng tên 20 mộ trong cùng một nghĩa trang trước lát này tốn 20 lượt hỏi; nay tốn
+     * MỘT. Số câu hỏi nay bằng số nghĩa trang khác nhau, không bằng số mộ.
+     *
+     * KHÔNG đổi ngữ nghĩa: bỏ bớt một lời gọi trùng không nới phạm vi của ai. Ca neo ở
+     * `card-per-company.service.spec.ts` (hai mộ, hai nghĩa trang) vẫn đòi đủ HAI lượt hỏi. */
+    const pairs = new Map<string, { companyId: string; cemeteryId: string }>();
     for (const p of plots) {
-      await this.scope.assertPlotFor(caller.userId, caller.permission, p.companyId, p.cemeteryId);
+      pairs.set(`${p.companyId}|${p.cemeteryId}`, {
+        companyId: p.companyId,
+        cemeteryId: p.cemeteryId,
+      });
+    }
+    for (const pair of pairs.values()) {
+      await this.scope.assertPlotFor(
+        caller.userId,
+        caller.permission,
+        pair.companyId,
+        pair.cemeteryId,
+      );
     }
     const plotById = new Map(plots.map((p) => [p.id, p]));
 
@@ -281,11 +327,19 @@ export class CardsService {
    * ty (xem chú thích ở `issue`), nên hai thẻ cấp cùng lúc mang hai số liền nhau.
    */
   async preview(customerId: string, caller: Caller) {
-    const companies = await this.companiesWithPlots(customerId);
+    /* ĐỌC MỘT LẦN cho cả bộ thẻ. Trước lát này mỗi vòng lặp gọi `buildCard` và hàm đó tự đọc
+     * lại hồ sơ khách, quyền sử dụng và phần mộ — ba thứ không phụ thuộc công ty. Khách hai
+     * công ty tốn 6 lượt đọc cho 3 thứ; ba công ty tốn 9. Số lượt đọc nay KHÔNG tăng theo số
+     * công ty nữa.
+     *
+     * Và `companiesWithPlots` cũng đọc lại chính hai bảng ấy — nay suy thẳng từ `allPlots`,
+     * bớt thêm hai truy vấn. */
+    const holding = await loadHolding(this.prisma, customerId);
+    const companies = [...new Set(holding.allPlots.map((p) => p.companyId))].sort();
     const last = await this.lastPrintNumber(customerId);
     const cards = [];
     for (const [i, companyId] of companies.entries()) {
-      cards.push(await this.previewOne(customerId, caller, companyId, last + i + 1));
+      cards.push(await this.previewOne(customerId, caller, companyId, last + i + 1, holding));
     }
     return { cards };
   }
@@ -295,8 +349,9 @@ export class CardsService {
     caller: Caller,
     companyId: string,
     nextPrintNumber: number,
+    holding?: CardHolding,
   ) {
-    const card = await this.buildCard(customerId, caller, companyId);
+    const card = await this.buildCard(customerId, caller, companyId, holding);
     const fee = await this.quoteOrBlocked(card);
     return {
       ...card,
