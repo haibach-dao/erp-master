@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { join } from 'node:path';
-import { scanCallerWideScopeApi, scanUnguardedCallerMethods } from './scope-check-scan';
+import {
+  scanCallerWideScopeApi,
+  scanUnguardedCallerMethods,
+  unguardedInText,
+} from './scope-check-scan';
 
 const SRC = join(__dirname, '..', 'src');
 const SCOPE_SERVICE = join(SRC, 'modules', 'authorization', 'scope.service.ts');
@@ -40,16 +44,26 @@ describe('phạm vi — method nhận Caller thì phải HỎI phạm vi', () =>
 
   /* Cái quét trả rỗng thì mọi test dưới xanh mà chẳng kiểm gì. Ratchet lọc trạng thái đã
    * bị đúng cú đó, nên neo lại: khẳng định nó ĐỌC ĐƯỢC mã nguồn và thấy method thật. */
-  it('bộ quét chạy được và thật sự đọc ra method (tự kiểm cái quét)', () => {
+  it('bộ quét chạy được và đọc ra mã nguồn thật (tự kiểm cái quét)', () => {
     expect(() => scanUnguardedCallerMethods(SRC)).not.toThrow();
-    expect(Object.keys(MEASURED_UNGUARDED).length).toBeGreaterThan(0);
-    for (const key of Object.keys(MEASURED_UNGUARDED)) {
+  });
+
+  /* Dòng nợ nào bộ quét KHÔNG còn thấy thì phải xoá khỏi sổ — nếu không, sổ nợ nói dối theo
+   * hướng NHỎ ĐI: nó giữ một miễn trừ cho một chỗ đã bó xong, và miễn trừ ấy sẽ che đúng chỗ
+   * đó nếu lần sau ai gỡ phép bó ra.
+   *
+   * KHÔNG còn khẳng định "sổ nợ phải khác rỗng". Khẳng định đó biến ngày TRẢ HẾT NỢ thành
+   * ngày test đỏ, và sức ép đổ thẳng vào cái đang canh. Việc "bộ quét có thật sự thấy method
+   * hay không" nay do nhóm tự-kiểm bằng văn bản dựng sẵn ở dưới lo, và nhóm đó không mục. */
+  it('sổ nợ không giữ dòng nào bộ quét đã hết thấy', () => {
+    const stale = Object.keys(MEASURED_UNGUARDED).filter((key) => {
       const [file, method] = key.split(':');
-      expect(
-        hits.some((h) => h.file === file && h.method === method),
-        `bộ quét KHÔNG còn thấy ${key} — nếu vừa bó phạm vi cho nó thì xoá dòng này khỏi danh sách nợ`,
-      ).toBe(true);
-    }
+      return !hits.some((h) => h.file === file && h.method === method);
+    });
+    expect(
+      stale,
+      'Những dòng này đã bó phạm vi xong — xoá khỏi MEASURED_UNGUARDED, đừng để miễn trừ sống thừa',
+    ).toEqual([]);
   });
 
   it('không có lỗ MỚI nào ngoài bốn chỗ đã đo và đã nêu để quyết', () => {
@@ -75,5 +89,85 @@ describe('phạm vi — method nhận Caller thì phải HỎI phạm vi', () =>
 describe('phạm vi — không còn API tính theo mức RỘNG NHẤT của người gọi', () => {
   it('ScopeService không khai lại bốn hàm bản cũ', () => {
     expect(scanCallerWideScopeApi(SCOPE_SERVICE)).toEqual([]);
+  });
+});
+
+/* TỰ KIỂM BỘ QUÉT bằng văn bản dựng sẵn.
+ *
+ * Nhóm trên đo TRẠNG THÁI của kho; nhóm này đo CHÍNH CÁI THƯỚC. Tách ra vì hai thứ mục theo
+ * hai nhịp khác nhau: kho thay đổi mỗi ngày, còn thước thì chỉ được phép đổi có chủ đích.
+ *
+ * Mỗi ca dưới đây tương ứng một lỗ ĐO ĐƯỢC của bản trước: một lượt soi độc lập viết thử các
+ * hình dạng này và bộ quét im lặng cho qua cả ba.
+ */
+describe('bộ quét phạm vi — tự kiểm bằng văn bản dựng sẵn', () => {
+  const wrap = (members: string) =>
+    `import { Caller } from './caller';\n\nexport class T {\n${members}\n}\n`;
+
+  it('thấy method thường không hỏi phạm vi', () => {
+    const text = wrap(`  async doGi(id: string, caller: Caller) {
+    return this.prisma.x.findMany({ where: { id }, take: 1, skip: 0, orderBy: { id: 'asc' } });
+  }`);
+    expect(unguardedInText(text).map((m) => m.method)).toEqual(['doGi']);
+  });
+
+  // LỖ 1: method có tham số kiểu. `METHOD_HEAD` bản đầu dừng ở `ten(` nên không khớp `ten<T>(`.
+  it('thấy method GENERIC không hỏi phạm vi', () => {
+    const text = wrap(`  async doGi<T extends object>(id: string, caller: Caller): Promise<T[]> {
+    return [] as T[];
+  }`);
+    expect(unguardedInText(text).map((m) => m.method)).toEqual(['doGi']);
+  });
+
+  // LỖ 2: method viết dạng thuộc tính arrow — bản đầu không nhận hình dạng này chút nào.
+  it('thấy method dạng ARROW không hỏi phạm vi', () => {
+    const text = wrap(`  doGi = async (id: string, caller: Caller) => {
+    return id + caller.userId;
+  };`);
+    expect(unguardedInText(text).map((m) => m.method)).toEqual(['doGi']);
+  });
+
+  /* LỖ 3, tệ nhất: nhắc tên hàm bó phạm vi trong CHÚ THÍCH là đủ để được tính đã bó. Kho này
+   * viết chú thích rất dày và hay dẫn tên hàm, nên đây không phải giả thuyết. */
+  it('KHÔNG tính là đã bó khi tên hàm chỉ nằm trong chú thích', () => {
+    const text = wrap(`  /* Chỗ này đáng ra phải gọi assertPlotFor( ... ) nhưng chưa làm. */
+  async doGi(id: string, caller: Caller) {
+    // Ghi chú: xem thêm assertCompanyFor( ) ở ScopeService.
+    return id;
+  }`);
+    expect(unguardedInText(text).map((m) => m.method)).toEqual(['doGi']);
+  });
+
+  // Và không phải "báo tất cho chắc": gọi thật thì im, kể cả ở hai hình dạng mới.
+  it('im lặng khi method THẬT SỰ hỏi phạm vi — cả ba hình dạng', () => {
+    const text = wrap(`  async thuong(id: string, caller: Caller) {
+    await this.scope.assertPlotFor(caller.userId, caller.permission, 'c', 's');
+    return id;
+  }
+
+  async generic<T>(id: string, caller: Caller): Promise<T[]> {
+    await this.scope.assertCompanyFor(caller.userId, caller.permission, 'c');
+    return [] as T[];
+  }
+
+  arrow = async (id: string, caller: Caller) => {
+    await this.scope.plotScopeFilterFor(caller.userId, caller.permission);
+    return id;
+  };`);
+    expect(unguardedInText(text)).toEqual([]);
+  });
+
+  /* UỶ NHIỆM vẫn phải được công nhận — mất vế này là báo nhầm hàng loạt, mà báo nhầm làm
+   * hỏng lưới: người ta ghi bừa lý do miễn trừ cho đỡ đỏ, rồi miễn trừ thật lọt theo. */
+  it('công nhận uỷ nhiệm qua helper, kể cả helper viết dạng arrow', () => {
+    const text = wrap(`  private guard = async (caller: Caller) => {
+    await this.scope.assertPlotFor(caller.userId, caller.permission, 'c', 's');
+  };
+
+  async doGi(id: string, caller: Caller) {
+    await this.guard(caller);
+    return id;
+  }`);
+    expect(unguardedInText(text)).toEqual([]);
   });
 });
