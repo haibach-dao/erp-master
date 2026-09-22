@@ -94,7 +94,7 @@ function build(
 
   const svc = new CemeteryService(
     prisma,
-    { assertCompanyFor: vi.fn(), assertSiteFor: vi.fn() } as unknown as ScopeService,
+    { assertCompanyFor: vi.fn(), assertPlotFor: vi.fn() } as unknown as ScopeService,
     { record } as unknown as AuditService,
   );
   return { svc, record, order, updateRight, createRight, updatePlot, createHistory };

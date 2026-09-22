@@ -11,6 +11,7 @@ import { grantInForce } from '../../common/lifecycle/active';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { ScopeService } from '../authorization/scope.service';
+import { plotScopeWhere } from '../authorization/plot-scope-where';
 import type { Caller } from '../authorization/caller';
 import type { FeeQuote } from './card-fees.service';
 import type { CardFeeWaiveReason } from './cards.constants';
@@ -564,32 +565,93 @@ export class CardApprovalsService {
     }
   }
 
-  /* HỘP PHÊ DUYỆT của người ký. Chỉ hồ sơ gửi ĐÍCH DANH người này. */
+  /* HỘP PHÊ DUYỆT của người ký. Chỉ hồ sơ gửi ĐÍCH DANH người này.
+   *
+   * ĐƯỜNG NÀY TỪNG ĐƯỢC MIỄN bó theo từng công ty (quyết định 17/09/2026), với lý do:
+   * "`cardIssueApproval` lưu `companyId` của KHÁCH và `cemeteryId` của PHẦN MỘ — hai giá trị
+   * đến từ hai bản ghi khác nhau". **Lý do đó nay SAI**, và thứ làm nó sai là chính thay đổi
+   * 19/09/2026 ở nhánh này: `submitForApproval` lấy `companyId` từ `buildCard(...).companyId`,
+   * mà từ `4147c5e` giá trị ấy là công ty của PHẦN MỘ, không còn của khách. Hai cột nay cùng
+   * quy về một phần mộ, nên mệnh đề theo-từng-công-ty áp được — và phải áp.
+   *
+   * VÌ SAO PHẢI ÁP, không chỉ vì "cho đồng bộ": hai trục RỜI không bó được người giữ mức khác
+   * nhau ở hai công ty. Ai cầm COMPANY ở công ty A và SITE ở công ty B thì `listSiteFilterFor`
+   * trả `null` — vì nó dựng trên mức RỘNG NHẤT người đó giữ ở BẤT KỲ đâu — nên trục nghĩa trang
+   * không bao giờ được đặt, và một hồ sơ ở nghĩa trang B2 vẫn nằm trong hộp thư của họ sau khi
+   * phân công B2 đã hết hạn. `assertInScope` vẫn chặn được thao tác DUYỆT, nên đó là rò ĐỌC —
+   * nhưng `findMany` không có `select` thì rò cả `plotIdsSnapshot`, `quoteSnapshot`, `quoteTotal`.
+   *
+   * `approverUserId` là khoá người gọi KHÔNG chọn được, nên bề mặt vốn đã hẹp. Nó thu hẹp, nó
+   * không bó phạm vi — và ca "phân công hết hạn" ở trên đi lọt qua đúng khe đó.
+   */
   async listInbox(caller: Caller) {
     if (caller.userId === null) {
       return [];
     }
-    const sites = await this.scope.listSiteFilterFor(caller.userId, caller.permission);
-    const companies = await this.scope.visibleCompanyIdsFor(caller.userId, caller.permission);
+    const filter = await this.scope.plotScopeFilterFor(caller.userId, caller.permission);
 
     const where: Prisma.CardIssueApprovalWhereInput = {
       approverUserId: caller.userId,
       state: APPROVAL_STATES.SUBMITTED,
     };
-    if (sites !== null) where.cemeteryId = { in: sites };
-    if (companies !== null) where.companyId = { in: companies };
+    if (filter !== null) {
+      /* Quy nghĩa trang qua bảng `Cemetery`, y như `listForCustomer` — `cardIssueApproval`
+       * không mang cột công ty của nghĩa trang, nên phải hỏi nơi giữ nó. Không cần cột mới,
+       * không cần migration. */
+      const cemeteries = await this.prisma.cemetery.findMany({
+        where: plotScopeWhere(filter, { company: 'companyId', cemetery: 'id' }) ?? {},
+        select: { id: true },
+      });
+      where.cemeteryId = { in: cemeteries.map((c) => c.id) };
+    }
 
-    return this.prisma.cardIssueApproval.findMany({ where, orderBy: { submittedAt: 'asc' } });
+    /* `select` TƯỜNG MINH, cùng lý do đã ghi ở `listForCustomer`: hộp thư chỉ cần biết có gì
+     * đang chờ và của ai, không cần bảng kê từng dòng tiền. Bản cũ trả TOÀN BỘ cột, tức phát
+     * cả `plotIdsSnapshot` và `quoteSnapshot` cho người chỉ cần thấy một dòng chờ duyệt. */
+    return this.prisma.cardIssueApproval.findMany({
+      where,
+      select: {
+        id: true,
+        state: true,
+        companyId: true,
+        cemeteryId: true,
+        customerId: true,
+        approverSignerId: true,
+        approverUserId: true,
+        submittedBy: true,
+        submittedAt: true,
+        expiresAt: true,
+        quoteTotal: true,
+        waiveRequested: true,
+      },
+      orderBy: { submittedAt: 'asc' },
+    });
   }
 
-  /* Hồ sơ của MỘT khách — màn cấp thẻ đọc cái này để biết mình đang ở chặng nào. */
+  /* Hồ sơ của MỘT khách — màn cấp thẻ đọc cái này để biết mình đang ở chặng nào.
+   *
+   * ĐÍNH CHÍNH LỜI KHAI CỦA CHÍNH LÁT TRƯỚC: chú thích ở `listInbox` từng xếp đường này vào
+   * cùng nhóm "ngoại lệ có chủ đích" với lý do `customerId` là một khoá đủ hẹp, và nói thêm
+   * rằng bó đúng thì "cần migration". CẢ HAI ĐỀU SAI, một lượt soi độc lập bắt được:
+   *
+   *   - `customerId` là tham số truy vấn do CLIENT gửi, không phải khoá hẹp do hệ áp. Nó
+   *     không giành được gì cả: ai cầm mã quyền và biết một id khách là hỏi được.
+   *   - Không cần cột mới. Trục nghĩa trang quy được qua chính bảng `Cemetery` (`companyId`
+   *     + `id`), đúng lối `CardSignersService.visibleCemeteryIds` đã đi.
+   *
+   * Nên bó thật: lọc theo tập nghĩa trang người gọi với tới, tính THEO TỪNG CÔNG TY. `[]` giữ
+   * nguyên nghĩa "không với tới cái nào" — không được rơi về "không lọc".
+   */
   async listForCustomer(customerId: string, caller: Caller) {
-    const companies = await this.scope.visibleCompanyIdsFor(caller.userId, caller.permission);
-    const sites = await this.scope.listSiteFilterFor(caller.userId, caller.permission);
-
+    const filter = await this.scope.plotScopeFilterFor(caller.userId, caller.permission);
     const where: Prisma.CardIssueApprovalWhereInput = { customerId };
-    if (companies !== null) where.companyId = { in: companies };
-    if (sites !== null) where.cemeteryId = { in: sites };
+    if (filter !== null) {
+      const cemeteries = await this.prisma.cemetery.findMany({
+        where: plotScopeWhere(filter, { company: 'companyId', cemetery: 'id' }) ?? {},
+        select: { id: true },
+      });
+      where.cemeteryId = { in: cemeteries.map((c) => c.id) };
+    }
 
     /* `select` TƯỜNG MINH, và CỐ Ý bỏ `quoteSnapshot`.
      *
@@ -689,15 +751,62 @@ export class CardApprovalsService {
     return `Khách này đã có một hồ sơ đang chờ duyệt do ${who} gửi lúc ${when}. Bạn không huỷ được hồ sơ của người khác — chờ người ký quyết, hoặc nhờ ${who} huỷ rồi gửi lại.`;
   }
 
-  /* Bó CẢ HAI TRỤC — công ty TRƯỚC, rồi nghĩa trang.
+  /* Bó CẢ HAI TRỤC, bằng MỘT lời gọi.
    *
-   * `assertSiteFor` MỘT MÌNH KHÔNG ĐỦ: `ScopeService.checkSite` thoát ngay khi mức là GROUP
-   * *hoặc COMPANY*, kèm chú thích "that company check is a separate call the caller already
-   * makes". Đây đúng lỗ đã để hở ở lát 0 và bị một lượt soi độc lập bắt — không tái diễn.
+   * Trước 17/09/2026 đây là cặp `assertCompanyFor` + `assertSiteFor`, và quên vế công ty là
+   * lỗ đã để hở ở lát 0 rồi bị một lượt soi độc lập bắt. `ScopeService.assertPlotFor` nay
+   * nhận cả hai trục nên không quên được nữa — và nó còn bịt một lỗ thứ hai mà cặp cũ không
+   * bịt được: mức trong `level` là hợp trên MỌI công ty, nên mức ở công ty này xoá phép bó
+   * nghĩa trang ở công ty kia.
    */
   private async assertInScope(caller: Caller, companyId: string, cemeteryId: string) {
-    await this.scope.assertCompanyFor(caller.userId, caller.permission, companyId);
-    await this.scope.assertSiteFor(caller.userId, caller.permission, cemeteryId);
+    /* HAI CÔNG TY KHÁC NHAU, và phải hỏi cả hai.
+     *
+     * `companyId` ở đây là công ty của KHÁCH (`card.companyId` ← `customer.companyId`), còn
+     * `cemeteryId` là nghĩa trang của PHẦN MỘ. Hai giá trị đến từ hai bản ghi khác nhau, và
+     * KHÔNG có gì ép chúng trùng: `assignUsageRight` gán chủ mộ mà không so
+     * `customer.companyId` với `plot.companyId`, nên khách công ty A đứng tên mộ ở nghĩa
+     * trang của công ty B là dựng được.
+     *
+     * Đưa cặp lệch đó vào `assertPlotFor` thì nó tra mức TẠI CÔNG TY CỦA KHÁCH rồi lấy mức
+     * ấy phán về NGHĨA TRANG của công ty khác: người mức COMPANY ở công ty A thoát ngay,
+     * nghĩa trang của công ty B không bị kiểm một dòng nào. Chiều ngược lại cũng sai — quản
+     * lý đúng nghĩa trang đó lại bị chặn ở vế công ty.
+     *
+     * Nên quy công ty TỪ CHÍNH NGHĨA TRANG (dữ liệu), rồi hỏi phạm vi trên cặp ĐÚNG. Vế công
+     * ty của khách vẫn hỏi riêng, vì hồ sơ này cũng là hồ sơ của khách đó.
+     *
+     * Cùng lớp lỗi đã vá cho hợp đồng (`ContractsService.assertContractInScope`) trong chính
+     * lát 17/09 — chỗ này bị bỏ sót, một lượt soi độc lập bắt được.
+     */
+    const cemetery = await this.prisma.cemetery.findUnique({
+      where: { id: cemeteryId },
+      select: { companyId: true },
+    });
+    if (cemetery === null) {
+      throw new ForbiddenException(
+        'Không quy được nghĩa trang này về công ty nào — không kiểm được phạm vi',
+      );
+    }
+    /* HỎI THEO NGHĨA TRANG, KHÔNG theo công ty của khách — đính chính bản vá 17/09/2026.
+     *
+     * Bản đó gọi thêm `assertCompanyFor(companyId)` với `companyId` là công ty của KHÁCH, lý
+     * do ghi khi ấy là "hồ sơ này cũng là hồ sơ của khách đó". Nghe hợp lý, nhưng SAI với luật
+     * nghiệp vụ: người ký gắn theo NGHĨA TRANG — "ai quản lý nghĩa trang nào thì người đó ký"
+     * (anh Bách chốt, điều 9). Cộng với quyết định 17/09 cho phép khách công ty A đứng tên mộ
+     * ở công ty B, vế thừa đó chặn đúng NGƯỜI MÀ HỆ VỪA GỬI HỒ SƠ TỚI: quản lý nghĩa trang B
+     * không có phạm vi ở công ty A, nên không thấy và không quyết được. Hồ sơ nằm lại vĩnh
+     * viễn — không ai duyệt được, và người gửi thì đã bị chặn không gửi lại.
+     *
+     * Không phải nới lỏng: người quản lý nghĩa trang B đang quản chính phần mộ đó, nên họ là
+     * người ĐÚNG để đọc và quyết hồ sơ về nó. Công ty của khách không nói gì về việc ai làm
+     * việc trên phần mộ. */
+    await this.scope.assertPlotFor(
+      caller.userId,
+      caller.permission,
+      cemetery.companyId,
+      cemeteryId,
+    );
   }
 
   /* Dịch lỗi trùng của CSDL thành câu người đọc hiểu — và PHẢI ĐÚNG INDEX NÀO.

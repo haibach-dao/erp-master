@@ -10,6 +10,7 @@ import { grantInForce } from '../../common/lifecycle/active';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { ScopeService } from '../authorization/scope.service';
+import { plotScopeWhere } from '../authorization/plot-scope-where';
 import type { Caller } from '../authorization/caller';
 import type { CreateCardSignerDto, UpdateCardSignerDto } from './cards.dto';
 
@@ -221,28 +222,36 @@ export class CardSignersService {
     return updated;
   }
 
-  /* BÓ CẢ HAI TRỤC — công ty TRƯỚC, rồi nghĩa trang. Trả luôn bản ghi nghĩa trang để chỗ gọi
+  /* BÓ CẢ HAI TRỤC bằng MỘT lời gọi. Trả luôn bản ghi nghĩa trang để chỗ gọi
    * khỏi tra lại.
    *
-   * `assertSiteFor` MỘT MÌNH KHÔNG ĐỦ, và đây là chỗ tôi đã làm sai ở bản đầu của lát này:
-   * `ScopeService.checkSite` THOÁT NGAY khi mức là GROUP *hoặc COMPANY*, kèm chú thích nói
-   * thẳng "that company check is a separate call the caller already makes" — mà tôi không hề
-   * gọi cái call đó. Hệ quả đo được: một tài khoản mức COMPANY của công ty A cầm
-   * `cemetery.card_signer.view` (CSKH_TIEP_DON, KD_KINH_DOANH đều có qua gói đọc) đọc được
-   * danh mục người ký của công ty B, và bỏ hẳn tham số `cemeteryId` thì đọc được TOÀN HỆ.
+   * Tới 17/09/2026 đây là CẶP `assertCompanyFor` + `assertSiteFor`, và bản đầu của lát người
+   * ký chỉ gọi vế nghĩa trang: phép kiểm đó THOÁT NGAY khi mức là GROUP *hoặc COMPANY*, nên
+   * một tài khoản mức COMPANY của công ty A cầm `cemetery.card_signer.view` (CSKH_TIEP_DON,
+   * KD_KINH_DOANH đều có qua gói đọc) đọc được danh mục người ký của công ty B, và bỏ hẳn
+   * tham số `cemeteryId` thì đọc được TOÀN HỆ.
+   *
+   * Nay `ScopeService.assertPlotFor` nhận cả hai trục trong một lời gọi nên không quên được
+   * nữa — và nó bịt thêm một lỗ mà cặp cũ không bịt: `level` là hợp trên MỌI công ty, nên mức
+   * ở công ty này xoá phép bó nghĩa trang ở công ty kia.
    *
    * Bảng `card_signers` không có cột công ty, nên trục công ty QUY qua `Cemetery.companyId` —
    * cùng lối `BurialsService` quy phạm vi qua `GravePlot`.
    *
-   * Thứ tự CÔNG TY trước NGHĨA TRANG là cố ý: câu từ chối ở mức công ty ("công ty này không
-   * thuộc quyền của bạn") không tiết lộ nghĩa trang đó có tồn tại hay không. */
+   * Thứ tự CÔNG TY trước NGHĨA TRANG vẫn giữ bên trong `assertPlotFor`: câu từ chối ở mức
+   * công ty ("công ty này không thuộc quyền của bạn") không tiết lộ nghĩa trang đó có tồn tại
+   * hay không. */
   private async assertSiteInScope(caller: Caller, cemeteryId: string) {
     const cemetery = await this.prisma.cemetery.findUnique({ where: { id: cemeteryId } });
     if (cemetery === null) {
       throw new NotFoundException('Không tìm thấy nghĩa trang này');
     }
-    await this.scope.assertCompanyFor(caller.userId, caller.permission, cemetery.companyId);
-    await this.scope.assertSiteFor(caller.userId, caller.permission, cemeteryId);
+    await this.scope.assertPlotFor(
+      caller.userId,
+      caller.permission,
+      cemetery.companyId,
+      cemeteryId,
+    );
     return cemetery;
   }
 
@@ -257,24 +266,22 @@ export class CardSignersService {
 
   /* Tập nghĩa trang người gọi được thấy — GIAO của hai trục. `null` = không bó (chỉ GROUP).
    *
-   * Mức COMPANY: `listSiteFilterFor` trả `null` (nó chỉ bó khi mức là SITE), nên nếu chỉ hỏi
-   * nó thì người mức COMPANY không bị bó gì cả. Phải quy tập công ty ra tập nghĩa trang rồi
-   * mới giao. Mức SITE mà cũng có ràng buộc công ty thì giao cả hai — hẹp hơn, đúng luật
-   * "quyền hiệu dụng là GIAO của hai trục, không bao giờ là tổng". */
+   * Bản trước hỏi `listSiteFilterFor` + `visibleCompanyIdsFor` rồi giao hai tập PHẲNG. Hai
+   * tập phẳng không nói được "công ty A: cả công ty, công ty B: chỉ nghĩa trang được giao":
+   * với người mức COMPANY ở A và SITE ở B, `listSiteFilterFor` trả `null` (vì `level` toàn
+   * cục là COMPANY) nên nhánh `sites === null` trả TRỌN tập nghĩa trang của cả A lẫn B.
+   *
+   * `plotScopeWhere` dựng đúng mệnh đề đó ngay trên bảng `Cemetery` — bảng này có `companyId`
+   * và CHÍNH NÓ là nghĩa trang nên cột nghĩa trang là `id`. Giao hai trục xảy ra trong một
+   * truy vấn, không phải bằng hai tập rồi lọc tay. */
   private async visibleCemeteryIds(caller: Caller): Promise<string[] | null> {
-    const [sites, companies] = await Promise.all([
-      this.scope.listSiteFilterFor(caller.userId, caller.permission),
-      this.scope.visibleCompanyIdsFor(caller.userId, caller.permission),
-    ]);
-    if (companies === null) {
-      return sites;
+    const filter = await this.scope.plotScopeFilterFor(caller.userId, caller.permission);
+    const where = plotScopeWhere(filter, { company: 'companyId', cemetery: 'id' });
+    if (where === null) {
+      return null;
     }
-    const rows = await this.prisma.cemetery.findMany({
-      where: { companyId: { in: companies } },
-      select: { id: true },
-    });
-    const byCompany = rows.map((r) => r.id);
-    return sites === null ? byCompany : byCompany.filter((id) => sites.includes(id));
+    const rows = await this.prisma.cemetery.findMany({ where, select: { id: true } });
+    return rows.map((r) => r.id);
   }
 
   /* "Người này có đang quản lý nghĩa trang kia không?" — GIAO của hai trục, không phải tổng.

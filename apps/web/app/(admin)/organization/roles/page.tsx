@@ -33,7 +33,16 @@ import {
   TableRow,
 } from '@/components/ui/table';
 
-const SCOPES = ['GROUP', 'COMPANY', 'SITE', 'SELF'];
+/* ĐÚNG ba mức, vì đó là ba mức máy chủ thực thi được (`ENFORCED_SCOPES` bên `apps/api`).
+ *
+ * `SELF` từng có ở đây và máy chủ từng nhận — nhưng tầng phạm vi không thực thi nó: `broader()`
+ * ném nó về `NONE`, và `NONE` là TỪ CHỐI. Cấp một grant như vậy KHOÁ CHẾT mã quyền đó cho mọi
+ * người giữ vai, ở mọi màn hình có kiểm phạm vi. Từ 16/09/2026 máy chủ trả 400 cho nó, nên để
+ * `SELF` lại trong ô chọn chỉ còn là mời người dùng bấm vào một thứ chắc chắn hỏng.
+ *
+ * Hai danh sách nằm ở hai ứng dụng và KHÔNG có gì tự giữ chúng khớp nhau — thêm một mức vào
+ * `ENFORCED_SCOPES` thì phải sửa cả đây. */
+const SCOPES = ['GROUP', 'COMPANY', 'SITE'];
 
 /* Ma trận vai × quyền — sửa được ngay trên màn hình.
  *

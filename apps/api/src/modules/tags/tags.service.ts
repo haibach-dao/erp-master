@@ -336,8 +336,12 @@ export class TagsService {
     if (plot === null) {
       throw new NotFoundException('Không tìm thấy lô mộ');
     }
-    await this.scope.assertCompanyFor(caller.userId, caller.permission, plot.companyId);
-    await this.scope.assertSiteFor(caller.userId, caller.permission, plot.cemeteryId);
+    await this.scope.assertPlotFor(
+      caller.userId,
+      caller.permission,
+      plot.companyId,
+      plot.cemeteryId,
+    );
     return plot;
   }
 

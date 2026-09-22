@@ -19,6 +19,7 @@ const CALLER_ADD_PARTY: Caller = { userId: 'u1', permission: 'contract.party.ass
 const AUTHOR = 'user-author';
 const MANAGER = 'user-manager';
 const SITE = 'nt-1';
+const CO = 'co-1';
 
 function contract(over: Record<string, unknown> = {}) {
   return {
@@ -56,7 +57,9 @@ function build(row: unknown) {
   };
   /* Phần mộ của hợp đồng, NGOÀI giao dịch: `assertContractInScope` quy nghĩa trang trước
    * khi mở giao dịch, nên nó đọc `prisma.gravePlot` chứ không phải `tx.gravePlot`. */
-  const plotFindUnique = vi.fn().mockResolvedValue({ cemeteryId: SITE });
+  /* Phần mộ mang CẢ công ty LẪN nghĩa trang: từ 17/09/2026 phạm vi hỏi hai trục một lần,
+   * nên thiếu `companyId` là mock nói dối về hình dạng bản ghi thật. */
+  const plotFindUnique = vi.fn().mockResolvedValue({ companyId: CO, cemeteryId: SITE });
   const plotFindMany = vi.fn().mockResolvedValue([{ id: 'plot-1' }]);
   const prisma = {
     externalContract: {
@@ -69,12 +72,20 @@ function build(row: unknown) {
     $transaction: vi.fn().mockImplementation((fn: (t: unknown) => unknown) => fn(tx)),
   } as unknown as PrismaService;
   const assertCompanyFor = vi.fn().mockResolvedValue(undefined);
-  const assertSiteFor = vi.fn().mockResolvedValue(undefined);
+  const assertPlotFor = vi.fn().mockResolvedValue(undefined);
   const listSiteFilterFor = vi.fn().mockResolvedValue(null);
+  /* Bộ lọc danh sách nay hỏi THEO TỪNG CÔNG TY: `null` = không bó, còn một mảng thì mỗi mục
+   * là một công ty với `cemeteryIds` riêng (`null` = cả công ty). */
+  const plotScopeFilterFor = vi.fn().mockResolvedValue(null);
   const svc = new ContractsService(
     prisma,
     { record } as unknown as AuditService,
-    { assertCompanyFor, assertSiteFor, listSiteFilterFor } as unknown as ScopeService,
+    {
+      assertCompanyFor,
+      assertPlotFor,
+      listSiteFilterFor,
+      plotScopeFilterFor,
+    } as unknown as ScopeService,
   );
   return {
     svc,
@@ -83,8 +94,9 @@ function build(row: unknown) {
     tx,
     prisma,
     assertCompanyFor,
-    assertSiteFor,
+    assertPlotFor,
     listSiteFilterFor,
+    plotScopeFilterFor,
     plotFindUnique,
     plotFindMany,
   };
@@ -228,16 +240,16 @@ describe('huỷ hợp đồng — đảo đúng hệ quả của activate', () =
       },
       burialRecord: { count: vi.fn().mockResolvedValue(burials) },
       /* NGOÀI giao dịch: `assertContractInScope` quy nghĩa trang trước khi mở giao dịch. */
-      gravePlot: { findUnique: vi.fn().mockResolvedValue({ cemeteryId: SITE }) },
+      gravePlot: { findUnique: vi.fn().mockResolvedValue({ companyId: CO, cemeteryId: SITE }) },
       $transaction: vi.fn().mockImplementation((fn: (t: unknown) => unknown) => fn(tx)),
     } as unknown as PrismaService;
 
     const assertCompanyFor = vi.fn().mockResolvedValue(undefined);
-    const assertSiteFor = vi.fn().mockResolvedValue(undefined);
+    const assertPlotFor = vi.fn().mockResolvedValue(undefined);
     const svc = new ContractsService(
       prisma,
       { record } as unknown as AuditService,
-      { assertCompanyFor, assertSiteFor } as unknown as ScopeService,
+      { assertCompanyFor, assertPlotFor } as unknown as ScopeService,
     );
     return {
       svc,
@@ -247,7 +259,7 @@ describe('huỷ hợp đồng — đảo đúng hệ quả của activate', () =
       updatePlot,
       createHistory,
       assertCompanyFor,
-      assertSiteFor,
+      assertPlotFor,
     };
   }
 
@@ -313,11 +325,11 @@ describe('huỷ hợp đồng — đảo đúng hệ quả của activate', () =
     );
   });
   it('cancel hỏi nghĩa trang của phần mộ — ba đường nói CÙNG một điều', async () => {
-    const { svc, assertSiteFor } = buildCancel();
+    const { svc, assertPlotFor } = buildCancel();
 
     await svc.cancel('ct-1', { reason: 'khách đổi ý' }, CALLER_CANCEL);
 
-    expect(assertSiteFor).toHaveBeenCalledWith('u1', 'contract.record.cancel', SITE);
+    expect(assertPlotFor).toHaveBeenCalledWith('u1', 'contract.record.cancel', CO, SITE);
   });
 });
 
@@ -395,27 +407,27 @@ describe('phạm vi — verify và activate chỉ chạm hợp đồng trong ph�
  */
 describe('phạm vi — hợp đồng bó theo CẢ nghĩa trang, không chỉ công ty', () => {
   it('verify hỏi nghĩa trang của phần mộ, kèm mã quyền đang thi hành', async () => {
-    const { svc, assertSiteFor, plotFindUnique } = build(contract({ status: 'Uploaded' }));
+    const { svc, assertPlotFor, plotFindUnique } = build(contract({ status: 'Uploaded' }));
 
     await svc.verify('ct-1', verifier(MANAGER));
 
     expect(plotFindUnique).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: 'plot-1' } }),
     );
-    expect(assertSiteFor).toHaveBeenCalledWith(MANAGER, 'contract.record.verify', SITE);
+    expect(assertPlotFor).toHaveBeenCalledWith(MANAGER, 'contract.record.verify', CO, SITE);
   });
 
   it('activate hỏi nghĩa trang của phần mộ, kèm mã quyền đang thi hành', async () => {
-    const { svc, assertSiteFor } = build(contract({ status: 'Verified' }));
+    const { svc, assertPlotFor } = build(contract({ status: 'Verified' }));
 
     await svc.activate('ct-1', activator(MANAGER));
 
-    expect(assertSiteFor).toHaveBeenCalledWith(MANAGER, 'contract.record.activate', SITE);
+    expect(assertPlotFor).toHaveBeenCalledWith(MANAGER, 'contract.record.activate', CO, SITE);
   });
 
   it('ngoài nghĩa trang thì activate BỊ CHẶN, phần mộ không bị phân bổ', async () => {
-    const { svc, tx, assertSiteFor } = build(contract({ status: 'Verified' }));
-    assertSiteFor.mockRejectedValue(new ForbiddenException('không phụ trách nghĩa trang này'));
+    const { svc, tx, assertPlotFor } = build(contract({ status: 'Verified' }));
+    assertPlotFor.mockRejectedValue(new ForbiddenException('không phụ trách nghĩa trang này'));
 
     await expect(svc.activate('ct-1', activator(MANAGER))).rejects.toBeInstanceOf(
       ForbiddenException,
@@ -429,11 +441,11 @@ describe('phạm vi — hợp đồng bó theo CẢ nghĩa trang, không chỉ c
    * kiểm được" phải dẫn tới CHẶN. Cho qua ở đây là fail-open, đúng lớp lỗi đang chặn
    * `createDeceased`. */
   it('không quy được phần mộ thì TỪ CHỐI, không phải bỏ qua phép kiểm', async () => {
-    const { svc, update, plotFindUnique, assertSiteFor } = build(contract({ status: 'Uploaded' }));
+    const { svc, update, plotFindUnique, assertPlotFor } = build(contract({ status: 'Uploaded' }));
     plotFindUnique.mockResolvedValue(null);
 
     await expect(svc.verify('ct-1', verifier(MANAGER))).rejects.toThrow(/không kiểm được phạm vi/);
-    expect(assertSiteFor).not.toHaveBeenCalled();
+    expect(assertPlotFor).not.toHaveBeenCalled();
     expect(update).not.toHaveBeenCalled();
   });
 });
@@ -443,17 +455,16 @@ describe('phạm vi — hợp đồng bó theo CẢ nghĩa trang, không chỉ c
  */
 describe('phạm vi — đường ĐỌC hợp đồng cũng bó, không chỉ đường ghi', () => {
   it('get hỏi CẢ hai trục — trước đây không nhận caller nào cả', async () => {
-    const { svc, assertCompanyFor, assertSiteFor } = build(contract());
+    const { svc, assertPlotFor } = build(contract());
 
     await svc.get('ct-1', CALLER_VIEW);
 
-    expect(assertCompanyFor).toHaveBeenCalledWith('u1', 'contract.record.view', 'co-1');
-    expect(assertSiteFor).toHaveBeenCalledWith('u1', 'contract.record.view', SITE);
+    expect(assertPlotFor).toHaveBeenCalledWith('u1', 'contract.record.view', 'co-1', SITE);
   });
 
   it('get ngoài phạm vi thì 403, không trả bản ghi', async () => {
-    const { svc, assertSiteFor } = build(contract());
-    assertSiteFor.mockRejectedValue(new ForbiddenException('không phụ trách nghĩa trang này'));
+    const { svc, assertPlotFor } = build(contract());
+    assertPlotFor.mockRejectedValue(new ForbiddenException('không phụ trách nghĩa trang này'));
 
     await expect(svc.get('ct-1', CALLER_VIEW)).rejects.toBeInstanceOf(ForbiddenException);
   });
@@ -465,14 +476,18 @@ describe('phạm vi — đường ĐỌC hợp đồng cũng bó, không chỉ �
   });
 
   it('list của người mức SITE bị BÓ theo id phần mộ trong nghĩa trang họ phụ trách', async () => {
-    const { svc, prisma, listSiteFilterFor, plotFindMany } = build(contract());
-    listSiteFilterFor.mockResolvedValue([SITE]);
+    const { svc, prisma, plotScopeFilterFor, plotFindMany } = build(contract());
+    plotScopeFilterFor.mockResolvedValue([{ companyId: CO, cemeteryIds: [SITE] }]);
     plotFindMany.mockResolvedValue([{ id: 'plot-1' }, { id: 'plot-2' }]);
 
     await svc.list('co-1', CALLER_VIEW);
 
     expect(plotFindMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { companyId: 'co-1', cemeteryId: { in: [SITE] } } }),
+      /* Truy vấn quy-ra-id chỉ cần mệnh đề của CHÍNH công ty đang hỏi — `where.companyId` đã
+       * bó hợp đồng về công ty đó rồi, nên phạm vi ở công ty khác không đổi được câu trả lời. */
+      expect.objectContaining({
+        where: { companyId: 'co-1', cemeteryId: { in: [SITE] } },
+      }),
     );
     expect(prisma.externalContract.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -484,8 +499,8 @@ describe('phạm vi — đường ĐỌC hợp đồng cũng bó, không chỉ �
   /* Được gán KHÔNG nghĩa trang nào nghĩa là với tới không cái nào, không phải với tới tất
    * cả. `in: []` là câu trả lời đúng ở đây — bỏ mệnh đề đi mới là sai. */
   it('người mức SITE chưa được gán nghĩa trang nào thì danh sách RỖNG, không phải tất cả', async () => {
-    const { svc, prisma, listSiteFilterFor, plotFindMany } = build(contract());
-    listSiteFilterFor.mockResolvedValue([]);
+    const { svc, prisma, plotScopeFilterFor, plotFindMany } = build(contract());
+    plotScopeFilterFor.mockResolvedValue([{ companyId: CO, cemeteryIds: [] }]);
     plotFindMany.mockResolvedValue([]);
 
     await svc.list('co-1', CALLER_VIEW);
@@ -495,9 +510,24 @@ describe('phạm vi — đường ĐỌC hợp đồng cũng bó, không chỉ �
     );
   });
 
+  /* HỒI QUY HIỆU NĂNG, đã xảy ra thật: bản đầu của lát 17/09 gọi lượt tra phần mộ cho MỌI
+   * mức không phải GROUP — kể cả mức COMPANY, vốn trước đó bỏ qua hẳn khối này — nên nó sinh
+   * một `IN` dài bằng số mộ của cả công ty, mỗi lần mở danh sách hợp đồng. */
+  it('mức COMPANY ở chính công ty đang hỏi thì KHÔNG quy ra id phần mộ', async () => {
+    const { svc, prisma, plotScopeFilterFor, plotFindMany } = build(contract());
+    plotScopeFilterFor.mockResolvedValue([{ companyId: 'co-1', cemeteryIds: null }]);
+
+    await svc.list('co-1', CALLER_VIEW);
+
+    expect(plotFindMany).not.toHaveBeenCalled();
+    expect(prisma.externalContract.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { companyId: 'co-1' } }),
+    );
+  });
+
   it('người mức COMPANY/GROUP thì KHÔNG bị bó theo nghĩa trang', async () => {
-    const { svc, prisma, listSiteFilterFor, plotFindMany } = build(contract());
-    listSiteFilterFor.mockResolvedValue(null);
+    const { svc, prisma, plotScopeFilterFor, plotFindMany } = build(contract());
+    plotScopeFilterFor.mockResolvedValue(null);
 
     await svc.list('co-1', CALLER_VIEW);
 
@@ -508,11 +538,11 @@ describe('phạm vi — đường ĐỌC hợp đồng cũng bó, không chỉ �
   });
 
   it('lọc theo MỘT phần mộ thì phần mộ đó phải trong nghĩa trang được gán', async () => {
-    const { svc, assertSiteFor } = build(contract());
+    const { svc, assertPlotFor } = build(contract());
 
     await svc.list('co-1', CALLER_VIEW, undefined, 'plot-9');
 
-    expect(assertSiteFor).toHaveBeenCalledWith('u1', 'contract.record.view', SITE);
+    expect(assertPlotFor).toHaveBeenCalledWith('u1', 'contract.record.view', CO, SITE);
   });
 
   it('lọc theo phần mộ không tồn tại thì 404, không lặng lẽ trả cả công ty', async () => {
@@ -530,17 +560,16 @@ describe('phạm vi — đường ĐỌC hợp đồng cũng bó, không chỉ �
  */
 describe('phạm vi — thêm bên ký cũng bó, cùng neo với năm đường kia', () => {
   it('hỏi CẢ hai trục, kèm mã quyền đang thi hành', async () => {
-    const { svc, assertCompanyFor, assertSiteFor } = build(contract({ status: 'Uploaded' }));
+    const { svc, assertPlotFor } = build(contract({ status: 'Uploaded' }));
 
     await svc.addParty('ct-1', { customerId: 'cus-1', role: 'OWNER' }, CALLER_ADD_PARTY);
 
-    expect(assertCompanyFor).toHaveBeenCalledWith('u1', 'contract.party.assign', 'co-1');
-    expect(assertSiteFor).toHaveBeenCalledWith('u1', 'contract.party.assign', SITE);
+    expect(assertPlotFor).toHaveBeenCalledWith('u1', 'contract.party.assign', 'co-1', SITE);
   });
 
   it('ngoài phạm vi thì KHÔNG tạo bên ký nào', async () => {
-    const { svc, prisma, assertSiteFor } = build(contract({ status: 'Uploaded' }));
-    assertSiteFor.mockRejectedValue(new ForbiddenException('không phụ trách nghĩa trang này'));
+    const { svc, prisma, assertPlotFor } = build(contract({ status: 'Uploaded' }));
+    assertPlotFor.mockRejectedValue(new ForbiddenException('không phụ trách nghĩa trang này'));
 
     await expect(
       svc.addParty('ct-1', { customerId: 'cus-1', role: 'OWNER' }, CALLER_ADD_PARTY),
@@ -557,5 +586,80 @@ describe('phạm vi — thêm bên ký cũng bó, cùng neo với năm đường
     await expect(
       svc.addParty('ct-1', { customerId: 'cus-1', role: 'OWNER' }, CALLER_ADD_PARTY),
     ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+});
+
+/* TẠO HỢP ĐỒNG — tới 18/09/2026 đường này KHÔNG hỏi một dòng phạm vi nào.
+ *
+ * `companyId` và `gravePlotId` là hai id RỜI do client chọn. Từ quyết định 17/09 (khách công
+ * ty A được đứng tên mộ công ty B) thì "chúng chắc trùng nhau" không còn dùng được nữa.
+ *
+ * Hậu quả không chỉ là rò: hợp đồng mang công ty A trỏ mộ của B thì `list` (lọc theo
+ * `companyId`) không hiện nó cho quản lý nghĩa trang B, còn `assertContractInScope` lại đòi
+ * phạm vi ở CẢ HAI — nên không ai `verify`/`activate`/`cancel` được. Hợp đồng kẹt cứng.
+ */
+describe('tạo hợp đồng — hỏi phạm vi trên CẢ HAI VẾ', () => {
+  function buildCreate(plot: { companyId: string; cemeteryId: string } | null) {
+    const created: Record<string, unknown>[] = [];
+    const prisma = {
+      externalContract: {
+        create: vi.fn().mockImplementation((args: { data: Record<string, unknown> }) => {
+          created.push(args.data);
+          return Promise.resolve({ id: 'ct-new', ...args.data });
+        }),
+      },
+      gravePlot: { findUnique: vi.fn().mockResolvedValue(plot) },
+    } as unknown as PrismaService;
+
+    const assertCompanyFor = vi.fn().mockResolvedValue(undefined);
+    const assertPlotFor = vi.fn().mockResolvedValue(undefined);
+    const svc = new ContractsService(
+      prisma,
+      { record: vi.fn().mockResolvedValue(undefined) } as unknown as AuditService,
+      { assertCompanyFor, assertPlotFor } as unknown as ScopeService,
+    );
+    return { svc, created, assertCompanyFor, assertPlotFor };
+  }
+
+  const DTO_CREATE = {
+    companyId: 'co-1',
+    contractNo: 'HD-001',
+    gravePlotId: 'plot-1',
+  } as never;
+
+  const CALLER_CREATE = { userId: 'u1', permission: 'contract.record.create' };
+
+  it('hỏi công ty của hợp đồng', async () => {
+    const { svc, assertCompanyFor } = buildCreate({ companyId: 'co-KHAC', cemeteryId: SITE });
+    await svc.create(DTO_CREATE, CALLER_CREATE);
+    expect(assertCompanyFor).toHaveBeenCalledWith('u1', 'contract.record.create', 'co-1');
+  });
+
+  /* Phần mộ có thể thuộc công ty KHÁC — hợp lệ từ 17/09. Hỏi bằng công ty CỦA CHÍNH phần mộ,
+   * không mượn công ty của hợp đồng. */
+  it('hỏi phần mộ bằng công ty của CHÍNH phần mộ', async () => {
+    const { svc, assertPlotFor } = buildCreate({ companyId: 'co-KHAC', cemeteryId: SITE });
+    await svc.create(DTO_CREATE, CALLER_CREATE);
+    expect(assertPlotFor).toHaveBeenCalledWith('u1', 'contract.record.create', 'co-KHAC', SITE);
+  });
+
+  it('ngoài phạm vi phần mộ thì KHÔNG ghi hợp đồng nào', async () => {
+    const { svc, created, assertPlotFor } = buildCreate({ companyId: 'co-KHAC', cemeteryId: SITE });
+    assertPlotFor.mockRejectedValue(new ForbiddenException('Ngoài phạm vi được gán'));
+    await expect(svc.create(DTO_CREATE, CALLER_CREATE)).rejects.toBeInstanceOf(ForbiddenException);
+    expect(created).toEqual([]);
+  });
+
+  it('phần mộ không tồn tại thì 404, không ghi gì', async () => {
+    const { svc, created } = buildCreate(null);
+    await expect(svc.create(DTO_CREATE, CALLER_CREATE)).rejects.toBeInstanceOf(NotFoundException);
+    expect(created).toEqual([]);
+  });
+
+  // Không phải "chặn tất cho chắc": hợp lệ thì vẫn tạo được.
+  it('hợp lệ thì vẫn ghi hợp đồng', async () => {
+    const { svc, created } = buildCreate({ companyId: 'co-1', cemeteryId: SITE });
+    await svc.create(DTO_CREATE, CALLER_CREATE);
+    expect(created).toHaveLength(1);
   });
 });

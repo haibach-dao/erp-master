@@ -40,7 +40,10 @@ function build(opts: {
    * trục độ nhạy, không bị phép kiểm phạm vi chặn trước và báo sai chỗ hỏng. */
   contract?: { companyId: string; gravePlotId: string } | null;
   burial?: { gravePlotId: string } | null;
-  deceased?: { personId: string } | null;
+  /* `id` chứ KHÔNG phải `personId`, và hai giá trị cố ý KHÁC nhau: `BurialRecord.
+   * deceasedPersonId` chứa `DeceasedPerson.id`, không phải `Person.id`. Fixture cũ chỉ có
+   * `personId` nên mọi cách hỏi đều ra cùng kết quả — test xanh mà không canh gì. */
+  deceased?: { id: string } | null;
   deceasedBurial?: { gravePlotId: string } | null;
   plot?: { companyId: string; cemeteryId: string } | null;
 }) {
@@ -63,13 +66,18 @@ function build(opts: {
   /* `burialRecord.findFirst` bị gọi ở HAI chỗ khác nhau: tìm theo `legalDocFileId`, và tìm
    * hồ sơ an táng của người đã mất. Phân biệt bằng chính mệnh đề `where` — dùng một giá trị
    * chung cho cả hai là để test xanh vì lý do sai. */
-  const burialFindFirst = vi
-    .fn()
-    .mockImplementation((args: { where: Record<string, unknown> }) =>
-      Promise.resolve(
-        'legalDocFileId' in args.where ? (opts.burial ?? null) : (opts.deceasedBurial ?? null),
-      ),
-    );
+  const burialFindFirst = vi.fn().mockImplementation((args: { where: Record<string, unknown> }) => {
+    if ('legalDocFileId' in args.where) {
+      return Promise.resolve(opts.burial ?? null);
+    }
+    /* Nhánh "hồ sơ an táng của người đã mất" chỉ khớp khi được hỏi bằng ĐÚNG
+     * `DeceasedPerson.id`. Bản trước trả `opts.deceasedBurial` cho mọi `where`, nên nó xanh
+     * kể cả khi mã sản xuất nhét một `Person.id` vào `deceasedPersonId` — mà đó chính là
+     * lỗi đã nằm ở `files.service.ts` cho tới 16/09/2026. */
+    const asked = (args.where as { deceasedPersonId?: string }).deceasedPersonId;
+    const matches = opts.deceased != null && asked === opts.deceased.id;
+    return Promise.resolve(matches ? (opts.deceasedBurial ?? null) : null);
+  });
   const deceasedFindFirst = vi.fn().mockResolvedValue(opts.deceased ?? null);
   const plotFindUnique = vi
     .fn()
@@ -78,7 +86,7 @@ function build(opts: {
     );
 
   const assertCompanyFor = vi.fn().mockResolvedValue(undefined);
-  const assertSiteFor = vi.fn().mockResolvedValue(undefined);
+  const assertPlotFor = vi.fn().mockResolvedValue(undefined);
 
   const svc = new FilesService(
     {
@@ -91,7 +99,7 @@ function build(opts: {
     { get: (key: string) => env[key] } as never,
     { record } as unknown as AuditService,
     { getGrants, getPermissionMeta } as unknown as PermissionsService,
-    { assertCompanyFor, assertSiteFor } as unknown as ScopeService,
+    { assertCompanyFor, assertPlotFor } as unknown as ScopeService,
   );
   return {
     svc,
@@ -100,7 +108,7 @@ function build(opts: {
     record,
     getGrants,
     assertCompanyFor,
-    assertSiteFor,
+    assertPlotFor,
     plotFindUnique,
   };
 }
@@ -232,19 +240,18 @@ describe('FilesService — an env flag must not be what decides security', () =>
  */
 describe('FilesService — phạm vi quy ngược từ bản ghi đang trỏ tới file', () => {
   it('file của HỢP ĐỒNG: quy về công ty của hợp đồng và nghĩa trang của phần mộ', async () => {
-    const { svc, assertCompanyFor, assertSiteFor } = build({
+    const { svc, assertPlotFor } = build({
       file: fileRow({ sensitivity: 'normal' }),
       contract: { companyId: 'co-1', gravePlotId: 'plot-1' },
     });
 
     await svc.getMeta('file-1', view(OTHER));
 
-    expect(assertCompanyFor).toHaveBeenCalledWith(OTHER, 'file.object.view', 'co-1');
-    expect(assertSiteFor).toHaveBeenCalledWith(OTHER, 'file.object.view', SITE);
+    expect(assertPlotFor).toHaveBeenCalledWith(OTHER, 'file.object.view', 'co-1', SITE);
   });
 
   it('file GIẤY TỜ PHÁP LÝ của hồ sơ an táng: quy về nghĩa trang của phần mộ', async () => {
-    const { svc, assertSiteFor } = build({
+    const { svc, assertPlotFor } = build({
       file: fileRow({ sensitivity: 'normal' }),
       contract: null,
       burial: { gravePlotId: 'plot-1' },
@@ -252,11 +259,11 @@ describe('FilesService — phạm vi quy ngược từ bản ghi đang trỏ t�
 
     await svc.getMeta('file-1', view(OTHER));
 
-    expect(assertSiteFor).toHaveBeenCalledWith(OTHER, 'file.object.view', SITE);
+    expect(assertPlotFor).toHaveBeenCalledWith(OTHER, 'file.object.view', 'co-1', SITE);
   });
 
   it('GIẤY CHỨNG TỬ: quy qua hồ sơ an táng của người đã mất', async () => {
-    const { svc, assertSiteFor } = build({
+    const { svc, assertPlotFor } = build({
       file: fileRow({ sensitivity: 'normal' }),
       contract: null,
       burial: null,
@@ -266,7 +273,7 @@ describe('FilesService — phạm vi quy ngược từ bản ghi đang trỏ t�
 
     await svc.getMeta('file-1', view(OTHER));
 
-    expect(assertSiteFor).toHaveBeenCalledWith(OTHER, 'file.object.view', SITE);
+    expect(assertPlotFor).toHaveBeenCalledWith(OTHER, 'file.object.view', 'co-1', SITE);
   });
 
   it('giấy chứng tử của người CHƯA có hồ sơ an táng thì TỪ CHỐI, không cho qua', async () => {
@@ -324,10 +331,10 @@ describe('FilesService — phạm vi quy ngược từ bản ghi đang trỏ t�
   });
 
   it('ngoài phạm vi thì KHÔNG phát URL tải, dù file đã scan sạch', async () => {
-    const { svc, assertSiteFor } = build({
+    const { svc, assertPlotFor } = build({
       file: fileRow({ sensitivity: 'normal', scanStatus: 'clean' }),
     });
-    assertSiteFor.mockRejectedValue(new ForbiddenException('không phụ trách nghĩa trang này'));
+    assertPlotFor.mockRejectedValue(new ForbiddenException('không phụ trách nghĩa trang này'));
 
     await expect(svc.getDownloadUrl('file-1', download(OTHER))).rejects.toBeInstanceOf(
       ForbiddenException,

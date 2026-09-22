@@ -84,14 +84,14 @@ function build(
   } as unknown as PrismaService;
 
   const assertCompanyFor = vi.fn().mockResolvedValue(undefined);
-  const assertSiteFor = vi.fn().mockResolvedValue(undefined);
+  const assertPlotFor = vi.fn().mockResolvedValue(undefined);
   const record = vi.fn().mockResolvedValue(undefined);
   const svc = new TagsService(
     prisma,
     { record } as unknown as AuditService,
-    { assertCompanyFor, assertSiteFor } as unknown as ScopeService,
+    { assertCompanyFor, assertPlotFor } as unknown as ScopeService,
   );
-  return { svc, prisma, create, update, record, assertCompanyFor, assertSiteFor };
+  return { svc, prisma, create, update, record, assertCompanyFor, assertPlotFor };
 }
 
 describe('gắn thẻ cho phần mộ', () => {
@@ -147,10 +147,9 @@ describe('gắn thẻ cho phần mộ', () => {
   /* Thẻ mộ kể tình trạng thực địa, nên phạm vi phải bó tới NGHĨA TRANG chứ không dừng ở
    * công ty — nếu không, người phụ trách nghĩa trang A sửa được thực địa nghĩa trang B. */
   it('bó phạm vi theo CẢ công ty lẫn nghĩa trang', async () => {
-    const { svc, assertCompanyFor, assertSiteFor } = build();
+    const { svc, assertPlotFor } = build();
     await svc.assignPlotTag('plot-1', { tagTypeId: 'tt-1' }, CALLER);
-    expect(assertCompanyFor).toHaveBeenCalledWith('u1', CALLER.permission, 'co-1');
-    expect(assertSiteFor).toHaveBeenCalledWith('u1', CALLER.permission, 'cem-1');
+    expect(assertPlotFor).toHaveBeenCalledWith('u1', CALLER.permission, 'co-1', 'cem-1');
   });
 });
 
@@ -193,12 +192,12 @@ describe('thẻ khách hàng — nhánh TÁCH HẲN khỏi thẻ mộ', () => {
   });
 
   /* Khách hàng chỉ có công ty, không có nghĩa trang — một `assertCompanyFor`, và KHÔNG bịa
-   * ra `cemeteryId` để gọi `assertSiteFor`. */
+   * ra `cemeteryId` để gọi `assertPlotFor`. */
   it('bó phạm vi theo công ty, KHÔNG hỏi nghĩa trang', async () => {
-    const { svc, assertCompanyFor, assertSiteFor } = build();
+    const { svc, assertCompanyFor, assertPlotFor } = build();
     await svc.assignCustomerTag('kh-1', { tagTypeId: 'tt-1' }, CALLER_CUS);
     expect(assertCompanyFor).toHaveBeenCalledWith('u1', CALLER_CUS.permission, 'co-1');
-    expect(assertSiteFor).not.toHaveBeenCalled();
+    expect(assertPlotFor).not.toHaveBeenCalled();
   });
 
   it('gỡ thẻ khách cũng LƯU VẾT', async () => {

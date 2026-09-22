@@ -51,7 +51,7 @@ const NO_RECORD_SCOPE: Readonly<Record<string, string>> = {
    *
    * Tới 03/09 bảng không có `companyId` nên `list` được miễn trừ ở đây với lý do "không có
    * bản ghi đích để bó". Anh Bách chốt 05/09 "người ký là người quản lý nghĩa trang", bảng
-   * có `cemeteryId`, và cả ba route nay bó phạm vi thật qua `assertSiteFor` /
+   * có `cemeteryId`, và cả ba route nay bó phạm vi thật qua `assertPlotFor` /
    * `listSiteFilterFor`. Để dòng miễn trừ ở lại thì lưới sẽ im lặng cho qua đúng chỗ vừa
    * mọc ra một trục phạm vi — một miễn trừ sống lâu hơn lý do sinh ra nó là một cái lỗ, và
    * nó không kêu. */

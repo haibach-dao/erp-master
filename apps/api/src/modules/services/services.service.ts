@@ -1,4 +1,9 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { ulid } from 'ulid';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -60,6 +65,39 @@ export class ServicesService {
     if (catalog === null || !catalog.active) {
       throw new NotFoundException('Không tìm thấy gói dịch vụ hoặc gói đã ngừng');
     }
+    /* PHẠM VI TRÊN CẢ HAI BÊN — tới 18/09/2026 đường này không hỏi một dòng nào.
+     *
+     * `companyId`, `gravePlotId`, `customerId` là BA id RỜI do client chọn, và không giá trị
+     * nào được đối chiếu với nhau — kể cả `catalog.companyId` vừa đọc ngay trên. Ai cầm
+     * `service.subscription.create` cũng ghi được một thuê bao mang công ty bất kỳ, trỏ mộ bất
+     * kỳ. `renew` rồi chép tiếp `prev.companyId`, nên một giá trị sai nhân bản qua mọi kỳ.
+     *
+     * Và cột đó là cột TIỀN: `revenue` cộng theo đúng `companyId` này, nên con số báo cáo chỉ
+     * đáng tin bằng mức đáng tin của DTO.
+     *
+     * Hỏi cả hai vế, không đổi ngữ nghĩa cột: gói dịch vụ thuộc công ty nào thì thuê bao ghi
+     * công ty đó (`catalog.companyId` là dữ liệu, `dto.companyId` là lời khai), còn phần mộ là
+     * chỗ công việc diễn ra và phải nằm trong phạm vi người đăng ký. */
+    if (catalog.companyId !== dto.companyId) {
+      throw new BadRequestException(
+        'Gói dịch vụ này thuộc một công ty khác — chọn gói của đúng công ty chủ quản.',
+      );
+    }
+    await this.scope.assertCompanyFor(caller.userId, caller.permission, dto.companyId);
+    const plot = await this.prisma.gravePlot.findUnique({
+      where: { id: dto.gravePlotId },
+      select: { companyId: true, cemeteryId: true },
+    });
+    if (plot === null) {
+      throw new NotFoundException('Không tìm thấy phần mộ');
+    }
+    await this.scope.assertPlotFor(
+      caller.userId,
+      caller.permission,
+      plot.companyId,
+      plot.cemeteryId,
+    );
+
     const from = new Date(dto.effectiveFrom);
     const to = addMonths(from, catalog.durationMonths);
     const agreedPrice = dto.agreedPrice ?? catalog.price;

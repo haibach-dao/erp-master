@@ -1,9 +1,15 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { ulid } from 'ulid';
 import { PrismaService } from '../../prisma/prisma.service';
 import type { Caller } from '../authorization/caller';
 import { ScopeService } from '../authorization/scope.service';
+import { plotScopeWhere } from '../authorization/plot-scope-where';
 import { AuditService } from '../audit/audit.service';
 import {
   activeBurial,
@@ -65,9 +71,15 @@ export class CemeteryService {
 
   async listCemeteries(companyId: string, caller: Caller) {
     await this.scope.assertCompanyFor(caller.userId, caller.permission, companyId);
-    const sites = await this.scope.listSiteFilterFor(caller.userId, caller.permission);
+    /* Bảng `Cemetery` CHÍNH NÓ là nghĩa trang, nên cột nghĩa trang ở đây là `id`.
+     *
+     * Bó theo TỪNG CÔNG TY chứ không theo một danh sách nghĩa trang phẳng: người mức COMPANY
+     * ở công ty A và SITE ở công ty B từng nhận `null` (không bó) vì `level` toàn cục là
+     * COMPANY, nên họ thấy trọn danh sách nghĩa trang của công ty B. */
+    const filter = await this.scope.plotScopeFilterFor(caller.userId, caller.permission);
+    const scoped = plotScopeWhere(filter, { company: 'companyId', cemetery: 'id' });
     return this.prisma.cemetery.findMany({
-      where: { companyId, ...(sites === null ? {} : { id: { in: sites } }) },
+      where: { companyId, ...(scoped ?? {}) },
       orderBy: { code: 'asc' },
     });
   }
@@ -96,8 +108,46 @@ export class CemeteryService {
   }
 
   async createGravePlot(dto: CreateGravePlotDto, caller: Caller) {
+    /* CẢ HAI giá trị đều do client gửi, nên phải ĐỐI CHIẾU chúng với nhau trước.
+     *
+     * `assertPlotFor` tra mức TẠI công ty được truyền vào. Đưa một `companyId` trong phạm vi
+     * kèm một `cemeteryId` của công ty KHÁC thì người mức COMPANY thoát ngay ở vế công ty và
+     * nghĩa trang không bị kiểm dòng nào — rồi phần mộ ra đời mang công ty A nhưng NẰM TRONG
+     * nghĩa trang của công ty B. Nó hiện trên sơ đồ mặt bằng của công ty B (sơ đồ lọc theo
+     * nghĩa trang) mà KHÔNG hiện trong danh sách mộ của công ty B (danh sách lọc theo công
+     * ty), nên chủ nhà không thấy để gỡ.
+     *
+     * Lược đồ không ép được: `GravePlot.companyId` và `cemeteryId` là hai cột rời, không có
+     * khoá ngoại ghép. Nên phép đối chiếu phải nằm ở đây.
+     *
+     * Hỏi phạm vi bằng công ty CỦA NGHĨA TRANG — dữ liệu, không phải tham số client. */
+
+    /* HỎI VẾ CÔNG TY TRƯỚC KHI ĐỌC BẤT CỨ THỨ GÌ.
+     *
+     * Vế này chỉ cần tham số nên hỏi được ngay, và hỏi ngay là đúng: nếu đọc `Cemetery` trước,
+     * người ngoài công ty phân biệt được "nghĩa trang không tồn tại" (404) với "nghĩa trang
+     * thuộc công ty khác" (400) — tức endpoint tạo mộ thành máy dò sự tồn tại và chủ sở hữu
+     * của mọi nghĩa trang trong hệ, chỉ bằng cách đoán id. Chặn ở vế công ty trước thì cả hai
+     * câu đó đều không phát ra. */
     await this.scope.assertCompanyFor(caller.userId, caller.permission, dto.companyId);
-    await this.scope.assertSiteFor(caller.userId, caller.permission, dto.cemeteryId);
+    const cemetery = await this.prisma.cemetery.findUnique({
+      where: { id: dto.cemeteryId },
+      select: { companyId: true },
+    });
+    if (cemetery === null) {
+      throw new NotFoundException('Không tìm thấy nghĩa trang');
+    }
+    if (cemetery.companyId !== dto.companyId) {
+      throw new BadRequestException(
+        'Nghĩa trang này thuộc một công ty khác — phần mộ phải nằm trong nghĩa trang của chính công ty chủ quản.',
+      );
+    }
+    await this.scope.assertPlotFor(
+      caller.userId,
+      caller.permission,
+      cemetery.companyId,
+      dto.cemeteryId,
+    );
     return this.wrapUnique(
       () =>
         this.prisma.gravePlot.create({
@@ -133,15 +183,20 @@ export class CemeteryService {
       where.tags = { some: { tagTypeId, ...activeTag } };
     }
     if (cemeteryId !== undefined) {
-      // Asking for one cemetery: it has to be one the caller covers.
-      await this.scope.assertSiteFor(caller.userId, caller.permission, cemeteryId);
+      /* Hỏi đúng MỘT nghĩa trang: nó phải là nghĩa trang người gọi với tới ĐƯỢC TRONG CÔNG TY
+       * ĐANG LỌC. Hỏi cả hai vế một lần, vì mức ở công ty này không nói gì về công ty kia. */
+      await this.scope.assertPlotFor(caller.userId, caller.permission, companyId, cemeteryId);
       where.cemeteryId = cemeteryId;
     } else {
       // Asking for the whole company: narrow a site-bound caller to their own cemeteries
       // rather than answering with the company's entire inventory.
-      const sites = await this.scope.listSiteFilterFor(caller.userId, caller.permission);
-      if (sites !== null) {
-        where.cemeteryId = { in: sites };
+      /* Bó theo TỪNG CÔNG TY. `where.companyId` đã đặt ở trên, nên mệnh đề này giao với nó —
+       * và với người có mức khác nhau ở hai công ty, nó mới nói đúng được "công ty này cả
+       * công ty, công ty kia chỉ nghĩa trang được giao". */
+      const filter = await this.scope.plotScopeFilterFor(caller.userId, caller.permission);
+      const scoped = plotScopeWhere(filter);
+      if (scoped !== null) {
+        Object.assign(where, scoped);
       }
     }
     const plots = await this.prisma.gravePlot.findMany({
@@ -158,7 +213,7 @@ export class CemeteryService {
 
   /* PHẠM VI CỦA MỘT PHẦN MỘ, khai đúng MỘT lần.
    *
-   * Cặp `assertCompanyFor` + `assertSiteFor` trên `plot.companyId`/`plot.cemeteryId` trước
+   * Một lời gọi `assertPlotFor` trên `plot.companyId`/`plot.cemeteryId` trước
    * đây được gõ lại ở từng chỗ. Hai bản của cùng một luật là hai thứ sẽ lệch nhau — không
    * phải nếu mà là khi nào — và đó đúng lớp lỗi mà `common/lifecycle/active.ts` sinh ra để
    * dẹp. Nên: một hàm, mọi chỗ gọi.
@@ -171,8 +226,12 @@ export class CemeteryService {
     plot: { companyId: string; cemeteryId: string },
     caller: Caller,
   ): Promise<void> {
-    await this.scope.assertCompanyFor(caller.userId, caller.permission, plot.companyId);
-    await this.scope.assertSiteFor(caller.userId, caller.permission, plot.cemeteryId);
+    await this.scope.assertPlotFor(
+      caller.userId,
+      caller.permission,
+      plot.companyId,
+      plot.cemeteryId,
+    );
   }
 
   private async assertPlotInScope(gravePlotId: string, caller: Caller): Promise<void> {
@@ -361,7 +420,7 @@ export class CemeteryService {
    * và vì vậy nó phải đếm trước xem có mộ nào sẽ tụt xuống dưới số người đang nằm.
    *
    * `GraveType` chỉ có `companyId`, KHÔNG có `cemeteryId` — nên hỏi phạm vi bằng đúng một
-   * `assertCompanyFor`. Bịa ra một `cemeteryId` để gọi thêm `assertSiteFor` là hỏi một câu
+   * `assertCompanyFor`. Bịa ra một `cemeteryId` để gọi thêm `assertPlotFor` là hỏi một câu
    * mà dữ liệu không trả lời được.
    */
   async setGraveTypeCapacity(id: string, dto: SetGraveTypeCapacityDto, caller: Caller) {
@@ -422,8 +481,12 @@ export class CemeteryService {
     if (cemetery === null) {
       throw new NotFoundException('Không tìm thấy nghĩa trang');
     }
-    await this.scope.assertCompanyFor(caller.userId, caller.permission, cemetery.companyId);
-    await this.scope.assertSiteFor(caller.userId, caller.permission, cemeteryId);
+    await this.scope.assertPlotFor(
+      caller.userId,
+      caller.permission,
+      cemetery.companyId,
+      cemeteryId,
+    );
 
     const plots = await this.prisma.gravePlot.findMany({
       where: { cemeteryId, mapX: { not: null }, mapY: { not: null } },
@@ -459,6 +522,22 @@ export class CemeteryService {
    * cấp lại sau tranh chấp. Vì nó vượt mặt chuỗi thẩm định nên nó có mã quyền S3 riêng và
    * ghi nhật ký riêng — không nấp trong một mã sẵn có.
    */
+  /* KHÁCH CỦA CÔNG TY A ĐƯỢC ĐỨNG TÊN MỘ CỦA CÔNG TY B — anh Bách chốt 17/09/2026.
+   *
+   * Hàm này CỐ Ý không so `customer.companyId` với `plot.companyId`. Đó là quyết định nghiệp
+   * vụ, không phải phép kiểm bị bỏ quên — và nó đã được hỏi thẳng rồi trả lời thẳng, sau khi
+   * một lượt soi độc lập chỉ ra đây là nơi sinh ra mọi "cặp lệch công ty" ở hạ nguồn.
+   *
+   * ĐỪNG THÊM RÀNG BUỘC Ở ĐÂY. Thêm vào là chặn một việc nghiệp vụ cho phép, và làm vỡ dữ
+   * liệu đã có.
+   *
+   * HỆ QUẢ PHẢI NHỚ Ở MỌI NƠI KHÁC: `customer.companyId` và `plot.companyId` là HAI câu trả
+   * lời cho HAI câu hỏi khác nhau — "khách này thuộc nhà ai" và "phần mộ này thuộc nhà ai" —
+   * và chúng KHÔNG bảo đảm trùng nhau. Chỗ nào ghép một giá trị của bên này với một giá trị
+   * của bên kia (ví dụ công ty của khách + nghĩa trang của mộ) thì phải quy lại từ ĐÚNG bản
+   * ghi, đừng mượn. Đó là lý do `CardApprovalsService.assertInScope` quy công ty từ chính
+   * nghĩa trang thay vì dùng công ty của khách.
+   */
   async assignUsageRight(
     dto: { gravePlotId: string; holderCustomerId: string; effectiveFrom?: string; note?: string },
     caller: Caller,
@@ -470,8 +549,12 @@ export class CemeteryService {
     if (plot === null) {
       throw new NotFoundException('Không tìm thấy lô mộ');
     }
-    await this.scope.assertCompanyFor(caller.userId, caller.permission, plot.companyId);
-    await this.scope.assertSiteFor(caller.userId, caller.permission, plot.cemeteryId);
+    await this.scope.assertPlotFor(
+      caller.userId,
+      caller.permission,
+      plot.companyId,
+      plot.cemeteryId,
+    );
 
     const customer = await this.prisma.customer.findUnique({
       where: { id: dto.holderCustomerId },
@@ -584,8 +667,12 @@ export class CemeteryService {
     if (plot === null) {
       throw new NotFoundException('Không tìm thấy lô mộ');
     }
-    await this.scope.assertCompanyFor(caller.userId, caller.permission, plot.companyId);
-    await this.scope.assertSiteFor(caller.userId, caller.permission, plot.cemeteryId);
+    await this.scope.assertPlotFor(
+      caller.userId,
+      caller.permission,
+      plot.companyId,
+      plot.cemeteryId,
+    );
     return { right, plot };
   }
 
@@ -731,12 +818,22 @@ export class CemeteryService {
   async usageRightHistory(gravePlotId: string, caller: Caller) {
     const plot = await this.prisma.gravePlot.findUnique({
       where: { id: gravePlotId },
-      select: { id: true, companyId: true, plotCode: true },
+      select: { id: true, companyId: true, cemeteryId: true, plotCode: true },
     });
     if (plot === null) {
       throw new NotFoundException('Không tìm thấy lô mộ');
     }
-    await this.scope.assertCompanyFor(caller.userId, caller.permission, plot.companyId);
+    /* CẢ HAI TRỤC, như đường GHI trên cùng thực thể.
+     *
+     * Bản trước chỉ hỏi công ty, nên quản lý nghĩa trang A1 đọc được lịch sử sang tên của một
+     * mộ ở nghĩa trang A2 cùng công ty — trong khi chính họ không sang tên được mộ đó. Đọc rò
+     * đúng thứ ghi đã chặn. */
+    await this.scope.assertPlotFor(
+      caller.userId,
+      caller.permission,
+      plot.companyId,
+      plot.cemeteryId,
+    );
 
     const rights = await this.prisma.graveUsageRight.findMany({
       where: { gravePlotId },
@@ -789,7 +886,15 @@ export class CemeteryService {
     if (plot === null) {
       throw new NotFoundException('Không tìm thấy lô mộ');
     }
-    await this.scope.assertCompanyFor(caller.userId, caller.permission, plot.companyId);
+    /* CẢ HAI TRỤC. Màn này trả tên chủ mộ, mã khách và ngày sinh — chỉ hỏi công ty thì quản lý
+     * nghĩa trang A1 đọc được chủ mộ ở nghĩa trang A2 cùng công ty, trong khi đường GHI trên
+     * chính mộ đó đã chặn họ. */
+    await this.scope.assertPlotFor(
+      caller.userId,
+      caller.permission,
+      plot.companyId,
+      plot.cemeteryId,
+    );
 
     const right = await this.prisma.graveUsageRight.findFirst({
       where: { gravePlotId, ...activeUsageRight },

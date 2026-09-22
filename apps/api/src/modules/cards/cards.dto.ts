@@ -68,6 +68,23 @@ export class CreateCardFeeScheduleDto {
 }
 
 export class IssueCardDto extends WaiveFields {
+  /* CÔNG TY CỦA TỜ THẺ ĐANG CẤP (anh Bách chốt 19/09/2026: thẻ theo công ty của phần mộ).
+   *
+   * Khách có mộ ở hai công ty thì XEM TRƯỚC ra hai thẻ, nhưng CẤP thì cấp từng tờ — vì
+   * `approvedBy`/`approvedTitle` dưới đây là chữ ký của MỘT người, mà người ký gắn theo
+   * nghĩa trang (luật 05/09). Cấp cả hai tờ trong một lời gọi là đóng tên một người lên cả
+   * tờ của công ty họ không quản lý nghĩa trang — đúng thứ luật đó cấm.
+   *
+   * Bỏ trống thì service tự lấy công ty duy nhất của khách; khách có từ hai công ty mà bỏ
+   * trống thì service từ chối, không tự chọn hộ.
+   */
+  @ApiPropertyOptional({
+    description: 'Công ty của tờ thẻ đang cấp — bắt buộc khi khách có mộ ở nhiều công ty',
+  })
+  @IsOptional()
+  @IsString()
+  companyId?: string;
+
   @ApiPropertyOptional({ description: 'Lý do cấp: cấp lần đầu, đổi thông tin, mất thẻ...' })
   @IsOptional()
   @IsString()

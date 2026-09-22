@@ -146,13 +146,22 @@ export class FilesService {
       return;
     }
 
+    /* Lấy `id` của dòng NGƯỜI MẤT, không lấy `personId`.
+     *
+     * `BurialRecord.deceasedPersonId` chứa `DeceasedPerson.id`, KHÔNG phải `Person.id` — xem
+     * `common/lifecycle/person-references.ts`. Bản trước chọn `personId` rồi nhét vào
+     * `deceasedPersonId`, nên `rec` LUÔN `null` và mọi giấy chứng tử rơi thẳng xuống
+     * `SCOPE_UNRESOLVED`: fail-closed nên không rò gì, nhưng đường tải giấy chứng tử coi như
+     * chết với tất cả trừ chính người đã tải lên. Cùng một lỗi với `checkPersonAnchor` bên
+     * `CustomersService`, tìm ra cùng một lượt soi 16/09/2026.
+     */
     const deceased = await this.prisma.deceasedPerson.findFirst({
       where: { deathCertFileId: file.id },
-      select: { personId: true },
+      select: { id: true },
     });
     if (deceased !== null) {
       const rec = await this.prisma.burialRecord.findFirst({
-        where: { deceasedPersonId: deceased.personId },
+        where: { deceasedPersonId: deceased.id },
         select: { gravePlotId: true },
         orderBy: { createdAt: 'desc' },
       });
@@ -181,8 +190,12 @@ export class FilesService {
     if (plot === null) {
       throw new ForbiddenException(SCOPE_UNRESOLVED);
     }
-    await this.scope.assertCompanyFor(caller.userId, caller.permission, plot.companyId);
-    await this.scope.assertSiteFor(caller.userId, caller.permission, plot.cemeteryId);
+    await this.scope.assertPlotFor(
+      caller.userId,
+      caller.permission,
+      plot.companyId,
+      plot.cemeteryId,
+    );
   }
 
   async getDownloadUrl(id: string, caller: Caller) {

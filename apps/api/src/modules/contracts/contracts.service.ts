@@ -34,7 +34,37 @@ export class ContractsService {
     private readonly scope: ScopeService,
   ) {}
 
+  /* PHẠM VI TRÊN CẢ HAI BÊN — tới 18/09/2026 đường này không hỏi một dòng nào.
+   *
+   * `companyId` và `gravePlotId` là HAI id RỜI do client chọn, và từ quyết định 17/09 (khách
+   * công ty A được đứng tên mộ công ty B) thì chúng KHÔNG bảo đảm trùng nhau. Không hỏi gì
+   * nghĩa là ai cầm `contract.record.create` cũng ghi được một hợp đồng mang công ty bất kỳ,
+   * trỏ vào phần mộ bất kỳ.
+   *
+   * Hậu quả không chỉ là rò: hợp đồng mang công ty A trỏ mộ của B thì `list` (lọc theo
+   * `companyId`) KHÔNG hiện nó cho quản lý nghĩa trang B, còn `assertContractInScope` lại đòi
+   * phạm vi ở CẢ HAI — nên không ai `verify`/`activate`/`cancel` được. Hợp đồng kẹt cứng.
+   *
+   * Hỏi CẢ HAI VẾ chứ không đổi ngữ nghĩa cột: `companyId` của hợp đồng vẫn là bên ký với
+   * khách (`@@unique([companyId, contractNo])` là không gian tên số hợp đồng của bên đó), còn
+   * phần mộ là chỗ công việc diễn ra. Người tạo phải với tới cả hai — chặt hơn, và không tự
+   * quyết thay nghiệp vụ xem cột kia "lẽ ra" phải mang giá trị nào.
+   */
   async create(dto: CreateContractDto, caller: Caller) {
+    await this.scope.assertCompanyFor(caller.userId, caller.permission, dto.companyId);
+    const plot = await this.prisma.gravePlot.findUnique({
+      where: { id: dto.gravePlotId },
+      select: { companyId: true, cemeteryId: true },
+    });
+    if (plot === null) {
+      throw new NotFoundException('Không tìm thấy phần mộ');
+    }
+    await this.scope.assertPlotFor(
+      caller.userId,
+      caller.permission,
+      plot.companyId,
+      plot.cemeteryId,
+    );
     try {
       const contract = await this.prisma.externalContract.create({
         data: {
@@ -105,14 +135,22 @@ export class ContractsService {
     await this.scope.assertCompanyFor(caller.userId, caller.permission, contract.companyId);
     const plot = await this.prisma.gravePlot.findUnique({
       where: { id: contract.gravePlotId },
-      select: { cemeteryId: true },
+      select: { companyId: true, cemeteryId: true },
     });
     if (plot === null) {
       throw new ForbiddenException(
         'Không quy được phần mộ của hợp đồng về nghĩa trang nào — không kiểm được phạm vi',
       );
     }
-    await this.scope.assertSiteFor(caller.userId, caller.permission, plot.cemeteryId);
+    /* Hỏi theo công ty của PHẦN MỘ, không theo công ty của hợp đồng: hai giá trị lẽ ra trùng
+     * nhau nhưng không có ràng buộc nào ép thế, và bản ghi đang bị chạm tới là phần mộ. Vế
+     * công ty của hợp đồng đã hỏi ở trên, nên cả hai đều phải nằm trong phạm vi. */
+    await this.scope.assertPlotFor(
+      caller.userId,
+      caller.permission,
+      plot.companyId,
+      plot.cemeteryId,
+    );
   }
 
   async verify(id: string, caller: Caller) {
@@ -407,27 +445,47 @@ export class ContractsService {
       // Hỏi đúng MỘT phần mộ: phần mộ đó phải nằm trong nghĩa trang người gọi phụ trách.
       const plot = await this.prisma.gravePlot.findUnique({
         where: { id: gravePlotId },
-        select: { cemeteryId: true },
+        select: { companyId: true, cemeteryId: true },
       });
       if (plot === null) {
         throw new NotFoundException('Không tìm thấy phần mộ');
       }
-      await this.scope.assertSiteFor(caller.userId, caller.permission, plot.cemeteryId);
+      await this.scope.assertPlotFor(
+        caller.userId,
+        caller.permission,
+        plot.companyId,
+        plot.cemeteryId,
+      );
       where.gravePlotId = gravePlotId;
     } else {
-      const sites = await this.scope.listSiteFilterFor(caller.userId, caller.permission);
-      if (sites !== null) {
-        /* Không có quan hệ Prisma giữa hợp đồng và phần mộ (hai schema, không khoá ngoại
-         * nối), nên không viết được `where: { gravePlot: { cemeteryId: ... } }` — phải quy
-         * ra id phần mộ trước rồi lọc theo `in`.
-         *
-         * `sites` rỗng thì `in: []` và danh sách rỗng — ĐÚNG: được gán không nghĩa trang
-         * nào nghĩa là với tới không cái nào, không phải với tới tất cả. */
-        const plots = await this.prisma.gravePlot.findMany({
-          where: { companyId, cemeteryId: { in: sites } },
-          select: { id: true },
-        });
-        where.gravePlotId = { in: plots.map((p) => p.id) };
+      /* CHỈ quan tâm công ty đang được hỏi — `where.companyId` đã bó hợp đồng về đúng công ty
+       * đó, nên phạm vi ở các công ty KHÁC không đổi được câu trả lời.
+       *
+       * Và chỉ quy ra id phần mộ KHI công ty này thật sự bị bó theo nghĩa trang. Bản đầu của
+       * lát 17/09 gọi lượt tra mộ cho MỌI mức không phải GROUP — kể cả người mức COMPANY, vốn
+       * trước đó bỏ qua hẳn khối này — nên nó sinh một `IN` dài bằng số mộ của cả công ty. Ở
+       * một nghĩa trang thật, đó là hàng chục nghìn id nhồi vào một truy vấn, mỗi lần mở danh
+       * sách hợp đồng. Một lượt soi độc lập bắt được.
+       *
+       * Không có quan hệ Prisma giữa hợp đồng và phần mộ (hai schema, không khoá ngoại nối),
+       * nên không viết được `where: { gravePlot: { cemeteryId: ... } }` — phải quy ra id trước.
+       *
+       * Danh sách nghĩa trang RỖNG thì `in: []` và kết quả rỗng — ĐÚNG: được gán không nghĩa
+       * trang nào nghĩa là với tới không cái nào, không phải với tới tất cả. */
+      const filter = await this.scope.plotScopeFilterFor(caller.userId, caller.permission);
+      if (filter !== null) {
+        const cuaCongTyNay = filter.find((e) => e.companyId === companyId);
+        if (cuaCongTyNay === undefined) {
+          // Không với tới công ty này — `assertCompanyFor` ở trên lẽ ra đã chặn, nhưng đừng
+          // dựa vào điều đó: không quy được thì trả rỗng, không phải trả tất.
+          where.gravePlotId = { in: [] };
+        } else if (cuaCongTyNay.cemeteryIds !== null) {
+          const plots = await this.prisma.gravePlot.findMany({
+            where: { companyId, cemeteryId: { in: cuaCongTyNay.cemeteryIds } },
+            select: { id: true },
+          });
+          where.gravePlotId = { in: plots.map((p) => p.id) };
+        }
       }
     }
     return this.prisma.externalContract.findMany({ where, orderBy: { createdAt: 'desc' } });

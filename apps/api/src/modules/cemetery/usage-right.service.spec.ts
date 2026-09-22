@@ -20,6 +20,8 @@ function build(
     customerMissing?: boolean;
     ownerDeceased?: boolean;
     existingRight?: { id: string; holderCustomerId: string } | null;
+    /** Công ty của KHÁCH. Mặc định trùng công ty của mộ; đặt khác để dựng CẶP LỆCH. */
+    customerCompanyId?: string;
   } = {},
 ) {
   const {
@@ -28,6 +30,7 @@ function build(
     customerMissing = false,
     ownerDeceased = false,
     existingRight = null,
+    customerCompanyId = 'co-1',
   } = opts;
 
   const record = vi.fn().mockResolvedValue(undefined);
@@ -60,7 +63,7 @@ function build(
           : {
               id: CUSTOMER,
               customerCode: 'KH-0001',
-              companyId: 'co-1',
+              companyId: customerCompanyId,
               person: {
                 id: 'p1',
                 fullName: 'Nguyễn Văn A',
@@ -81,7 +84,7 @@ function build(
 
   const svc = new CemeteryService(
     prisma,
-    { assertCompanyFor: vi.fn(), assertSiteFor: vi.fn() } as unknown as ScopeService,
+    { assertCompanyFor: vi.fn(), assertPlotFor: vi.fn() } as unknown as ScopeService,
     { record } as unknown as AuditService,
   );
   return { svc, record, createRight, updatePlot, createHistory };
@@ -199,5 +202,36 @@ describe('gán mộ — hệ quả kèm theo', () => {
         ConflictException,
       );
     }
+  });
+});
+
+/* QUYẾT ĐỊNH NGHIỆP VỤ — anh Bách chốt 17/09/2026: KHÁCH của công ty A ĐƯỢC ĐỨNG TÊN mộ của
+ * công ty B.
+ *
+ * Nhóm test này KHÔNG canh một lỗi. Nó neo một QUYẾT ĐỊNH, và nó tồn tại vì câu hỏi đã được
+ * đặt ngược lại: một lượt soi độc lập chỉ ra `assignUsageRight` không so hai công ty và gọi
+ * đó là "nguồn sinh cặp lệch". Câu trả lời là cặp lệch HỢP LỆ — nên chỗ này phải có người
+ * canh theo CHIỀU NGƯỢC: ai thêm ràng buộc "hai công ty phải trùng" vào đây là làm đỏ.
+ *
+ * Hệ quả cho mọi nơi khác: `customer.companyId` và `plot.companyId` KHÔNG bảo đảm trùng nhau.
+ * Chỗ nào ghép một giá trị bên này với một giá trị bên kia thì phải quy lại từ ĐÚNG bản ghi.
+ */
+describe('quyền sử dụng mộ — khách công ty A ĐƯỢC đứng tên mộ công ty B', () => {
+  it('cho qua khi công ty của khách KHÁC công ty của phần mộ', async () => {
+    const { svc, createRight } = build({ customerCompanyId: 'co-KHAC' });
+
+    await svc.assignUsageRight({ gravePlotId: PLOT, holderCustomerId: CUSTOMER }, CALLER_ASSIGN);
+
+    expect(createRight).toHaveBeenCalled();
+  });
+
+  /* Các rào chắn KHÁC vẫn phải giữ nguyên — cho phép lệch công ty không có nghĩa là bỏ mọi
+   * phép kiểm. Chủ mộ đã mất vẫn bị chặn, dù công ty có lệch hay không. */
+  it('vẫn chặn chủ mộ ĐÃ MẤT, kể cả khi công ty lệch', async () => {
+    const { svc } = build({ customerCompanyId: 'co-KHAC', ownerDeceased: true });
+
+    await expect(
+      svc.assignUsageRight({ gravePlotId: PLOT, holderCustomerId: CUSTOMER }, CALLER_ASSIGN),
+    ).rejects.toThrow(/đã mất|kế thừa/);
   });
 });

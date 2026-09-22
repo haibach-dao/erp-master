@@ -59,13 +59,17 @@ function build(
       }),
     },
     gravePlot: { findMany: plotFindMany },
+    /* Nghĩa trang → công ty. Từ 17/09/2026 bộ lọc theo nghĩa trang hỏi CẢ HAI TRỤC, và công
+     * ty lấy từ CHÍNH nghĩa trang chứ không từ `filters.companyId` — bộ lọc công ty là tuỳ
+     * chọn và do client gửi, còn "nghĩa trang này thuộc công ty nào" là dữ liệu. */
+    cemetery: { findUnique: vi.fn().mockResolvedValue({ companyId: 'co-1' }) },
   } as unknown as PrismaService;
 
   const reject = () => Promise.reject(new ForbiddenException('Ngoài phạm vi được gán'));
   const scope = {
     visibleCompanyIdsFor: vi.fn().mockResolvedValue(visibleCompanies),
     assertCompanyFor: vi.fn(scopeThrows ? reject : () => Promise.resolve()),
-    assertSiteFor: vi.fn(scopeThrows ? reject : () => Promise.resolve()),
+    assertPlotFor: vi.fn(scopeThrows ? reject : () => Promise.resolve()),
   } as unknown as ScopeService;
 
   const svc = new CustomersService(

@@ -85,7 +85,7 @@ function build(
     {
       visibleCompanyIdsFor: vi.fn().mockResolvedValue(null),
       assertCompanyFor: vi.fn().mockResolvedValue(undefined),
-      assertSiteFor: vi.fn().mockResolvedValue(undefined),
+      assertPlotFor: vi.fn().mockResolvedValue(undefined),
     } as unknown as ScopeService,
   );
   return { svc, burialFindMany, plotFindMany };

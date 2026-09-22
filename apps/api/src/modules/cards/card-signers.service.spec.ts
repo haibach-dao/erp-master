@@ -87,6 +87,13 @@ function signerDelegate(opts: BuildOpts): SignerDelegate {
  * Tách ra thì mỗi ca đặt mặc định phải khẳng định được cả hai vế: lệnh ghi CÓ trên `tx`, và
  * KHÔNG có trên `prisma`. Vế thứ hai mới là vế bắt lỗi; bỏ nó đi là test lại mù như cũ.
  */
+function suyBoLoc(companies: string[] | null, sites: string[] | null) {
+  if (companies === null) {
+    return null;
+  }
+  return companies.map((companyId) => ({ companyId, cemeteryIds: sites }));
+}
+
 function build(opts: BuildOpts = {}) {
   const tx = { cardSigner: signerDelegate(opts) };
 
@@ -94,7 +101,32 @@ function build(opts: BuildOpts = {}) {
     cardSigner: signerDelegate(opts),
     cemetery: {
       findUnique: vi.fn().mockResolvedValue({ id: CEM, name: 'An Lạc Viên', companyId: 'cty-A' }),
-      findMany: vi.fn().mockResolvedValue(opts.cemeteriesOfCompanies ?? [{ id: CEM }]),
+      /* MOCK PHẢI DIỄN GIẢI `where`, nếu không nó không canh được gì.
+       *
+       * Tới 17/09/2026 phép giao hai trục của `visibleCemeteryIds` chạy bằng JS
+       * (`byCompany.filter(...)`) nên một mock trả cứng vẫn bắt được sai sót. Từ khi phép
+       * giao chuyển vào mệnh đề `where`, mock trả cứng KHÔNG còn bắt được gì: một lượt soi
+       * độc lập đo bằng đột biến — bỏ hẳn trục nghĩa trang khỏi mệnh đề — và ba ca dưới đây
+       * VẪN XANH trong khi burials/contracts/holds đỏ.
+       *
+       * Nên mock lọc đúng theo mệnh đề `OR` mà `plotScopeWhere` sinh ra: mỗi mục là
+       * `{ companyId }` (cả công ty) hoặc `{ companyId, id: { in } }` (chỉ nghĩa trang đó). */
+      findMany: vi.fn().mockImplementation((args: { where?: Record<string, unknown> }) => {
+        const nguon = opts.cemeteriesOfCompanies ?? [{ id: CEM }];
+        const w = (args.where ?? {}) as {
+          OR?: { companyId?: string; id?: { in: string[] } }[];
+          companyId?: { in: string[] };
+        };
+        if (w.companyId !== undefined && w.companyId.in.length === 0) {
+          return Promise.resolve([]);
+        }
+        if (w.OR === undefined) {
+          return Promise.resolve(nguon);
+        }
+        return Promise.resolve(
+          nguon.filter((c) => w.OR!.some((m) => m.id === undefined || m.id.in.includes(c.id))),
+        );
+      }),
     },
     user: {
       findUnique: vi
@@ -119,7 +151,7 @@ function build(opts: BuildOpts = {}) {
     $transaction: ReturnType<typeof vi.fn>;
   };
 
-  const assertSiteFor = vi.fn().mockResolvedValue(undefined);
+  const assertPlotFor = vi.fn().mockResolvedValue(undefined);
   const assertCompanyFor = vi.fn().mockResolvedValue(undefined);
   const listSiteFilterFor = vi
     .fn()
@@ -128,10 +160,18 @@ function build(opts: BuildOpts = {}) {
     .fn()
     .mockResolvedValue(opts.companyFilter === undefined ? null : opts.companyFilter);
   const scope = {
-    assertSiteFor,
+    assertPlotFor,
     assertCompanyFor,
     listSiteFilterFor,
     visibleCompanyIdsFor,
+    plotScopeFilterFor: vi
+      .fn()
+      .mockResolvedValue(
+        suyBoLoc(
+          opts.companyFilter === undefined ? null : opts.companyFilter,
+          opts.siteFilter === undefined ? null : opts.siteFilter,
+        ),
+      ),
   } as unknown as ScopeService;
 
   const record = vi.fn().mockResolvedValue(undefined);
@@ -141,7 +181,7 @@ function build(opts: BuildOpts = {}) {
     prisma,
     tx,
     record,
-    assertSiteFor,
+    assertPlotFor,
     assertCompanyFor,
     listSiteFilterFor,
     visibleCompanyIdsFor,
@@ -248,31 +288,30 @@ describe('danh mục người ký thẻ mộ', () => {
   /* ---------- Phạm vi ---------- */
 
   it('bó phạm vi theo nghĩa trang lúc TẠO, dùng đúng mã quyền của người gọi', async () => {
-    const { svc, assertSiteFor } = build();
+    const { svc, assertPlotFor } = build();
     await svc.create(NEW_SIGNER, CALLER);
-    expect(assertSiteFor).toHaveBeenCalledWith(CALLER.userId, CALLER.permission, CEM);
+    expect(assertPlotFor).toHaveBeenCalledWith(CALLER.userId, CALLER.permission, 'cty-A', CEM);
   });
 
   /* CA BẮT LỖI SỐ 1 — đường mà bản đầu của lát này để hở.
    *
-   * `ScopeService.checkSite` THOÁT NGAY khi mức là GROUP *hoặc COMPANY*, kèm chú thích nói
-   * thẳng "that company check is a separate call the caller already makes". Chỉ gọi
-   * `assertSiteFor` thì một tài khoản mức COMPANY của công ty A đọc/ghi được danh mục người
-   * ký của công ty B — `assertSiteFor` không chặn một câu nào. Ca này canh CHÍNH lời gọi
-   * còn thiếu đó, ở cả ba đường. */
-  it('bó CẢ TRỤC CÔNG TY, không chỉ nghĩa trang — assertSiteFor một mình KHÔNG chặn mức COMPANY', async () => {
-    const { svc, assertCompanyFor } = build();
+   * Bản cũ có HAI hàm và phải gọi đủ cặp; quên vế công ty thì một tài khoản mức COMPANY của
+   * công ty A đọc/ghi được danh mục người ký của công ty B. Từ 17/09/2026 chỉ còn MỘT hàm
+   * mang cả hai trục, nên không quên được nữa — ca này canh việc công ty truyền vào là công
+   * ty CỦA NGHĨA TRANG, ở cả ba đường. */
+  it('bó CẢ TRỤC CÔNG TY, không chỉ nghĩa trang — cả ba đường đều mang công ty của nghĩa trang', async () => {
+    const { svc, assertPlotFor } = build();
 
     await svc.create(NEW_SIGNER, CALLER);
-    expect(assertCompanyFor).toHaveBeenCalledWith(CALLER.userId, CALLER.permission, 'cty-A');
+    expect(assertPlotFor).toHaveBeenCalledWith(CALLER.userId, CALLER.permission, 'cty-A', CEM);
 
-    assertCompanyFor.mockClear();
+    assertPlotFor.mockClear();
     await svc.list(CALLER, CEM);
-    expect(assertCompanyFor).toHaveBeenCalledWith(CALLER.userId, CALLER.permission, 'cty-A');
+    expect(assertPlotFor).toHaveBeenCalledWith(CALLER.userId, CALLER.permission, 'cty-A', CEM);
 
-    assertCompanyFor.mockClear();
+    assertPlotFor.mockClear();
     await svc.update('s1', { isDefault: true }, CALLER);
-    expect(assertCompanyFor).toHaveBeenCalledWith(CALLER.userId, CALLER.permission, 'cty-A');
+    expect(assertPlotFor).toHaveBeenCalledWith(CALLER.userId, CALLER.permission, 'cty-A', CEM);
   });
 
   /* CA BẮT LỖI SỐ 2 — fail-open khi danh sách RỖNG.
@@ -304,8 +343,8 @@ describe('danh mục người ký thẻ mộ', () => {
    * thứ tự đã dựng cho `contracts.verify` 27/08/2026. Kiểm trạng thái trước thì câu lỗi 400
    * đã kể cho người ngoài phạm vi biết dòng này tồn tại và đang ở trạng thái nào. */
   it('lúc SỬA thì bó phạm vi TRƯỚC khi kiểm trạng thái, không rò trạng thái ra ngoài phạm vi', async () => {
-    const { svc, assertSiteFor } = build({ existing: { ...SIGNER, status: 'Retired' } });
-    assertSiteFor.mockRejectedValue(new Error('Ngoài phạm vi được gán'));
+    const { svc, assertPlotFor } = build({ existing: { ...SIGNER, status: 'Retired' } });
+    assertPlotFor.mockRejectedValue(new Error('Ngoài phạm vi được gán'));
 
     /* Dòng này VỐN sẽ ném BadRequest ("đã ngừng dùng thì không đặt mặc định được"). Nếu phép
      * kiểm phạm vi bị đặt xuống sau, người ngoài phạm vi sẽ nhận đúng câu đó — tức là biết
@@ -314,7 +353,17 @@ describe('danh mục người ký thẻ mộ', () => {
   });
 
   it('người ở mức SITE chỉ thấy người ký của nghĩa trang mình phủ', async () => {
-    const { svc, prisma } = build({ siteFilter: ['cem-1', 'cem-2'], companyFilter: null });
+    /* Tập nghĩa trang nay QUY QUA truy vấn ` + String.fromCharCode(96) + `Cemetery` + String.fromCharCode(96) + `, không trả thẳng danh sách phân công:
+     * mệnh đề OR giao hai trục ngay trong một truy vấn. Mock phải trả đúng những dòng thoả. */
+    /* `cem-3` PHẢI có trong fixture: nó thuộc công ty người gọi nhưng KHÔNG được giao, nên
+     * nó là thứ duy nhất chứng minh mệnh đề có lọc thật. Fixture chỉ gồm những nghĩa trang
+     * được phép thì cách hỏi đúng và cách hỏi sai cho ra cùng một kết quả — đo bằng đột biến
+     * (bỏ hẳn trục nghĩa trang khỏi mệnh đề) thì ca này vẫn xanh. */
+    const { svc, prisma } = build({
+      siteFilter: ['cem-1', 'cem-2'],
+      companyFilter: ['cty-A'],
+      cemeteriesOfCompanies: [{ id: 'cem-1' }, { id: 'cem-2' }, { id: 'cem-3' }],
+    });
     await svc.list({ userId: 'u9', permission: 'cemetery.card_signer.view' });
     const arg = prisma.cardSigner.findMany.mock.calls[0]?.[0] as { where: Record<string, unknown> };
     expect(arg.where.cemeteryId).toEqual({ in: ['cem-1', 'cem-2'] });

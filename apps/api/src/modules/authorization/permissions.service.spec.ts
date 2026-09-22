@@ -279,3 +279,42 @@ describe('validity window — an expired grant stops existing on its own', () =>
     expect(where.OR).toEqual([{ validTo: null }, { validTo: { gt: expect.any(Date) } }]);
   });
 });
+
+/* Phủ MÃ thôi chưa đủ — phạm vi của chính grant đó phải là thứ hệ THỰC THI được.
+ *
+ * `role_permissions.scope` mặc định `DEPARTMENT` và `role_assignments.scope` là cột tự do;
+ * cả hai đều bị `broader()` ném về `NONE`. Nếu một grant như vậy vẫn được tính là "phủ mã"
+ * thì công ty của dòng gán đó lọt vào tập — và vì `level` lấy mức RỘNG NHẤT từ các dòng
+ * khác, công ty lẽ ra bị thu hẹp lại được với tới ở mức rộng hơn cả trước khi ai đó gõ
+ * `DEPARTMENT` vào ô phạm vi.
+ */
+describe('scopeForCode — grant mang phạm vi hệ không thực thi được thì KHÔNG góp công ty', () => {
+  const CODE = 'crm.customer.view';
+
+  it('bỏ công ty của dòng gán mang scope DEPARTMENT, giữ công ty của dòng gán COMPANY', async () => {
+    const { svc } = build([
+      assignment('VAI_BI_THU_HEP', [CODE], 'DEPARTMENT', 'co-1'),
+      assignment('THU_NGAN', [CODE], 'COMPANY', 'co-2'),
+    ]);
+    const scope = await svc.scopeForCode('u1', CODE);
+    expect(scope.level).toBe('COMPANY');
+    expect(scope.companyIds).toEqual(['co-2']);
+  });
+
+  it('chỉ có grant không thực thi được thì KHÔNG với tới công ty nào', async () => {
+    const { svc } = build([assignment('VAI_BI_THU_HEP', [CODE], 'DEPARTMENT', 'co-1')]);
+    const scope = await svc.scopeForCode('u1', CODE);
+    expect(scope.level).toBe('NONE');
+    expect(scope.companyIds).toEqual([]);
+  });
+
+  // Không phải "chặn tất cho chắc": ba mức thực thi được vẫn góp công ty như thường.
+  for (const s of ['GROUP', 'COMPANY', 'SITE']) {
+    it(`grant mức ${s} vẫn góp công ty của nó`, async () => {
+      const { svc } = build([assignment('VAI', [CODE], s, 'co-9')]);
+      const scope = await svc.scopeForCode('u1', CODE);
+      expect(scope.level).toBe(s);
+      expect(scope.companyIds).toEqual(['co-9']);
+    });
+  }
+});

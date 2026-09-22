@@ -60,13 +60,34 @@ export class ScopeService {
     this.checkCompany(subject, level, companyId);
   }
 
-  async assertSiteFor(
+  /* MỘT phần mộ / MỘT nghĩa trang, hỏi CẢ HAI TRỤC trong CÙNG một câu.
+   *
+   * Thay cho cặp `assertCompanyFor` + `assertSiteFor` từng phải gọi liền nhau. Gộp lại vì
+   * HAI lý do, cả hai đều là lỗi đã xảy ra thật:
+   *
+   * 1. QUÊN GỌI VẾ CÔNG TY — đã cắn hai lần (xem chú thích ở `CardSignersService` và
+   *    `CardApprovalsService`). Gọi mỗi vế nghĩa trang thì mức COMPANY thoát ngay, và người
+   *    ở công ty A đọc được dữ liệu công ty B. Nay không còn hàm nào để gọi lẻ.
+   *
+   * 2. MỨC KHÔNG GẮN VỚI CÔNG TY — lỗ tìm ra 17/09/2026, và nó thủng NGAY CẢ KHI nơi gọi đã
+   *    gọi đủ cặp. `level` là hợp trên MỌI công ty, nên mức COMPANY lấy từ công ty A làm
+   *    `checkSite` thoát sớm ở công ty B, xoá luôn phép bó theo nghĩa trang tại B. Người vừa
+   *    là Thu ngân công ty A vừa là Quản lý nghĩa trang B1 chạm được mọi nghĩa trang của
+   *    công ty B. Chỉ hỏi được đúng câu này khi biết CẢ hai vế cùng lúc — đó là lý do hai
+   *    tham số đi chung một hàm chứ không phải hai lời gọi.
+   *
+   * `companyId` lấy từ CHÍNH bản ghi (`plot.companyId`, `cemetery.companyId`), không phải từ
+   * client — cùng nếp với `assertCompanyFor`.
+   */
+  async assertPlotFor(
     userId: string | null,
     code: string | null | undefined,
+    companyId: string | null | undefined,
     cemeteryId: string | null | undefined,
   ): Promise<void> {
-    const { subject, level } = await this.loadFor(userId, code);
-    this.checkSite(subject, level, cemeteryId);
+    const { subject, level, levelByCompany } = await this.loadFor(userId, code);
+    this.checkCompany(subject, level, companyId);
+    this.checkSite(level, levelByCompany, subject, companyId, cemeteryId);
   }
 
   /** Companies visible FOR ONE CODE, or `null` meaning "no restriction". */
@@ -78,13 +99,39 @@ export class ScopeService {
     return level === 'GROUP' ? null : (subject.companyIds ?? []);
   }
 
-  /** Cemeteries a list query must be narrowed to FOR ONE CODE, or `null` when none. */
-  async listSiteFilterFor(
+  /* Bộ lọc DANH SÁCH cho các bảng có CẢ công ty LẪN nghĩa trang (phần mộ và mọi thứ quy về
+   * phần mộ). `null` = không bó gì, và chỉ mức GROUP mới được nhận nó.
+   *
+   * VÌ SAO KHÔNG DÙNG ĐƯỢC `visibleCompanyIdsFor` + `listSiteFilterFor` (đo được, 17/09/2026):
+   * hai hàm đó trả hai danh sách PHẲNG dựng từ `level` toàn cục, và hai danh sách phẳng KHÔNG
+   * biểu diễn nổi câu trả lời đúng khi người dùng có mức khác nhau ở hai công ty. Với người
+   * mức COMPANY ở A và SITE ở B: `visibleCompanyIdsFor` trả `[A, B]`, `listSiteFilterFor` trả
+   * `null` (vì `level` là COMPANY) — ghép lại thành "cả A lẫn B, không bó nghĩa trang", tức
+   * TRỌN công ty B. Đúng cái lỗ mà `assertPlotFor` đã bịt ở đường một-bản-ghi, còn nguyên ở
+   * đường danh sách.
+   *
+   * Danh sách nguy hiểm hơn một bản ghi: nó phát ra id, mà id là tất cả những gì cần để gọi
+   * các đường khác.
+   *
+   * Trả về dạng THEO TỪNG CÔNG TY để nơi gọi dựng được `OR`. `cemeteryIds = null` nghĩa là cả
+   * công ty; một mảng nghĩa là chỉ những nghĩa trang đó, và mảng RỖNG giữ nguyên nghĩa "không
+   * với tới gì trong công ty này" — không được rơi về "không bó".
+   */
+  async plotScopeFilterFor(
     userId: string | null,
     code: string | null | undefined,
-  ): Promise<string[] | null> {
-    const { subject, level } = await this.loadFor(userId, code);
-    return level === 'SITE' ? (subject.siteIds ?? []) : null;
+  ): Promise<{ companyId: string; cemeteryIds: string[] | null }[] | null> {
+    const { subject, level, levelByCompany } = await this.loadFor(userId, code);
+    if (level === 'GROUP') {
+      return null;
+    }
+    const siteIds = subject.siteIds ?? [];
+    return Object.keys(levelByCompany)
+      .sort()
+      .map((companyId) => ({
+        companyId,
+        cemeteryIds: levelByCompany[companyId] === 'COMPANY' ? null : [...siteIds],
+      }));
   }
 
   /* ---- Luật phạm vi, khai đúng MỘT lần ---- */
@@ -107,10 +154,33 @@ export class ScopeService {
     }
   }
 
-  private checkSite(subject: Subject, level: ScopeLevel, cemeteryId: string | null | undefined) {
-    // GROUP reaches everything; COMPANY covers every cemetery inside the companies the
-    // caller holds, and that company check is a separate call the caller already makes.
-    if (level === 'GROUP' || level === 'COMPANY') {
+  /* Trục nghĩa trang, hỏi bằng mức TẠI CÔNG TY của chính nghĩa trang đó.
+   *
+   * Bản trước hỏi bằng `level` — mức rộng nhất trên MỌI công ty — và thoát sớm khi nó là
+   * COMPANY. Câu chú thích cũ ("COMPANY covers every cemetery inside the companies the caller
+   * holds") đúng cho MỘT công ty, nhưng `level` không nói nó đến từ công ty nào. Với người
+   * giữ vai ở hai công ty hai mức khác nhau, mức của công ty rộng hơn đè lên công ty kia.
+   *
+   * GROUP vẫn thoát ngay: nó là "không giới hạn bản ghi", không gắn công ty nào.
+   */
+  private checkSite(
+    level: ScopeLevel,
+    levelByCompany: Record<string, 'COMPANY' | 'SITE'>,
+    subject: Subject,
+    companyId: string | null | undefined,
+    cemeteryId: string | null | undefined,
+  ) {
+    if (level === 'GROUP') {
+      return;
+    }
+    /* `checkCompany` đã chạy trước và đã từ chối công ty ngoài phạm vi, nên tới đây khoá này
+     * phải có. Không có nghĩa là hai phép kiểm đã lệch nhau — từ chối, đừng đoán. */
+    const tai =
+      companyId === null || companyId === undefined ? undefined : levelByCompany[companyId];
+    if (tai === undefined) {
+      throw new ForbiddenException('Ngoài phạm vi được gán: công ty này không thuộc quyền của bạn');
+    }
+    if (tai === 'COMPANY') {
       return;
     }
     if (isBlank(cemeteryId)) {
@@ -121,7 +191,12 @@ export class ScopeService {
     }
   }
 
-  /* Cùng subject, nhưng `level` tính THEO MÃ.
+  /* Mức VÀ phạm vi, cả hai tính THEO MÃ, lấy trong MỘT lượt.
+   *
+   * Trước 16/09/2026 chỉ `level` theo mã, còn `companyIds` lấy từ `getEffectiveAccess` —
+   * hợp của MỌI dòng gán, bất kể vai đó có cấp mã đang thi hành hay không. Ghép một mức bó
+   * chặt với một danh sách bó lỏng thì phần bó chặt bị vô hiệu: xem chú thích `scopeForCode`
+   * trong `permissions.service.ts`.
    *
    * Thiếu mã là TỪ CHỐI, không phải rơi về mức toàn-người-gọi. Rơi về là fail-open: route
    * quên khai `@RequirePermission` (hoặc gọi nhầm từ chỗ không đi qua guard) sẽ được kiểm
@@ -131,7 +206,11 @@ export class ScopeService {
   private async loadFor(
     userId: string | null,
     code: string | null | undefined,
-  ): Promise<{ subject: Subject; level: ScopeLevel }> {
+  ): Promise<{
+    subject: Subject;
+    level: ScopeLevel;
+    levelByCompany: Record<string, 'COMPANY' | 'SITE'>;
+  }> {
     if (userId === null) {
       throw new ForbiddenException('Chưa xác thực');
     }
@@ -140,11 +219,56 @@ export class ScopeService {
         'Không xác định được mã quyền đang thi hành — không kiểm được phạm vi',
       );
     }
-    const { scope } = await this.permissions.getEffectiveAccess(userId);
-    return {
-      subject: { userId, companyIds: scope.companyIds, siteIds: scope.siteIds },
-      level: await this.permissions.scopeLevelFor(userId, code as string),
-    };
+    const { level, companyIds, siteIds, levelByCompany } = await this.permissions.scopeForCode(
+      userId,
+      code as string,
+    );
+    /* NONE là TỪ CHỐI, và phải từ chối NGAY ĐÂY.
+     *
+     * `NONE` không phải một mức hẹp hơn `SITE`. Nó là câu "mã này không được cấp phạm vi
+     * nào". Trước bản này, cả bốn đường bên dưới đọc nó thành một thứ khác hẳn, mỗi đường
+     * một kiểu: `checkCompany` rơi xuống nhánh COMPANY, `checkSite` rơi xuống nhánh SITE,
+     * `visibleCompanyIdsFor` trả nguyên danh sách công ty, `listSiteFilterFor` trả `null`.
+     *
+     * HAI NGUỒN `NONE` THẬT SỰ VỚI TỚI ĐƯỢC ĐÂY (đã soi lại 16/09/2026, xem đính chính ở
+     * cuối chú thích):
+     *
+     * 1. Grant mang một scope mà `broader()` không thực thi — cột `role_permissions.scope`
+     *    mặc định `DEPARTMENT`. `PermissionGuard` cho qua vì nó hỏi MÃ, không hỏi PHẠM VI.
+     *    Đường GHI nay đã bị chặn (`AuthzMatrixService.grant` + `isEnforcedScope`), nhưng
+     *    seed, migration và `psql` vẫn ghi thẳng vào cột được, nên cổng này vẫn cần.
+     * 2. Một luật ALLOW trong `access_rules` phủ mã mà không vai nào cấp. Guard trả `true`
+     *    ngay ở nhánh ALLOW; xuống tới đây thì không grant nào phủ nên mức là `NONE`. Luật
+     *    ALLOW nói "được làm", nó KHÔNG nói "ở đâu" — nên không có phạm vi, và không có
+     *    phạm vi thì không với tới bản ghi nào. Đó là lựa chọn fail-closed có chủ đích;
+     *    muốn luật ALLOW tự mang phạm vi thì phải thêm cột, và đó là quyết định riêng.
+     *
+     * ĐÍNH CHÍNH LỜI KHAI CỦA CHÍNH LÁT NÀY (commit b63b1be nói sai hai điều, một lượt soi
+     * độc lập bắt được; giữ lại đây vì cả hai nghe rất hợp lý và sẽ bị nghĩ lại):
+     *
+     * - "Người bị một luật DENY chặn vẫn đọc được" — KHÔNG với tới được qua HTTP.
+     *   `PermissionGuard` gọi `evaluateRules` và ném 403 "Bị luật truy cập chặn" TRƯỚC khi
+     *   controller chạy. `scopeLevelFor` vẫn trả `NONE` cho DENY, nhưng đường request không
+     *   bao giờ tới đây với hình dạng đó.
+     * - "`listSiteFilterFor` trả `null` tức KHÔNG BÓ GÌ" — sai ở cả tám nơi gọi. Mỗi nơi
+     *   hoặc ghép chung `where` với `visibleCompanyIdsFor` (luôn trả MẢNG khi không phải
+     *   GROUP), hoặc đứng sau một `assertCompanyFor` trên cùng mã. Trục công ty vẫn bó.
+     *   Over-reach thật là "thấy cả công ty thay vì chỉ nghĩa trang mình phụ trách" —
+     *   nghiêm trọng, nhưng không phải "không lọc gì".
+     *
+     * Chặn ở MỘT chỗ chứ không rải ra bốn chỗ: bốn bản của cùng một luật là bốn thứ sẽ lệch
+     * nhau — đúng lớp lỗi mà `common/lifecycle/active.ts` sinh ra để dẹp.
+     */
+    if (level === 'NONE') {
+      /* KHÔNG mở đầu bằng "Ngoài phạm vi được gán" như hai câu ở `checkCompany`/`checkSite`.
+       * Hai câu đó nói "bản ghi này nằm ngoài phần bạn được giao"; câu này nói "mã quyền
+       * của bạn không được giao phần nào cả" — hai nguyên nhân khác hẳn, và người đọc log
+       * phân biệt được chúng bằng chính câu chữ. */
+      throw new ForbiddenException(
+        'Không có phạm vi cho mã quyền đang thi hành: không vai nào cấp nó ở một mức hệ thực thi được',
+      );
+    }
+    return { subject: { userId, companyIds, siteIds }, level, levelByCompany };
   }
 
   /* Scope level for one permission code, unioned across the grants that cover it.

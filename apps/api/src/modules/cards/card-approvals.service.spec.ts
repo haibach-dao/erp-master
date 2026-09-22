@@ -131,7 +131,13 @@ function build(opts: BuildOpts = {}) {
     return Promise.resolve(hit ?? null);
   });
 
+  /* Nghĩa trang thuộc công ty 'cty-B', trong khi khách thuộc 'cty-A'. Hai giá trị LỆCH nhau
+   * là dựng được thật: `assignUsageRight` gán chủ mộ mà không so công ty của khách với công
+   * ty của phần mộ. Fixture để lệch để phép kiểm phạm vi phải hỏi ĐÚNG công ty của nghĩa
+   * trang, chứ không mượn công ty của khách. */
+  const cemeteryFindUnique = vi.fn().mockResolvedValue({ companyId: 'cty-B' });
   const prisma = {
+    cemetery: { findUnique: cemeteryFindUnique },
     cardIssueApproval: { create, updateMany, findUnique, findMany, findFirst },
     cardSigner: {
       findUnique: vi.fn().mockResolvedValue(
@@ -177,19 +183,19 @@ function build(opts: BuildOpts = {}) {
   };
 
   const assertCompanyFor = vi.fn().mockResolvedValue(undefined);
-  const assertSiteFor = vi.fn().mockResolvedValue(undefined);
+  const assertPlotFor = vi.fn().mockResolvedValue(undefined);
   const listSiteFilterFor = vi.fn().mockResolvedValue(null);
   const visibleCompanyIdsFor = vi.fn().mockResolvedValue(null);
   const scope = {
     assertCompanyFor,
-    assertSiteFor,
+    assertPlotFor,
     listSiteFilterFor,
     visibleCompanyIdsFor,
   } as unknown as ScopeService;
 
   const record = vi.fn().mockResolvedValue(undefined);
   const svc = new CardApprovalsService(prisma, { record } as unknown as AuditService, scope);
-  return { svc, prisma, record, assertCompanyFor, assertSiteFor };
+  return { svc, prisma, record, assertCompanyFor, assertPlotFor };
 }
 
 describe('vân tay nội dung hồ sơ trình duyệt', () => {
@@ -423,13 +429,20 @@ describe('cửa phê duyệt in thẻ mộ', () => {
     await expect(svc.create(SUBJECT, 'khong-co', CALLER)).rejects.toThrow(NotFoundException);
   });
 
-  /* Bài học lát 0: `assertSiteFor` MỘT MÌNH không chặn được người mức COMPANY — `checkSite`
-   * thoát ngay khi mức là GROUP *hoặc COMPANY*. Phải gọi CẶP. */
-  it('bó CẢ HAI TRỤC lúc gửi — công ty và nghĩa trang', async () => {
-    const { svc, assertCompanyFor, assertSiteFor } = build();
+  /* HỎI THEO NGHĨA TRANG, KHÔNG theo công ty của khách.
+   *
+   * Công ty của KHÁCH ('cty-A') và công ty của NGHĨA TRANG ('cty-B') là hai bản ghi khác nhau,
+   * và từ quyết định 17/09 thì lệch nhau là HỢP LỆ. Hồ sơ trình duyệt là việc CỦA NGHĨA TRANG
+   * — "ai quản lý nghĩa trang nào thì người đó ký" — nên phép kiểm phải hỏi đúng trục đó.
+   *
+   * Bản 17/09 hỏi THÊM công ty của khách, và vế thừa ấy chặn đúng NGƯỜI MÀ HỆ VỪA GỬI HỒ SƠ
+   * TỚI: quản lý nghĩa trang B không có phạm vi ở công ty A. Hồ sơ nằm lại vĩnh viễn. Ca này
+   * canh cả hai điều: hỏi ĐÚNG công ty của nghĩa trang, và KHÔNG hỏi công ty của khách. */
+  it('bó theo NGHĨA TRANG — dùng công ty của nghĩa trang, KHÔNG dùng công ty của khách', async () => {
+    const { svc, assertPlotFor, assertCompanyFor } = build();
     await svc.create(SUBJECT, 'signer-1', CALLER);
-    expect(assertCompanyFor).toHaveBeenCalledWith(CALLER.userId, CALLER.permission, 'cty-A');
-    expect(assertSiteFor).toHaveBeenCalledWith(CALLER.userId, CALLER.permission, 'cem-1');
+    expect(assertPlotFor).toHaveBeenCalledWith(CALLER.userId, CALLER.permission, 'cty-B', 'cem-1');
+    expect(assertCompanyFor).not.toHaveBeenCalledWith(CALLER.userId, CALLER.permission, 'cty-A');
   });
 
   /* Tư cách người ký là GIAO của hai trục có `validTo` và TỰ HẾT HẠN. Hỏi CSDL mà quên cửa sổ

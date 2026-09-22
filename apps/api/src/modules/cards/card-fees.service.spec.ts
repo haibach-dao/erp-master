@@ -32,7 +32,15 @@ const SCHEDULE = {
   createdAt: new Date('2026-01-01'),
 };
 
-function build(opts: { schedule?: unknown; firstIssued?: string[]; company?: unknown } = {}) {
+function build(
+  opts: {
+    schedule?: unknown;
+    firstIssued?: string[];
+    company?: unknown;
+    /** Biểu phí theo TỪNG công ty. Dùng khi cần dựng hai công ty có giá khác nhau. */
+    schedulesByCompany?: Record<string, unknown>;
+  } = {},
+) {
   const prisma = {
     /* `company.findUnique` chỉ được gọi trên ĐƯỜNG LỖI — để gọi tên công ty trong câu từ
      * chối. Mặc định trả một công ty có tên thật, và có ca riêng cho ca tra không ra. */
@@ -43,8 +51,23 @@ function build(opts: { schedule?: unknown; firstIssued?: string[]; company?: unk
           opts.company === undefined ? { code: 'S1787', name: 'An Lạc Viên S' } : opts.company,
         ),
     },
+    /* MOCK PHẢI ĐỌC `where.companyId`, nếu không nó không canh được gì.
+     *
+     * Bản trước trả cứng một biểu phí bất kể được hỏi công ty nào, và mọi fixture dùng đúng
+     * một công ty — nên đổi `quote()` sang tra theo công ty KHÁC (ví dụ công ty của nghĩa
+     * trang thay vì của khách) thì KHÔNG một ca nào đỏ. Đã đo bằng đột biến 18/09/2026.
+     *
+     * Điều đó nguy hiểm ở đây hơn ở chỗ khác, vì đây là tầng TIỀN: tra nhầm bảng giá nghĩa là
+     * thu nhầm số, và không có gì báo cho tới lúc đối soát. */
     graveCardFeeSchedule: {
-      findFirst: vi.fn().mockResolvedValue(opts.schedule === undefined ? SCHEDULE : opts.schedule),
+      findFirst: vi.fn().mockImplementation((args: { where: { companyId: string } }) => {
+        if (opts.schedulesByCompany !== undefined) {
+          return Promise.resolve(opts.schedulesByCompany[args.where.companyId] ?? null);
+        }
+        const mac = opts.schedule === undefined ? SCHEDULE : opts.schedule;
+        // Fixture một công ty: chỉ trả biểu phí khi được hỏi ĐÚNG công ty đó.
+        return Promise.resolve(args.where.companyId === CO ? mac : null);
+      }),
     },
     graveCardFeeCharge: {
       findMany: vi
@@ -255,5 +278,68 @@ describe('câu từ chối khi chưa có biểu phí', () => {
     await svc.quote(card([moDoi]), new Date('2026-06-01'));
     const spy = prisma.company.findUnique as unknown as { mock: { calls: unknown[] } };
     expect(spy.mock.calls).toHaveLength(0);
+  });
+});
+
+/* TRỤC CÔNG TY CỦA TẦNG TIỀN — bảng giá tra theo công ty NÀO?
+ *
+ * Nhóm này ra đời vì một lượt đo bằng đột biến 18/09/2026: đổi `quote()` sang tra biểu phí
+ * theo công ty của NGHĨA TRANG thay vì của KHÁCH thì **không một ca nào đỏ**. Mock trả cứng,
+ * và mọi fixture dùng đúng một công ty — nên cách hỏi đúng và cách hỏi sai cho cùng kết quả.
+ *
+ * Ở tầng tiền thì mù như vậy đắt hơn ở chỗ khác: tra nhầm bảng giá là thu nhầm số, và không
+ * có gì báo cho tới lúc đối soát.
+ *
+ * LƯU Ý VỀ PHẠM VI CỦA NHÓM NÀY: nó KHÔNG trả lời "công ty nào là đúng" — đó là câu hỏi kế
+ * toán đang chờ anh Bách quyết (khách công ty A dùng mộ ở nghĩa trang công ty B thì phí thu
+ * về ai). Nó chỉ neo rằng `quote()` tra theo ĐÚNG công ty được truyền vào, không lấy bừa
+ * bảng nào có sẵn. Khi quyết định có, chỗ phải đổi là NƠI GỌI (`CardsService`), và ca neo ở
+ * đó sẽ đỏ — có chủ đích, chứ không đổi âm thầm.
+ */
+const CO_KHAC = 'co-KHAC';
+
+const SCHEDULE_CO_KHAC = {
+  ...SCHEDULE,
+  id: 'sch-khac',
+  companyId: CO_KHAC,
+  // Giá KHÁC HẲN, để nhầm bảng là lộ ra bằng con số chứ không phải bằng suy luận.
+  firstIssueFee: new Prisma.Decimal(999000),
+  reprintFeePerRemains: new Prisma.Decimal(111000),
+};
+
+describe('biểu phí tra theo ĐÚNG công ty được truyền vào', () => {
+  it('hai công ty hai bảng giá: lấy đúng bảng của công ty đang hỏi', async () => {
+    const { svc } = build({
+      schedulesByCompany: { [CO]: SCHEDULE, [CO_KHAC]: SCHEDULE_CO_KHAC },
+    });
+
+    const q = await svc.quote(card([moDoi]), new Date('2026-06-01'));
+
+    // 200.000 là giá của CO. Nếu tra nhầm sang CO_KHAC thì con số là 999.000.
+    expect(q.totalAmount).toBe('200000');
+  });
+
+  it('hỏi công ty KHÁC thì ra giá của công ty KHÁC — mock thật sự phân biệt', async () => {
+    const { svc } = build({
+      schedulesByCompany: { [CO]: SCHEDULE, [CO_KHAC]: SCHEDULE_CO_KHAC },
+    });
+
+    const q = await svc.quote(
+      { customerId: KH, companyId: CO_KHAC, plots: [moDoi] },
+      new Date('2026-06-01'),
+    );
+
+    expect(q.totalAmount).toBe('999000');
+  });
+
+  /* Công ty KIA có biểu phí không cứu được công ty NÀY. Thiếu phép phân biệt thì một bảng giá
+   * bất kỳ trong hệ đủ làm mọi công ty "có giá" — đúng thứ câu từ chối ở `effectiveSchedule`
+   * sinh ra để chặn. */
+  it('công ty này CHƯA có biểu phí thì vẫn CHẶN, dù công ty khác đã có', async () => {
+    const { svc } = build({ schedulesByCompany: { [CO_KHAC]: SCHEDULE_CO_KHAC } });
+
+    await expect(svc.quote(card([moDoi]), new Date('2026-06-01'))).rejects.toThrow(
+      /chưa có biểu phí/,
+    );
   });
 });

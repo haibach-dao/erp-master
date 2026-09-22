@@ -4,6 +4,7 @@ import { ulid } from 'ulid';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { ScopeService } from '../authorization/scope.service';
+import { plotScopeWhere } from '../authorization/plot-scope-where';
 import type { Caller } from '../authorization/caller';
 import { holdStale } from '../../common/lifecycle/active';
 import type { CreateHoldDto } from './holds.dto';
@@ -37,8 +38,12 @@ export class HoldsService {
     if (plot === null) {
       throw new NotFoundException('Không tìm thấy vị trí mộ');
     }
-    await this.scope.assertCompanyFor(caller.userId, caller.permission, plot.companyId);
-    await this.scope.assertSiteFor(caller.userId, caller.permission, plot.cemeteryId);
+    await this.scope.assertPlotFor(
+      caller.userId,
+      caller.permission,
+      plot.companyId,
+      plot.cemeteryId,
+    );
   }
 
   // Create a hold and move the plot Available -> Held atomically. Double-hold is blocked by
@@ -164,15 +169,14 @@ export class HoldsService {
       return this.prisma.graveHold.findMany({ where, orderBy: { createdAt: 'desc' } });
     }
 
-    const companies = await this.scope.visibleCompanyIdsFor(caller.userId, caller.permission);
-    const sites = await this.scope.listSiteFilterFor(caller.userId, caller.permission);
-    /* `[]` là câu trả lời ĐÚNG, không phải chỗ để bỏ mệnh đề đi: được gán không công ty /
-     * nghĩa trang nào nghĩa là với tới không cái nào, không phải với tới tất cả. */
-    if (companies !== null || sites !== null) {
-      where.gravePlot = {
-        ...(companies === null ? {} : { companyId: { in: companies } }),
-        ...(sites === null ? {} : { cemeteryId: { in: sites } }),
-      };
+    /* Bó theo TỪNG CÔNG TY. `[]` là câu trả lời ĐÚNG, không phải chỗ để bỏ mệnh đề đi: được
+     * gán không công ty / nghĩa trang nào nghĩa là với tới không cái nào, không phải tất cả.
+     * Xem chú thích `ScopeService.plotScopeFilterFor` về việc vì sao hai danh sách phẳng
+     * không đủ. */
+    const filter = await this.scope.plotScopeFilterFor(caller.userId, caller.permission);
+    const plotWhere = plotScopeWhere(filter);
+    if (plotWhere !== null) {
+      where.gravePlot = plotWhere;
     }
     return this.prisma.graveHold.findMany({ where, orderBy: { createdAt: 'desc' } });
   }
