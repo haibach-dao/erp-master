@@ -58,12 +58,35 @@ const VIEWER_APPROVAL: Caller = { userId: 'u1', permission: 'cemetery.card.submi
 /* Harness riêng cho `CardApprovalsService`: chỉ cần hai bảng nó đụng tới ở đường này. */
 function buildApprovals(
   filter: { companyId: string; cemeteryIds: string[] | null }[] | null,
-  cemeteries: { id: string }[],
+  cemeteries: { id: string; companyId: string }[],
 ) {
   const approvalFindMany = vi.fn().mockResolvedValue([]);
+  /* Mock ĐỌC `where` thật, không trả cứng.
+   *
+   * Bản trước dùng `mockResolvedValue(cemeteries)` — trả CÙNG danh sách bất kể `where`. Đo bằng
+   * đột biến: đổi lời gọi thành `where: {}` (fail-open hoàn toàn) thì 1062/1062 vẫn xanh. Phép
+   * dịch phạm vi → `where` là thứ nhóm này mang tên, và nó không hề được canh. */
+  const cemeteryFindMany = vi
+    .fn()
+    .mockImplementation((args: { where?: { OR?: unknown[]; companyId?: { in: string[] } } }) => {
+      const where = args.where ?? {};
+      if (where.OR === undefined) {
+        // `{}` = không lọc gì ⇒ TRẢ TẤT CẢ. Đây là nhánh fail-open; ca dưới phải bắt được nó.
+        if (where.companyId === undefined) return Promise.resolve(cemeteries);
+        return Promise.resolve(cemeteries.filter((c) => where.companyId!.in.includes(c.companyId)));
+      }
+      const ors = where.OR as { companyId: string; id?: { in: string[] } }[];
+      return Promise.resolve(
+        cemeteries.filter((c) =>
+          ors.some(
+            (o) => o.companyId === c.companyId && (o.id === undefined || o.id.in.includes(c.id)),
+          ),
+        ),
+      );
+    });
   const prisma = {
     cardIssueApproval: { findMany: approvalFindMany },
-    cemetery: { findMany: vi.fn().mockResolvedValue(cemeteries) },
+    cemetery: { findMany: cemeteryFindMany },
   } as unknown as PrismaService;
 
   const svc = new CardApprovalsService(
@@ -134,18 +157,28 @@ describe('hồ sơ trình duyệt của một khách — bó theo nghĩa trang v
     expect(whereOfApproval(approvalFindMany)).toEqual({ customerId: 'cus-1' });
   });
 
+  /* Fixture có BA nghĩa trang, và một trong ba PHẢI BỊ LOẠI.
+   *
+   * Bản trước nạp đúng hai nghĩa trang rồi kỳ vọng cả hai — tức toàn bộ fixture. Fixture chỉ
+   * gồm thứ ĐƯỢC PHÉP thì phép lọc đúng và phép lọc sai cho cùng kết quả. `nt-b2` thuộc công ty
+   * B, nơi người này chỉ mức SITE và chỉ được giao `nt-b1`. */
   it('LỆCH MỨC: chỉ thấy hồ sơ ở nghĩa trang với tới được', async () => {
     const { svc, approvalFindMany } = buildApprovals(
       [
         { companyId: CO_A, cemeteryIds: null },
-        { companyId: 'co-b', cemeteryIds: [SITE_A2] },
+        { companyId: 'co-b', cemeteryIds: ['nt-b1'] },
       ],
-      [{ id: SITE_A1 }, { id: SITE_A2 }],
+      [
+        { id: SITE_A1, companyId: CO_A },
+        { id: 'nt-b1', companyId: 'co-b' },
+        // PHẢI BỊ LOẠI: công ty B nhưng không nằm trong phân công.
+        { id: 'nt-b2', companyId: 'co-b' },
+      ],
     );
     await svc.listForCustomer('cus-1', VIEWER_APPROVAL);
     expect(whereOfApproval(approvalFindMany)).toEqual({
       customerId: 'cus-1',
-      cemeteryId: { in: [SITE_A1, SITE_A2] },
+      cemeteryId: { in: [SITE_A1, 'nt-b1'] },
     });
   });
 

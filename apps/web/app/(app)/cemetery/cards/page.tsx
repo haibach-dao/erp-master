@@ -214,6 +214,11 @@ export default function GraveCardsPage() {
     onSuccess: (res) => {
       setCards(res.cards);
       setActiveCard(0);
+      /* Xoá cờ miễn phí. Xem trước nhảy về tờ số 0, mà cờ miễn phí lại thuộc về TỜ đang xem —
+       * giữ nguyên nó là mang quyết định tha tiền của tờ này sang tờ khác, lặng lẽ. Cùng lý do
+       * đã ghi ở ô chọn tờ thẻ. */
+      setWaive(false);
+      setWaiveReason('');
     },
   });
 
@@ -247,9 +252,26 @@ export default function GraveCardsPage() {
     },
   });
 
+  /* IN LẠI ghép vào bộ thẻ, KHÔNG thay cả bộ.
+   *
+   * Bản trước dùng `setCard`, tức `setCards([tờ vừa in])` — nên in lại một tờ cũ là xoá sạch
+   * tờ của công ty kia đang chờ cấp, kèm cả dòng cảnh báo "còn tờ chưa cấp". Người ở quầy
+   * không thấy gì biến mất, và khách ra về thiếu một thẻ. */
   const reprint = useMutation({
     mutationFn: (logId: string) => reprintGraveCard(logId),
-    onSuccess: setCard,
+    onSuccess: (fresh) => {
+      setCards((prev) => {
+        const at = prev.findIndex((c) => c.companyId === fresh.companyId);
+        if (at === -1) {
+          setActiveCard(prev.length);
+          return [...prev, fresh];
+        }
+        const next = [...prev];
+        next[at] = fresh;
+        setActiveCard(at);
+        return next;
+      });
+    },
   });
 
   const busy = preview.isPending || issue.isPending || reprint.isPending;
@@ -274,24 +296,34 @@ export default function GraveCardsPage() {
   const issueBlocked: string | null =
     customerId === ''
       ? 'chưa chọn khách hàng.'
-      : /* Ca do luật 05/09 đẻ ra: thẻ gom mộ ở HAI nghĩa trang thì không có MỘT người ký nào
-         * đúng cho cả hai. Nói thẳng thay vì lặng lẽ lấy nghĩa trang đầu tiên. Chưa cắn hôm
-         * nay, nhưng cấu trúc cho phép và câu này rẻ hơn nhiều một tờ thẻ ký sai. */
-        cardCemeteryIds.length > 1
-        ? `tờ thẻ này gom mộ ở ${cardCemeteryIds.length} nghĩa trang, mà người ký gắn theo từng nghĩa trang. Hệ đã tự cắt thẻ theo CÔNG TY (19/09), nhưng cắt tiếp theo nghĩa trang thì chưa dựng — nên chưa cấp chung một tờ được.`
-        : /* Người ký đã chọn phải CÒN nằm trong danh mục của nghĩa trang đang xét. Đây là
-           * lưới cuối: nếu vì lý do nào đó ba state còn giữ người của nghĩa trang khác, thì
-           * chặn ở đây thay vì để nó đi thẳng ra tờ giấy. Chỉ xét khi danh mục ĐÃ VỀ THẬT —
-           * lúc đang tải mà chặn thì nút nhấp nháy vô cớ. */
-          signerId !== '' && signers.isSuccess && !activeSigners.some((s) => s.id === signerId)
-          ? 'người ký đang chọn không thuộc nghĩa trang của bộ mộ này. Chọn lại người ký.'
-          : signerId === ''
-            ? signers.isSuccess && activeSigners.length === 0
-              ? 'nghĩa trang này chưa có người ký nào đang dùng và còn đủ tư cách. Mở trang Người ký thẻ mộ (/cemetery/card-signers) thêm người ký rồi quay lại.'
-              : 'chưa chọn người ký của INDEVCO.'
-            : waive && waiveReason === ''
-              ? 'đã chọn miễn phí nhưng chưa nêu lý do.'
-              : null;
+      : /* TỜ NÀY ĐÃ CẤP RỒI.
+         *
+         * Nút Cấp thẻ nằm NGOÀI lớp chắn `!card.issued` (lớp đó chỉ bọc khối miễn phí), nên
+         * trước lát này cấp xong tờ A mà bấm lần nữa là sinh thêm MỘT số lần cấp và MỘT dòng
+         * phí nữa cho đúng tờ vừa cấp. Chặn ở đây thay vì chỉ ẩn nút: luật "nút bị chặn phải
+         * NÓI lý do" — và câu này còn chỉ đường sang tờ chưa cấp nếu có. */
+        card !== null && card.issued
+        ? cards.some((c) => !c.issued)
+          ? `tờ này đã cấp rồi (lần ${String(card.printNumber ?? '')}). Chọn tờ chưa cấp ở ô “Tờ thẻ đang xem”. Cần bản nữa của tờ này thì dùng In lại ở lịch sử bên dưới.`
+          : `tờ này đã cấp rồi (lần ${String(card.printNumber ?? '')}). Cần bản nữa thì dùng In lại ở lịch sử bên dưới — nó không sinh số mới.`
+        : /* Ca do luật 05/09 đẻ ra: thẻ gom mộ ở HAI nghĩa trang thì không có MỘT người ký nào
+           * đúng cho cả hai. Nói thẳng thay vì lặng lẽ lấy nghĩa trang đầu tiên. Chưa cắn hôm
+           * nay, nhưng cấu trúc cho phép và câu này rẻ hơn nhiều một tờ thẻ ký sai. */
+          cardCemeteryIds.length > 1
+          ? `tờ thẻ này gom mộ ở ${cardCemeteryIds.length} nghĩa trang, mà người ký gắn theo từng nghĩa trang. Hệ đã tự cắt thẻ theo CÔNG TY (19/09), nhưng cắt tiếp theo nghĩa trang thì chưa dựng — nên chưa cấp chung một tờ được.`
+          : /* Người ký đã chọn phải CÒN nằm trong danh mục của nghĩa trang đang xét. Đây là
+             * lưới cuối: nếu vì lý do nào đó ba state còn giữ người của nghĩa trang khác, thì
+             * chặn ở đây thay vì để nó đi thẳng ra tờ giấy. Chỉ xét khi danh mục ĐÃ VỀ THẬT —
+             * lúc đang tải mà chặn thì nút nhấp nháy vô cớ. */
+            signerId !== '' && signers.isSuccess && !activeSigners.some((s) => s.id === signerId)
+            ? 'người ký đang chọn không thuộc nghĩa trang của bộ mộ này. Chọn lại người ký.'
+            : signerId === ''
+              ? signers.isSuccess && activeSigners.length === 0
+                ? 'nghĩa trang này chưa có người ký nào đang dùng và còn đủ tư cách. Mở trang Người ký thẻ mộ (/cemetery/card-signers) thêm người ký rồi quay lại.'
+                : 'chưa chọn người ký của INDEVCO.'
+              : waive && waiveReason === ''
+                ? 'đã chọn miễn phí nhưng chưa nêu lý do.'
+                : null;
 
   return (
     <div className="space-y-6">
@@ -320,6 +352,9 @@ export default function GraveCardsPage() {
                     setCard(null);
                     setWaive(false);
                     setWaiveReason('');
+                    /* Cả LÝ DO CẤP nữa. Nó được gửi lên và ghi thẳng vào nhật ký cấp thẻ, nên
+                     * để lại là dán lý do của khách trước vào chứng từ của khách sau. */
+                    setPrintReason('');
                   }}
                 >
                   <option value="">— Chọn khách hàng —</option>

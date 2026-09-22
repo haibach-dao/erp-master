@@ -121,4 +121,17 @@ describe('đăng ký dịch vụ — hỏi phạm vi trên CẢ HAI VẾ', () =>
     await svc.subscribe(DTO, CALLER);
     expect(created).toHaveLength(1);
   });
+
+  /* CỘT TIỀN phải ghi đúng pháp nhân — và trước lát này KHÔNG ca nào đọc nó.
+   *
+   * `companyId` của thuê bao là cột `revenue` cộng theo. Fixture cố ý để phần mộ ở công ty B
+   * còn thuê bao ở công ty A: nếu ai đó "sửa cho nhất quán" bằng cách ghi công ty của PHẦN MỘ,
+   * doanh thu rời khỏi pháp nhân đã ký hợp đồng mà không ca nào đỏ. Đây là ca neo, không phải
+   * ca mô tả — đổi nó là đổi nơi tiền đi về, phải có quyết định người. */
+  it('ghi đúng công ty của THUÊ BAO, không mượn công ty của phần mộ', async () => {
+    const { svc, created } = build();
+    await svc.subscribe(DTO, CALLER);
+    expect(created[0]?.companyId).toBe(CO_A);
+    expect(created[0]?.companyId).not.toBe(CO_B);
+  });
 });

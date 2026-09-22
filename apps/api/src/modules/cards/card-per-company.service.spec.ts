@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ConflictException } from '@nestjs/common';
+import { ConflictException, ForbiddenException } from '@nestjs/common';
 import { CardsService } from './cards.service';
 import type { PrismaService } from '../../prisma/prisma.service';
 import type { PiiService } from '../../common/pii/pii.service';
@@ -106,6 +106,7 @@ function build(plots: { id: string; companyId: string; cemeteryId: string }[]) {
   const resolveWaive = vi.fn().mockResolvedValue({ waived: false, waiveReason: null });
   const isRequired = vi.fn().mockResolvedValue(false);
   const recordCharges = vi.fn().mockResolvedValue([]);
+  const assertApproved = vi.fn().mockResolvedValue(null);
 
   const svc = new CardsService(
     prisma,
@@ -114,12 +115,17 @@ function build(plots: { id: string; companyId: string; cemeteryId: string }[]) {
     { decrypt: vi.fn() } as unknown as PiiService,
     { holdsForMasking: vi.fn().mockResolvedValue(false) } as unknown as PermissionsService,
     { quote, resolveWaive, recordCharges } as unknown as CardFeesService,
-    {
-      isRequired,
-      assertApproved: vi.fn().mockResolvedValue(null),
-    } as unknown as CardApprovalsService,
+    { isRequired, assertApproved } as unknown as CardApprovalsService,
   );
-  return { svc, quote, assertPlotFor, assertCompanyFor, resolveWaive };
+  return {
+    svc,
+    quote,
+    assertPlotFor,
+    assertCompanyFor,
+    resolveWaive,
+    recordCharges,
+    assertApproved,
+  };
 }
 
 /* Chữ ký của MỘT người — chính thứ không được phép đi kèm hai tờ thẻ của hai công ty. */
@@ -187,6 +193,44 @@ describe('thẻ mộ theo CÔNG TY CỦA PHẦN MỘ, không theo công ty của
     expect(assertPlotFor).toHaveBeenCalledWith('u1', 'cemetery.card.view', CO_A, 'nt-a1');
   });
 
+  /* HAI mộ CÙNG một công ty, KHÁC nghĩa trang — và cả hai đều phải bị hỏi.
+   *
+   * Ca ngay trên chỉ nạp MỘT mộ, nên nó không phân biệt được "lặp mọi mộ" với "chỉ lấy mộ đầu".
+   * Ca hai-công-ty cũng không cứu được: sau khi lọc theo công ty, mỗi thẻ chỉ còn đúng một mộ.
+   * Đo bằng đột biến: đổi vòng lặp thành `plots.slice(0, 1)` thì 1062/1062 vẫn xanh — trong khi
+   * thẻ trả về vẫn kèm mộ thứ hai cùng TÊN NGƯỜI ĐÃ MẤT nằm trong đó.
+   *
+   * Đây là ca duy nhất trong kho đứng sau lời khẳng định ở `cards.service.ts`:
+   * "Hỏi trên MỌI nghĩa trang của bộ mộ, không chỉ cái đầu". */
+  it('hai mộ cùng công ty khác nghĩa trang: hỏi phạm vi trên CẢ HAI, không chỉ mộ đầu', async () => {
+    const { svc, assertPlotFor } = build([
+      { id: 'p1', companyId: CO_A, cemeteryId: 'nt-a1' },
+      { id: 'p2', companyId: CO_A, cemeteryId: 'nt-a2' },
+    ]);
+
+    await svc.preview(CUSTOMER, VIEWER);
+
+    expect(assertPlotFor).toHaveBeenCalledWith('u1', 'cemetery.card.view', CO_A, 'nt-a1');
+    expect(assertPlotFor).toHaveBeenCalledWith('u1', 'cemetery.card.view', CO_A, 'nt-a2');
+    expect(assertPlotFor).toHaveBeenCalledTimes(2);
+  });
+
+  /* Và cửa chặn phải CHẶN THẬT, không chỉ "được gọi". Cho `assertPlotFor` ném đúng ở mộ THỨ HAI:
+   * nếu vòng lặp bỏ qua mộ đó thì `preview` trả về bình thường và ca này đỏ. */
+  it('ngoài phạm vi ở mộ THỨ HAI thì cả thẻ bị chặn, không trả nửa bộ', async () => {
+    const { svc, assertPlotFor } = build([
+      { id: 'p1', companyId: CO_A, cemeteryId: 'nt-a1' },
+      { id: 'p2', companyId: CO_A, cemeteryId: 'nt-a2' },
+    ]);
+    assertPlotFor.mockImplementation((_u: string, _c: string, _co: string, site: string) =>
+      site === 'nt-a2'
+        ? Promise.reject(new ForbiddenException('Ngoài phạm vi được gán'))
+        : Promise.resolve(undefined),
+    );
+
+    await expect(svc.preview(CUSTOMER, VIEWER)).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
   /* KHÔNG hỏi phạm vi trên công ty của khách: hỏi thêm vế đó chặn đúng người quản lý nghĩa
    * trang B khi họ cấp thẻ cho mộ của B — cùng lỗi đã phải sửa ở `assertInScope`. */
   it('KHÔNG hỏi phạm vi trên công ty của khách', async () => {
@@ -247,6 +291,37 @@ describe('cấp thẻ: một lần cấp = một tờ = một công ty', () => {
     expect(issued[0]?.companyId).toBe(CO_B);
     expect(issued[0]?.plots.map((p) => p.gravePlotId)).toEqual(['p2']);
     // Và tiền tra theo công ty của tờ vừa cấp, không phải công ty kia.
+    expect(resolveWaive).toHaveBeenCalledTimes(1);
+  });
+
+  /* BA NHÁNH TIỀN của đường CẤP phải nhận công ty của TỜ ĐANG CẤP.
+   *
+   * Nhóm ca phía trên chỉ canh đường XEM TRƯỚC (`quote`). Đường CẤP còn hai nhánh nữa —
+   * `isRequired` (cửa phê duyệt) và `recordCharges` (dòng phí, tức doanh thu) — và trước lát
+   * này KHÔNG ca nào đọc công ty truyền vào chúng. Thay cả ba bằng công ty của KHÁCH vẫn xanh,
+   * trong khi đó là đảo ngược đúng quyết định 19/09: mộ thuộc công ty nào thì công ty đó thu. */
+  it('cấp tờ công ty B: cả ba nhánh tiền đều nhận CO_B, không phải công ty khách', async () => {
+    const { svc, quote, resolveWaive, recordCharges, assertApproved } = build([
+      { id: 'p1', companyId: CO_A, cemeteryId: 'nt-a1' },
+      { id: 'p2', companyId: CO_B, cemeteryId: 'nt-b1' },
+    ]);
+
+    await svc.issue(CUSTOMER, { ...(ISSUE_DTO as object), companyId: CO_B } as never, VIEWER);
+
+    expect(quote).toHaveBeenCalledWith(
+      expect.objectContaining({ companyId: CO_B }),
+      expect.anything(),
+    );
+    expect(assertApproved).toHaveBeenCalledWith(expect.objectContaining({ companyId: CO_B }), 'u1');
+    expect(recordCharges).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ companyId: CO_B }),
+    );
+    // Và không nhánh nào lỡ hỏi bằng công ty của khách.
+    expect(assertApproved).not.toHaveBeenCalledWith(
+      expect.objectContaining({ companyId: CO_KHACH }),
+      expect.anything(),
+    );
     expect(resolveWaive).toHaveBeenCalledTimes(1);
   });
 

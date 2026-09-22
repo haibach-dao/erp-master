@@ -49,7 +49,15 @@ function build(opts: {
 
   const prisma = {
     customer: {
-      findUnique: vi.fn().mockResolvedValue(anchor === 'customer-B' ? { companyId: CO_B } : null),
+      /* ĐỌC `where` thật. Trả cứng thì hỏi SAI CỘT vẫn xanh: nếu `checkPersonAnchor` hỏi
+       * `{ id: personId }` thay vì `{ personId }` thì bước 1 không bao giờ khớp, không nổ, chỉ
+       * lặng lẽ trả `null` — neo rơi sang bước 2 (hồ sơ an táng) và người của công ty khác qua
+       * cửa, rồi `revealNationalId` mở CCCD. Cùng bẫy mà khối chú thích ngay dưới đã nêu. */
+      findUnique: vi.fn().mockImplementation((args: { where?: Record<string, unknown> }) => {
+        const w = args.where ?? {};
+        if (w.personId !== PERSON) return Promise.resolve(null);
+        return Promise.resolve(anchor === 'customer-B' ? { companyId: CO_B } : null);
+      }),
       findMany: vi.fn().mockResolvedValue([]),
       create: vi.fn().mockImplementation((args: { data: Record<string, unknown> }) => {
         created.push(args.data);
