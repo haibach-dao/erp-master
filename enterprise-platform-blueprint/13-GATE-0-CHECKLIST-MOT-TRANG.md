@@ -1,9 +1,21 @@
 # Gate 0 — Checklist quyết định trước khi finalize ERD & code
 
-> Trạng thái: **NHÁP đưa họp** · Nguồn phân tích: hồ sơ `12-HO-SO-HOP-VA-PHAN-BIEN.md` (vòng A–J)
-> Phiên họp số: `__________` (lấy ở List SO-LAY-PHIEN trước khi bắt đầu)
-> Chủ trì: `__________` · Thư ký: `__________` · Ngày: `__________`
-> Quy ước: điền `decision_id` sau khi người có thẩm quyền cho hiệu lực. Chưa có decision_id = chưa chốt.
+> Trạng thái: **ĐÃ CHỐT nhóm lõi (2026-08-24)** · Quyết bởi: **Bách** (người có thẩm quyền) · Cố vấn/ghi: Claude
+> Nguồn phân tích: hồ sơ `12-HO-SO-HOP-VA-PHAN-BIEN.md` (vòng A–J)
+
+## ✅ KẾT QUẢ CHỐT (2026-08-24, Bách quyết)
+
+| decision_id | Mục | Quyết định |
+|---|---|---|
+| G0-A2 | Quyền sử dụng mộ | Tạo `grave_usage_right` tối thiểu (tách khỏi hợp đồng); CHƯA làm chuyển nhượng/thừa kế (chừa đường) |
+| G0-A1 | Sức chứa mộ | Mặc định theo loại mộ; cho override từng vị trí, có audit |
+| G0-A5 | "Đã thu" / doanh thu | **KHÔNG công nợ** — khách thanh toán đủ ngay; doanh thu tự ghi từ hoạt động dịch vụ trong hệ thống; KHÔNG import kế toán ngoài. → Bỏ `receivable_schedule`, thay bằng `service_transaction` + thanh toán đủ *(chờ Bách xác nhận diễn giải)* |
+| G0-E5.1 | Person đa công ty | Dùng chung xuyên công ty; xem/sửa theo scope |
+| G0-A6 | Dữ liệu nhạy cảm | Mặc định mask; xem đầy đủ cần vai trò được cấp + mọi lần xem/tải đều audit (NĐ13) |
+| G0-E5.2 | Định danh CCCD | Mã hoá (xem lại được có quyền, mask hiển thị) + băm để dò trùng |
+| G1 | Mô hình thời gian | `timestamptz` cho instant; `@db.Date` (lịch VN) cho ngày nghiệp vụ |
+
+**Còn hoãn (chốt khi tới M3+/M5, không chặn M0/M1):** A3 (bên thanh toán khi đổi chủ), A4 (danh mục dịch vụ + giá + kỳ hạn + mốc nhắc), A7 (workflow đầu tiên), G3.1 (mốc trạng thái hợp đồng sinh allocation), IMP (có import dữ liệu cũ không).
 
 ---
 
